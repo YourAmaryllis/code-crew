@@ -37,7 +37,7 @@ class SprintUI:
     """
 
     def __init__(self, console: Console | None = None) -> None:
-        self._console = console or Console()
+        self._console = console or Console(force_terminal=True, highlight=False)
         self._lock = threading.Lock()
         self._rows: dict[str, _Row] = {}
         self._details: dict[str, list[str]] = defaultdict(list)

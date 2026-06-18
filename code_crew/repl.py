@@ -96,7 +96,10 @@ class ReplState:
 def main() -> None:
     _bootstrap()
 
-    console = Console()
+    # force_terminal=True: Rich outputs ANSI codes even when stdout is
+    # redirected by patch_stdout() (which replaces sys.stdout with a
+    # non-terminal wrapper, causing Rich to strip all colour by default).
+    console = Console(force_terminal=True, highlight=False)
     state = ReplState()
     executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="flow")
 
@@ -129,18 +132,18 @@ def main() -> None:
                 stuck = state.get_stuck()
                 if stuck:
                     prompt_msg = HTML(
-                        f'<class="prompt.stuck">({stuck[0]} needs help)</class> '
-                        f'<class="prompt">&gt;</class> '
+                        f'<ansiyellow><b>({stuck[0]} needs help)</b></ansiyellow>'
+                        f' <ansigreen><b>&gt;</b></ansigreen> '
                     )
                 else:
-                    prompt_msg = HTML('<class="prompt">&gt;</class> ')
+                    prompt_msg = HTML('<ansigreen><b>&gt;</b></ansigreen> ')
 
                 try:
                     line = session.prompt(prompt_msg)
                 except KeyboardInterrupt:
                     continue          # Ctrl-C clears the line, stays in loop
-                except EOFError:
-                    break             # Ctrl-D exits
+                except (EOFError, SystemExit):
+                    break             # Ctrl-D or /exit
 
                 line = line.strip()
                 if not line:
@@ -151,9 +154,8 @@ def main() -> None:
                 else:
                     _handle_chat(line, state, console)
 
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-            console.print("[dim]Bye.[/dim]")
+        executor.shutdown(wait=False, cancel_futures=True)
+        console.print("[dim]Bye.[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +167,7 @@ def _handle_slash(line: str, state: ReplState, ui: SprintUI, executor: ThreadPoo
     cmd = parts[0].lower()
 
     if cmd in ("/exit", "/quit"):
-        raise EOFError  # caught by the main loop, triggers clean shutdown
+        raise SystemExit(0)
 
     elif cmd == "/jira":
         if len(parts) < 2:
