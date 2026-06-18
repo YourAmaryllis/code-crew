@@ -1,10 +1,18 @@
 """
-CrewAI tool: read SOP, ADD, or ADR documents directly from the designs/ submodule.
+CrewAI tool: read architecture documents (SOPs, ADDs, ADRs) from a knowledge repo.
 
-All documents are loaded into memory at construction time (no filesystem reads during
-crew execution). Reads OKF files from designs/SOP/, designs/ADR/, designs/ADD/.
+Documents are loaded into memory at construction time. Supports any project's
+knowledge repo — point DESIGNS_PATH to a local checkout, or set DESIGNS_REPO
+for auto-clone on first use.
+
+Environment variables:
+  DESIGNS_PATH    Local path to the knowledge repo (required, or auto-cloned here)
+  DESIGNS_REPO    Git URL to clone if DESIGNS_PATH does not exist (optional)
+  DESIGNS_BRANCH  Branch to checkout when cloning (default: main)
 """
 
+import os
+import subprocess
 from pathlib import Path
 
 from crewai.tools import BaseTool
@@ -14,19 +22,30 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _designs_root() -> Path:
-    import os
     return Path(os.environ.get("DESIGNS_PATH", str(_REPO_ROOT / "designs")))
 
 
+def _ensure_designs(root: Path) -> Path:
+    """Clone the knowledge repo if DESIGNS_PATH doesn't exist and DESIGNS_REPO is set."""
+    if root.exists():
+        return root
+    repo_url = os.environ.get("DESIGNS_REPO", "")
+    if not repo_url:
+        return root  # missing — handled gracefully in model_post_init
+    branch = os.environ.get("DESIGNS_BRANCH", "main")
+    print(f"[sop_reader] Cloning knowledge repo {repo_url} → {root}")
+    subprocess.run(
+        ["git", "clone", "--depth=1", "--branch", branch, repo_url, str(root)],
+        check=True,
+    )
+    return root
+
+
 def _load_bundle(designs_root: Path) -> dict[str, str]:
-    """Pre-load all .md files from designs/SOP/, ADR/, ADD/ into a {stem: content} dict."""
+    """Pre-load all OKF .md files from {root}/SOP/, ADR/, ADD/ into {stem: content}."""
     docs: dict[str, str] = {}
-    search_dirs = [
-        designs_root / "SOP",
-        designs_root / "ADR",
-        designs_root / "ADD",
-    ]
-    for directory in search_dirs:
+    for subdir in ("SOP", "ADR", "ADD"):
+        directory = designs_root / subdir
         if not directory.exists():
             continue
         for md_file in sorted(directory.glob("*.md")):
@@ -49,17 +68,22 @@ class SOPReaderInput(BaseModel):
 class SOPReaderTool(BaseTool):
     name: str = "sop_reader"
     description: str = (
-        "Read a YourAmaryllis SOP, ADD, or ADR document from the designs/ submodule. "
-        "Pass the filename stem (without .md) to retrieve the full document content. "
-        "Use this to look up SOPs, architectural decisions, and design documents "
-        "rather than relying on memory. All documents are pre-loaded — no external reads needed."
+        "Read an architecture or process document (SOP, ADD, ADR) from the project's "
+        "knowledge repo. Pass the filename stem (without .md) to retrieve the full "
+        "document content. Use this to look up design documents and process guidelines "
+        "rather than relying on memory. All documents are pre-loaded at startup."
     )
     args_schema: type[BaseModel] = SOPReaderInput
     _docs: dict[str, str] = {}
 
     def model_post_init(self, __context) -> None:
-        root = _designs_root()
+        root = _ensure_designs(_designs_root())
         self._docs = _load_bundle(root) if root.exists() else {}
+        if not self._docs:
+            print(
+                "[sop_reader] Warning: no documents loaded. "
+                "Set DESIGNS_PATH or DESIGNS_REPO in your .env."
+            )
 
     def _run(self, document_name: str) -> str:
         if document_name in self._docs:
@@ -80,6 +104,6 @@ class SOPReaderTool(BaseTool):
 
         available = sorted(self._docs.keys())
         return (
-            f"Document '{document_name}' not found in designs/. "
+            f"Document '{document_name}' not found. "
             f"Available ({len(available)} docs): {', '.join(available[:30])}"
         )
