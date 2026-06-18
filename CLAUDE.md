@@ -102,4 +102,4 @@ OKF frontmatter fields used:
 
 Task definitions are in `code_crew/knowledge/tasks/<name>.md`. The task description and expected output are loaded at crew startup.
 
-Task sequence: `sprint_planning_check → architecture_review → bdd_test_authoring → backend_implementation → frontend_implementation → code_review → security_review → dod_check`
+Task sequence: `sprint_planning_check → architecture_review → scaffold_code → scaffold_test → bdd_test_authoring → backend_implementation → frontend_implementation → code_review → security_review → dod_check`

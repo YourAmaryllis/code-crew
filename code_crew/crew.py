@@ -4,8 +4,8 @@ Code crew: virtual software development team for SDLC phases 13-19.
 All agent instructions and task descriptions are loaded from OKF markdown files
 in knowledge/agents/ and knowledge/tasks/. No prompts are hardcoded here.
 
-Knowledge bundle (tools/knowledge/) is loaded into memory at startup — no runtime
-dependency on designs/ or platform/ repos.
+Knowledge bundle (ADDs, ADRs, SDLC role/function/stack docs) is loaded into memory
+at startup via KnowledgeReaderTool — no runtime dependency on designs/ or platform/ repos.
 """
 
 from pathlib import Path
@@ -19,16 +19,16 @@ from shared.tools import (
     DoDCheckerTool,
     JiraSprintListTool,
     JiraViewTool,
+    KnowledgeReaderTool,
     MemoryTool,
     PlatformShellTool,
     PythonREPLTool,
-    SOPReaderTool,
 )
 
 _KNOWLEDGE = Path(__file__).parent / "knowledge"
 
 # --- Tools (knowledge bundle pre-loaded at import time) ---
-sop_reader = SOPReaderTool()
+knowledge_reader = KnowledgeReaderTool()
 dod_checker = DoDCheckerTool()
 jira_view = JiraViewTool()
 jira_list = JiraSprintListTool()
@@ -43,12 +43,14 @@ def build_crew(sprint_input: dict) -> Crew:
     Build the code crew for a single sprint story.
 
     sprint_input keys:
-      jira_key            - e.g. "LOOPLAT-72"
+      jira_key            - e.g. "PROJ-72"
       story               - user story text ("As a ...")
       acceptance_criteria - list of AC strings
       sprint_goal         - one-sentence sprint goal
-      figma_url           - Figma design link (required for frontend tasks)
+      figma_url           - Figma design link (for frontend tasks)
       add_refs            - list of ADD names relevant to this story
+      comment_context     - summarised Jira comment context
+      user_context        - recalled memory entries
     """
     agents_dir = _KNOWLEDGE / "agents"
     tasks_dir = _KNOWLEDGE / "tasks"
@@ -62,7 +64,7 @@ def build_crew(sprint_input: dict) -> Crew:
         role=ac["scrum_master"].role,
         goal=ac["scrum_master"].goal,
         backstory=ac["scrum_master"].backstory,
-        tools=[sop_reader, dod_checker, jira_view, memory_tool],
+        tools=[knowledge_reader, dod_checker, jira_view, memory_tool],
         llm=get_fast_llm(),
         verbose=True,
     )
@@ -71,7 +73,7 @@ def build_crew(sprint_input: dict) -> Crew:
         role=ac["tech_lead"].role,
         goal=ac["tech_lead"].goal,
         backstory=ac["tech_lead"].backstory,
-        tools=[sop_reader, jira_view, platform_shell],
+        tools=[knowledge_reader, jira_view, platform_shell],
         llm=get_llm(),
         verbose=True,
     )
@@ -80,7 +82,7 @@ def build_crew(sprint_input: dict) -> Crew:
         role=ac["backend_developer"].role,
         goal=ac["backend_developer"].goal,
         backstory=ac["backend_developer"].backstory,
-        tools=[sop_reader, jira_view, platform_shell, python_repl],
+        tools=[knowledge_reader, jira_view, platform_shell, python_repl],
         llm=get_llm(),
         verbose=True,
     )
@@ -89,7 +91,7 @@ def build_crew(sprint_input: dict) -> Crew:
         role=ac["frontend_developer"].role,
         goal=ac["frontend_developer"].goal,
         backstory=ac["frontend_developer"].backstory,
-        tools=[sop_reader, jira_view, platform_shell, python_repl],
+        tools=[knowledge_reader, jira_view, platform_shell, python_repl],
         llm=get_llm(),
         verbose=True,
     )
@@ -98,7 +100,7 @@ def build_crew(sprint_input: dict) -> Crew:
         role=ac["qa_engineer"].role,
         goal=ac["qa_engineer"].goal,
         backstory=ac["qa_engineer"].backstory,
-        tools=[sop_reader, jira_view, platform_shell, bdd_runner, python_repl],
+        tools=[knowledge_reader, jira_view, platform_shell, bdd_runner, python_repl],
         llm=get_llm(),
         verbose=True,
     )
@@ -107,7 +109,7 @@ def build_crew(sprint_input: dict) -> Crew:
         role=ac["security_reviewer"].role,
         goal=ac["security_reviewer"].goal,
         backstory=ac["security_reviewer"].backstory,
-        tools=[sop_reader, platform_shell, python_repl],
+        tools=[knowledge_reader, platform_shell, python_repl],
         llm=get_llm(),
         verbose=True,
     )
@@ -129,25 +131,39 @@ def build_crew(sprint_input: dict) -> Crew:
         context=[sprint_planning],
     )
 
+    scaffold_code = Task(
+        description=f"{context_header}\n\n{tc['scaffold_code'].description}",
+        expected_output=tc["scaffold_code"].expected_output,
+        agent=backend_developer,
+        context=[arch_review],
+    )
+
+    scaffold_test = Task(
+        description=f"{context_header}\n\n{tc['scaffold_test'].description}",
+        expected_output=tc["scaffold_test"].expected_output,
+        agent=qa_engineer,
+        context=[arch_review, scaffold_code],
+    )
+
     bdd_authoring = Task(
         description=f"{context_header}\n\n{tc['bdd_test_authoring'].description}",
         expected_output=tc["bdd_test_authoring"].expected_output,
         agent=qa_engineer,
-        context=[sprint_planning, arch_review],
+        context=[sprint_planning, arch_review, scaffold_test],
     )
 
     backend_impl = Task(
         description=f"{context_header}\n\n{tc['backend_implementation'].description}",
         expected_output=tc["backend_implementation"].expected_output,
         agent=backend_developer,
-        context=[arch_review, bdd_authoring],
+        context=[arch_review, scaffold_code, bdd_authoring],
     )
 
     frontend_impl = Task(
         description=f"{context_header}\n\n{tc['frontend_implementation'].description}",
         expected_output=tc["frontend_implementation"].expected_output,
         agent=frontend_developer,
-        context=[arch_review, bdd_authoring],
+        context=[arch_review, scaffold_code, bdd_authoring],
     )
 
     code_review = Task(
@@ -168,12 +184,20 @@ def build_crew(sprint_input: dict) -> Crew:
         description=f"{context_header}\n\n{tc['dod_check'].description}",
         expected_output=tc["dod_check"].expected_output,
         agent=scrum_master,
-        context=[sprint_planning, arch_review, bdd_authoring, backend_impl, frontend_impl, code_review, sec_review],
+        context=[
+            sprint_planning, arch_review, scaffold_code, scaffold_test,
+            bdd_authoring, backend_impl, frontend_impl, code_review, sec_review,
+        ],
     )
 
     return Crew(
         agents=[scrum_master, tech_lead, qa_engineer, backend_developer, frontend_developer, security_reviewer],
-        tasks=[sprint_planning, arch_review, bdd_authoring, backend_impl, frontend_impl, code_review, sec_review, dod_check],
+        tasks=[
+            sprint_planning, arch_review,
+            scaffold_code, scaffold_test,
+            bdd_authoring, backend_impl, frontend_impl,
+            code_review, sec_review, dod_check,
+        ],
         process=Process.sequential,
         verbose=True,
     )
