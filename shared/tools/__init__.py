@@ -1,4 +1,5 @@
 from shared.tools.knowledge_reader import KnowledgeReaderTool
+from shared.tools.workspace_reader import WorkspaceReaderTool
 from shared.tools.dod_checker import DoDCheckerTool
 from shared.tools.platform_shell import PlatformShellTool
 from shared.tools.python_repl import PythonREPLTool
@@ -11,6 +12,7 @@ SOPReaderTool = KnowledgeReaderTool
 
 __all__ = [
     "KnowledgeReaderTool",
+    "WorkspaceReaderTool",
     "SOPReaderTool",  # alias
     "DoDCheckerTool",
     "PlatformShellTool",

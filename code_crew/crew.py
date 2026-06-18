@@ -23,181 +23,183 @@ from shared.tools import (
     MemoryTool,
     PlatformShellTool,
     PythonREPLTool,
+    WorkspaceReaderTool,
 )
 
 _KNOWLEDGE = Path(__file__).parent / "knowledge"
 
-# --- Tools (knowledge bundle pre-loaded at import time) ---
-knowledge_reader = KnowledgeReaderTool()
-dod_checker = DoDCheckerTool()
-jira_view = JiraViewTool()
-jira_list = JiraSprintListTool()
-platform_shell = PlatformShellTool()
-python_repl = PythonREPLTool()
-bdd_runner = BDDTestRunnerTool()
-memory_tool = MemoryTool()
+
+def _make_tools(code_path: str = "") -> dict:
+    """Create tool instances, optionally bound to a specific code_path (worktree)."""
+    shell = PlatformShellTool()
+    runner = BDDTestRunnerTool()
+    if code_path:
+        shell = PlatformShellTool(code_path=code_path)
+        runner = BDDTestRunnerTool(code_path=code_path)
+    return {
+        "knowledge_reader": KnowledgeReaderTool(),
+        "workspace_reader": WorkspaceReaderTool(),
+        "dod_checker": DoDCheckerTool(),
+        "jira_view": JiraViewTool(),
+        "jira_list": JiraSprintListTool(),
+        "platform_shell": shell,
+        "python_repl": PythonREPLTool(),
+        "bdd_runner": runner,
+        "memory_tool": MemoryTool(),
+    }
 
 
-def build_crew(sprint_input: dict) -> Crew:
-    """
-    Build the code crew for a single sprint story.
-
-    sprint_input keys:
-      jira_key            - e.g. "PROJ-72"
-      story               - user story text ("As a ...")
-      acceptance_criteria - list of AC strings
-      sprint_goal         - one-sentence sprint goal
-      figma_url           - Figma design link (for frontend tasks)
-      add_refs            - list of ADD names relevant to this story
-      comment_context     - summarised Jira comment context
-      user_context        - recalled memory entries
-    """
+def build_agents(tools: dict) -> dict:
+    """Build all agents from OKF files. Returns a dict keyed by agent name."""
     agents_dir = _KNOWLEDGE / "agents"
-    tasks_dir = _KNOWLEDGE / "tasks"
-
     ac = load_bundle_agents(agents_dir)
-    tc = load_bundle_tasks(tasks_dir)
 
-    # --- Agents (OKF backstory + role + goal; no hardcoded strings) ---
+    kr = tools["knowledge_reader"]
+    ws = tools["workspace_reader"]
+    jv = tools["jira_view"]
+    sh = tools["platform_shell"]
+    pr = tools["python_repl"]
+    br = tools["bdd_runner"]
+    mm = tools["memory_tool"]
+    dc = tools["dod_checker"]
 
-    scrum_master = Agent(
-        role=ac["scrum_master"].role,
-        goal=ac["scrum_master"].goal,
-        backstory=ac["scrum_master"].backstory,
-        tools=[knowledge_reader, dod_checker, jira_view, memory_tool],
-        llm=get_fast_llm(),
-        verbose=True,
-    )
+    return {
+        "scrum_master": Agent(
+            role=ac["scrum_master"].role,
+            goal=ac["scrum_master"].goal,
+            backstory=ac["scrum_master"].backstory,
+            tools=[kr, dc, jv, mm],
+            llm=get_fast_llm(),
+            verbose=True,
+        ),
+        "tech_lead": Agent(
+            role=ac["tech_lead"].role,
+            goal=ac["tech_lead"].goal,
+            backstory=ac["tech_lead"].backstory,
+            tools=[kr, ws, jv, sh],
+            llm=get_llm(),
+            verbose=True,
+        ),
+        "backend_developer": Agent(
+            role=ac["backend_developer"].role,
+            goal=ac["backend_developer"].goal,
+            backstory=ac["backend_developer"].backstory,
+            tools=[kr, ws, jv, sh, pr],
+            llm=get_llm(),
+            verbose=True,
+        ),
+        "frontend_developer": Agent(
+            role=ac["frontend_developer"].role,
+            goal=ac["frontend_developer"].goal,
+            backstory=ac["frontend_developer"].backstory,
+            tools=[kr, ws, jv, sh, pr],
+            llm=get_llm(),
+            verbose=True,
+        ),
+        "qa_engineer": Agent(
+            role=ac["qa_engineer"].role,
+            goal=ac["qa_engineer"].goal,
+            backstory=ac["qa_engineer"].backstory,
+            tools=[kr, ws, jv, sh, br, pr],
+            llm=get_llm(),
+            verbose=True,
+        ),
+        "security_reviewer": Agent(
+            role=ac["security_reviewer"].role,
+            goal=ac["security_reviewer"].goal,
+            backstory=ac["security_reviewer"].backstory,
+            tools=[kr, ws, sh, pr],
+            llm=get_llm(),
+            verbose=True,
+        ),
+    }
 
-    tech_lead = Agent(
-        role=ac["tech_lead"].role,
-        goal=ac["tech_lead"].goal,
-        backstory=ac["tech_lead"].backstory,
-        tools=[knowledge_reader, jira_view, platform_shell],
-        llm=get_llm(),
-        verbose=True,
-    )
 
-    backend_developer = Agent(
-        role=ac["backend_developer"].role,
-        goal=ac["backend_developer"].goal,
-        backstory=ac["backend_developer"].backstory,
-        tools=[knowledge_reader, jira_view, platform_shell, python_repl],
-        llm=get_llm(),
-        verbose=True,
-    )
+def build_tasks(agents: dict, sprint_input: dict, tasks_dir: Path | None = None) -> dict:
+    """Build all tasks from OKF files. Returns a dict keyed by task name."""
+    td = tasks_dir or (_KNOWLEDGE / "tasks")
+    tc = load_bundle_tasks(td)
+    ctx = _format_context(sprint_input)
 
-    frontend_developer = Agent(
-        role=ac["frontend_developer"].role,
-        goal=ac["frontend_developer"].goal,
-        backstory=ac["frontend_developer"].backstory,
-        tools=[knowledge_reader, jira_view, platform_shell, python_repl],
-        llm=get_llm(),
-        verbose=True,
-    )
+    def task(name: str, agent_key: str, context_tasks: list | None = None) -> Task:
+        return Task(
+            description=f"{ctx}\n\n{tc[name].description}",
+            expected_output=tc[name].expected_output,
+            agent=agents[agent_key],
+            context=context_tasks or [],
+        )
 
-    qa_engineer = Agent(
-        role=ac["qa_engineer"].role,
-        goal=ac["qa_engineer"].goal,
-        backstory=ac["qa_engineer"].backstory,
-        tools=[knowledge_reader, jira_view, platform_shell, bdd_runner, python_repl],
-        llm=get_llm(),
-        verbose=True,
-    )
+    sprint_planning   = task("sprint_planning_check", "scrum_master")
+    arch_review       = task("architecture_review",   "tech_lead",   [sprint_planning])
+    scaffold_code     = task("scaffold_code",          "backend_developer", [arch_review])
+    scaffold_test     = task("scaffold_test",          "qa_engineer", [arch_review, scaffold_code])
+    bdd_authoring     = task("bdd_test_authoring",     "qa_engineer", [sprint_planning, arch_review, scaffold_test])
+    backend_impl      = task("backend_implementation", "backend_developer", [arch_review, scaffold_code, bdd_authoring])
+    frontend_impl     = task("frontend_implementation","frontend_developer",[arch_review, scaffold_code, bdd_authoring])
+    code_review       = task("code_review",            "tech_lead",   [backend_impl, frontend_impl])
+    sec_review        = task("security_review",        "security_reviewer", [backend_impl, frontend_impl, code_review])
+    dod_check         = task("dod_check",              "scrum_master",
+                             [sprint_planning, arch_review, scaffold_code, scaffold_test,
+                              bdd_authoring, backend_impl, frontend_impl, code_review, sec_review])
 
-    security_reviewer = Agent(
-        role=ac["security_reviewer"].role,
-        goal=ac["security_reviewer"].goal,
-        backstory=ac["security_reviewer"].backstory,
-        tools=[knowledge_reader, platform_shell, python_repl],
-        llm=get_llm(),
-        verbose=True,
-    )
+    return {
+        "sprint_planning": sprint_planning,
+        "architecture_review": arch_review,
+        "scaffold_code": scaffold_code,
+        "scaffold_test": scaffold_test,
+        "bdd_authoring": bdd_authoring,
+        "backend_implementation": backend_impl,
+        "frontend_implementation": frontend_impl,
+        "code_review": code_review,
+        "security_review": sec_review,
+        "dod_check": dod_check,
+    }
 
-    # --- Tasks (OKF description + expected_output; sprint_input injected as context) ---
 
-    context_header = _format_context(sprint_input)
+def build_single_task_crew(task_name: str, sprint_input: dict, code_path: str = "") -> Crew:
+    """
+    Build a minimal crew for a single named task. Used by TicketFlow to run
+    one task at a time so progress can be tracked and feedback injected between steps.
+    """
+    tools = _make_tools(code_path)
+    agents = build_agents(tools)
+    tasks = build_tasks(agents, sprint_input)
 
-    sprint_planning = Task(
-        description=f"{context_header}\n\n{tc['sprint_planning_check'].description}",
-        expected_output=tc["sprint_planning_check"].expected_output,
-        agent=scrum_master,
-    )
-
-    arch_review = Task(
-        description=f"{context_header}\n\n{tc['architecture_review'].description}",
-        expected_output=tc["architecture_review"].expected_output,
-        agent=tech_lead,
-        context=[sprint_planning],
-    )
-
-    scaffold_code = Task(
-        description=f"{context_header}\n\n{tc['scaffold_code'].description}",
-        expected_output=tc["scaffold_code"].expected_output,
-        agent=backend_developer,
-        context=[arch_review],
-    )
-
-    scaffold_test = Task(
-        description=f"{context_header}\n\n{tc['scaffold_test'].description}",
-        expected_output=tc["scaffold_test"].expected_output,
-        agent=qa_engineer,
-        context=[arch_review, scaffold_code],
-    )
-
-    bdd_authoring = Task(
-        description=f"{context_header}\n\n{tc['bdd_test_authoring'].description}",
-        expected_output=tc["bdd_test_authoring"].expected_output,
-        agent=qa_engineer,
-        context=[sprint_planning, arch_review, scaffold_test],
-    )
-
-    backend_impl = Task(
-        description=f"{context_header}\n\n{tc['backend_implementation'].description}",
-        expected_output=tc["backend_implementation"].expected_output,
-        agent=backend_developer,
-        context=[arch_review, scaffold_code, bdd_authoring],
-    )
-
-    frontend_impl = Task(
-        description=f"{context_header}\n\n{tc['frontend_implementation'].description}",
-        expected_output=tc["frontend_implementation"].expected_output,
-        agent=frontend_developer,
-        context=[arch_review, scaffold_code, bdd_authoring],
-    )
-
-    code_review = Task(
-        description=f"{context_header}\n\n{tc['code_review'].description}",
-        expected_output=tc["code_review"].expected_output,
-        agent=tech_lead,
-        context=[backend_impl, frontend_impl],
-    )
-
-    sec_review = Task(
-        description=f"{context_header}\n\n{tc['security_review'].description}",
-        expected_output=tc["security_review"].expected_output,
-        agent=security_reviewer,
-        context=[backend_impl, frontend_impl, code_review],
-    )
-
-    dod_check = Task(
-        description=f"{context_header}\n\n{tc['dod_check'].description}",
-        expected_output=tc["dod_check"].expected_output,
-        agent=scrum_master,
-        context=[
-            sprint_planning, arch_review, scaffold_code, scaffold_test,
-            bdd_authoring, backend_impl, frontend_impl, code_review, sec_review,
-        ],
-    )
-
+    t = tasks[task_name]
     return Crew(
-        agents=[scrum_master, tech_lead, qa_engineer, backend_developer, frontend_developer, security_reviewer],
-        tasks=[
-            sprint_planning, arch_review,
-            scaffold_code, scaffold_test,
-            bdd_authoring, backend_impl, frontend_impl,
-            code_review, sec_review, dod_check,
-        ],
+        agents=list(agents.values()),
+        tasks=[t],
+        process=Process.sequential,
+        verbose=True,
+    )
+
+
+def build_crew(sprint_input: dict, code_path: str = "") -> Crew:
+    """
+    Build the full 10-task sequential crew for a single sprint story.
+
+    Kept for backward compatibility with `code-crew run --jira`.
+    New code should prefer TicketFlow + build_single_task_crew.
+    """
+    tools = _make_tools(code_path)
+    agents = build_agents(tools)
+    tasks = build_tasks(agents, sprint_input)
+
+    task_order = [
+        tasks["sprint_planning"],
+        tasks["architecture_review"],
+        tasks["scaffold_code"],
+        tasks["scaffold_test"],
+        tasks["bdd_authoring"],
+        tasks["backend_implementation"],
+        tasks["frontend_implementation"],
+        tasks["code_review"],
+        tasks["security_review"],
+        tasks["dod_check"],
+    ]
+    return Crew(
+        agents=list(agents.values()),
+        tasks=task_order,
         process=Process.sequential,
         verbose=True,
     )

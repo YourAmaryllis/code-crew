@@ -1,20 +1,15 @@
 """
-CrewAI tool: run BDD integration tests in the platform monorepo.
+CrewAI tool: run BDD integration tests in the current project directory.
 
 Wraps `go test ./integration/...` with godog tags and interface flags.
 Always read-only against the test environment — never touches production.
 """
 
-import os
 import subprocess
 from pathlib import Path
 
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
-
-
-def _platform_path() -> Path:
-    return Path(os.environ.get("PLATFORM_PATH", "../platform")).resolve()
 
 
 class BDDRunnerInput(BaseModel):
@@ -46,12 +41,16 @@ class BDDRunnerInput(BaseModel):
 class BDDTestRunnerTool(BaseTool):
     name: str = "bdd_runner"
     description: str = (
-        "Run BDD integration tests in the platform monorepo using godog. "
-        "Filter by Jira tag (e.g. '@LOOPLAT-72'), interface mode (api/ui/cli), "
+        "Run BDD integration tests in the project using godog. "
+        "Filter by ticket tag (e.g. '@PROJ-72'), interface mode (api/ui/cli), "
         "or specific feature file. Returns test output with pass/fail counts. "
         "Use this after writing or updating .feature files to verify scenarios pass."
     )
     args_schema: type[BaseModel] = BDDRunnerInput
+    code_path: str = ""  # set by Flow per worktree; empty = use cwd
+
+    def _root(self) -> Path:
+        return Path(self.code_path).resolve() if self.code_path else Path.cwd()
 
     def _run(
         self,
@@ -60,8 +59,7 @@ class BDDTestRunnerTool(BaseTool):
         feature: str = "",
         timeout: int = 300,
     ) -> str:
-        platform = _platform_path()
-        integration_dir = platform / "integration"
+        integration_dir = self._root() / "integration"
 
         if not integration_dir.exists():
             return f"ERROR: integration directory not found at {integration_dir}"

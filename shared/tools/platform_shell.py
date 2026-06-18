@@ -1,11 +1,11 @@
 """
-CrewAI tool: run shell commands in the platform monorepo directory.
+CrewAI tool: run shell commands in the current project directory (cwd).
 
-Safe-listed command prefixes only. Always executes in PLATFORM_PATH.
-Used by engineer agents for git, go, aws (readonly), and jira CLI operations.
+Safe-listed command prefixes only. Always executes in the project root
+(Path.cwd()) unless overridden via code_path on the tool instance.
+Used by engineer agents for git, go, aws (readonly), and issue tracker CLI operations.
 """
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -24,6 +24,9 @@ _ALLOWED_PREFIXES = (
     "pytest",
     "python3 ",
     "python ",
+    "npm test",
+    "npm run",
+    "npx ",
     "aws sts get-caller-identity",
     "aws ecs describe",
     "aws ecs list",
@@ -32,9 +35,8 @@ _ALLOWED_PREFIXES = (
     "aws logs",
     "jira view",
     "jira list",
-    "jira sprint list",
-    "jira comment add",
-    "jira transition",
+    "jira issue",
+    "linear issue",
     "pre-commit",
     "make ",
     "ls ",
@@ -55,11 +57,6 @@ _BLOCKED_PATTERNS = (
 )
 
 
-def _platform_path() -> Path:
-    raw = os.environ.get("PLATFORM_PATH", "../platform")
-    return Path(raw).resolve()
-
-
 def _is_allowed(command: str) -> tuple[bool, str]:
     for blocked in _BLOCKED_PATTERNS:
         if blocked in command:
@@ -76,18 +73,18 @@ def _is_allowed(command: str) -> tuple[bool, str]:
 class PlatformShellInput(BaseModel):
     command: str = Field(
         description=(
-            "Shell command to run in the platform repo directory. "
-            "Allowed: git, go test/build/vet/fmt, pytest, python3, "
-            "aws (readonly: describe/list/logs), jira issue view/list/transition/comment, "
+            "Shell command to run in the project directory. "
+            "Allowed: git, go test/build/vet/fmt, pytest, python3, npm, "
+            "aws (readonly: describe/list/logs), jira/linear issue commands, "
             "grep, find, ls. No destructive operations."
         )
     )
     working_dir: str = Field(
         default="",
         description=(
-            "Subdirectory relative to PLATFORM_PATH to run the command in. "
-            "Example: 'integration' to run in platform/integration/. "
-            "Leave empty to run in the platform root."
+            "Subdirectory relative to the project root to run the command in. "
+            "Example: 'integration' to run tests in the integration/ subdirectory. "
+            "Leave empty to run in the project root."
         ),
     )
 
@@ -95,20 +92,23 @@ class PlatformShellInput(BaseModel):
 class PlatformShellTool(BaseTool):
     name: str = "platform_shell"
     description: str = (
-        "Run git, go, aws (readonly), jira, or test commands in the platform monorepo. "
+        "Run git, go, aws (readonly), jira/linear, or test commands in the project repo. "
         "Use for: creating branches (git checkout -b), running unit tests (go test ./...), "
-        "running BDD tests (go test ./integration/... --godog.tags=...), "
-        "checking git status/diff, viewing jira tickets (jira issue view LOOPLAT-N), "
-        "and other safe read/write operations in the platform codebase."
+        "running BDD tests, checking git status/diff, "
+        "and other safe read/write operations in the codebase."
     )
     args_schema: type[BaseModel] = PlatformShellInput
+    code_path: str = ""  # set by Flow per worktree; empty = use cwd
+
+    def _root(self) -> Path:
+        return Path(self.code_path).resolve() if self.code_path else Path.cwd()
 
     def _run(self, command: str, working_dir: str = "") -> str:
         allowed, reason = _is_allowed(command)
         if not allowed:
             return f"BLOCKED: {reason}"
 
-        cwd = _platform_path()
+        cwd = self._root()
         if working_dir:
             cwd = cwd / working_dir
         if not cwd.exists():
