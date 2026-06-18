@@ -1,9 +1,11 @@
 """
-Rich-based live display for code-crew runs.
+Terminal UI for code-crew runs.
 
-Shows one status row per active ticket. Detail output is captured per task
-and toggled with /details <ticket>. When a flow needs human input, the stuck
-row is highlighted and the prompt changes.
+Prints one line per meaningful state transition (task start, task complete,
+gate failure, needs-help). This model works correctly with prompt_toolkit's
+PromptSession — output scrolls above the fixed input bar with no cursor fighting.
+
+The status table (rendered on /status) is built on demand from current state.
 """
 
 from __future__ import annotations
@@ -13,145 +15,141 @@ import time
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
-from rich.columns import Columns
+from prompt_toolkit import print_formatted_text
+from prompt_toolkit.formatted_text import FormattedText
 from rich.console import Console
-from rich.live import Live
-from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
 if TYPE_CHECKING:
     from code_crew.flow import TicketState
 
-_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+# Column widths for the inline status lines
+_KEY_W  = 12
+_TASK_W = 26
+_AGT_W  = 16
 
 
 class SprintUI:
     """
-    Thread-safe live display. Call update() from any thread.
-    The internal Live context runs on the main thread.
+    Thread-safe status printer.  Flow threads call update(); the REPL calls
+    render_status_table() for /status and toggle_details() for /details.
     """
 
     def __init__(self, console: Console | None = None) -> None:
         self._console = console or Console()
         self._lock = threading.Lock()
-        self._rows: dict[str, _Row] = {}          # ticket_key → Row
-        self._details: dict[str, list[str]] = defaultdict(list)  # ticket_key → task outputs
-        self._expanded: set[str] = set()           # tickets with expanded detail
-        self._live: Live | None = None
-        self._tick = 0
+        self._rows: dict[str, _Row] = {}
+        self._details: dict[str, list[str]] = defaultdict(list)
+        self._expanded: set[str] = set()
 
     # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
-    def start(self) -> None:
-        self._live = Live(
-            self._render(),
-            console=self._console,
-            refresh_per_second=4,
-            transient=False,
-        )
-        self._live.__enter__()
-
-    def stop(self) -> None:
-        if self._live:
-            self._live.__exit__(None, None, None)
-            self._live = None
-
-    def __enter__(self) -> "SprintUI":
-        self.start()
-        return self
-
-    def __exit__(self, *args) -> None:
-        self.stop()
-
-    # ------------------------------------------------------------------
-    # State updates (called from flow threads)
+    # Called by flow threads
     # ------------------------------------------------------------------
 
     def update(self, state: "TicketState") -> None:
+        """Print a status line whenever a meaningful transition occurs."""
         with self._lock:
             row = self._rows.setdefault(state.jira_key, _Row(state.jira_key))
-            row.task = state.current_task
-            row.agent = state.current_agent
-            row.status = state.status
-            row.elapsed = state.elapsed_seconds
+            prev_task   = row.task
+            prev_status = row.status
+
+            row.task            = state.current_task
+            row.agent           = state.current_agent
+            row.status          = state.status
+            row.elapsed         = state.elapsed_seconds
             row.needs_help_gate = state.needs_help_gate
-            row.updated_at = time.monotonic()
-            if state.status in ("passed", "failed"):
-                row.done = True
-        self._refresh()
+            row.updated_at      = time.monotonic()
+
+            # Decide whether to emit a line
+            task_changed   = state.current_task  and state.current_task  != prev_task
+            status_changed = state.status        and state.status        != prev_status
+            emit = task_changed or status_changed
+
+        if emit:
+            self._print_line(state)
 
     def append_detail(self, ticket_key: str, task_name: str, output: str) -> None:
         with self._lock:
-            self._details[ticket_key].append(f"[bold]{task_name}[/bold]\n{output}")
-        self._refresh()
+            self._details[ticket_key].append(f"{task_name}:\n{output}")
+
+    # ------------------------------------------------------------------
+    # Called by REPL
+    # ------------------------------------------------------------------
 
     def toggle_details(self, ticket_key: str) -> None:
         with self._lock:
             if ticket_key in self._expanded:
                 self._expanded.discard(ticket_key)
-            else:
-                self._expanded.add(ticket_key)
-        self._refresh()
+                return
+            self._expanded.add(ticket_key)
+            lines = self._details.get(ticket_key, [])
 
-    def print_above(self, text: str) -> None:
-        """Print a line above the live display (e.g. system messages)."""
-        with self._lock:
-            if self._live:
-                self._live.console.print(text)
-            else:
-                self._console.print(text)
+        if lines:
+            self._console.print(f"\n[bold]{ticket_key} — task detail[/bold]")
+            for entry in lines[-5:]:
+                self._console.print(entry, style="dim")
+        else:
+            self._console.print(f"[dim]{ticket_key}: no task output captured yet.[/dim]")
 
-    # ------------------------------------------------------------------
-    # Render
-    # ------------------------------------------------------------------
-
-    def _refresh(self) -> None:
-        self._tick = (self._tick + 1) % len(_SPINNER)
-        if self._live:
-            self._live.update(self._render())
-
-    def _render(self) -> Table:
-        table = Table.grid(padding=(0, 1))
-        table.add_column(width=12)   # ticket key
-        table.add_column(width=22)   # task
-        table.add_column(width=16)   # agent
-        table.add_column(width=12)   # status
-        table.add_column(width=8)    # elapsed
+    def render_status_table(self) -> Table:
+        """Return a Rich Table of all current ticket states (for /status)."""
+        table = Table(show_header=True, header_style="bold dim", box=None, padding=(0, 1))
+        table.add_column("Ticket",  width=_KEY_W,  style="cyan")
+        table.add_column("Task",    width=_TASK_W)
+        table.add_column("Agent",   width=_AGT_W,  style="dim")
+        table.add_column("Status",  width=12)
+        table.add_column("Elapsed", width=8, style="dim")
 
         with self._lock:
             rows = list(self._rows.values())
 
         for row in rows:
-            key_text = Text(row.ticket_key, style="bold cyan")
-            status_icon, status_style = _status_display(row.status, self._tick)
-            task_text = Text(row.task or "—", style="dim" if not row.task else "")
-            agent_text = Text(row.agent or "", style="dim")
-            status_text = Text(f"{status_icon} {row.status}", style=status_style)
-            elapsed_text = Text(_fmt_elapsed(row.elapsed), style="dim")
-
-            table.add_row(key_text, task_text, agent_text, status_text, elapsed_text)
-
-            if row.ticket_key in self._expanded:
-                detail_lines = self._details.get(row.ticket_key, [])
-                if detail_lines:
-                    panel = Panel(
-                        "\n\n".join(detail_lines[-3:]),  # last 3 tasks
-                        title=f"{row.ticket_key} detail",
-                        style="dim",
-                    )
-                    table.add_row("", Columns([panel], expand=True), "", "", "")
-
-            if row.status == "needs_help":
-                hint = Text(
-                    f"  ↳ {row.needs_help_gate} exhausted retries — type your guidance and press Enter",
-                    style="bold yellow",
-                )
-                table.add_row("", hint, "", "", "")
-
+            icon, style = _status_display(row.status)
+            table.add_row(
+                row.ticket_key,
+                row.task or "—",
+                row.agent or "",
+                Text(f"{icon} {row.status}", style=style),
+                _fmt_elapsed(row.elapsed),
+            )
         return table
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _print_line(self, state: "TicketState") -> None:
+        icon, _ = _status_display(state.status)
+        key     = state.jira_key.ljust(_KEY_W)
+        task    = (state.current_task or "").ljust(_TASK_W)
+        elapsed = _fmt_elapsed(state.elapsed_seconds).rjust(6)
+
+        if state.status == "needs_help":
+            _pt_print([
+                ("ansiyellow bold", f"  ⚠  {key}"),
+                ("", f"  {task}"),
+                ("ansiyellow", f"  {state.needs_help_gate} exhausted retries — type /help <guidance>"),
+            ])
+        elif state.status == "passed":
+            _pt_print([
+                ("ansigreen bold", f"  ✓  {key}"),
+                ("", f"  {task}"),
+                ("ansigreen", f"  passed  {elapsed}"),
+            ])
+        elif state.status == "failed":
+            _pt_print([
+                ("ansired bold", f"  ✗  {key}"),
+                ("", f"  {task}"),
+                ("ansired", "  failed"),
+            ])
+        else:
+            # running — task started
+            _pt_print([
+                ("ansigreen", f"  ►  {key}"),
+                ("", f"  {task}"),
+                ("ansiblue dim", f"  {state.current_agent or ''}"),
+            ])
 
 
 # ---------------------------------------------------------------------------
@@ -160,19 +158,18 @@ class SprintUI:
 
 class _Row:
     def __init__(self, key: str) -> None:
-        self.ticket_key = key
-        self.task = ""
-        self.agent = ""
-        self.status = "running"
-        self.elapsed = 0.0
+        self.ticket_key     = key
+        self.task           = ""
+        self.agent          = ""
+        self.status         = "running"
+        self.elapsed        = 0.0
         self.needs_help_gate = ""
-        self.done = False
-        self.updated_at = time.monotonic()
+        self.updated_at     = time.monotonic()
 
 
-def _status_display(status: str, tick: int) -> tuple[str, str]:
+def _status_display(status: str) -> tuple[str, str]:
     return {
-        "running":    (_SPINNER[tick], "green"),
+        "running":    ("►", "green"),
         "needs_help": ("⚠", "bold yellow"),
         "passed":     ("✓", "bold green"),
         "failed":     ("✗", "bold red"),
@@ -183,3 +180,12 @@ def _fmt_elapsed(seconds: float) -> str:
     if seconds < 60:
         return f"{int(seconds)}s"
     return f"{int(seconds // 60)}m{int(seconds % 60)}s"
+
+
+def _pt_print(fragments: list[tuple[str, str]]) -> None:
+    """Thread-safe print via prompt_toolkit (safe inside patch_stdout context)."""
+    try:
+        print_formatted_text(FormattedText(fragments))
+    except Exception:
+        # Fallback if called outside a prompt_toolkit context
+        print("".join(text for _, text in fragments))

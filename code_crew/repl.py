@@ -27,10 +27,21 @@ from concurrent.futures import ThreadPoolExecutor, Future
 from pathlib import Path
 
 from dotenv import load_dotenv
+from prompt_toolkit import PromptSession
+from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.patch_stdout import patch_stdout
+from prompt_toolkit.styles import Style
 from rich.console import Console
-from rich.text import Text
 
 from shared.home import CONFIG_FILE, ensure_home
+
+_PROMPT_STYLE = Style.from_dict({
+    "prompt":            "ansigreen bold",
+    "prompt.stuck":      "ansiyellow bold",
+    "prompt.stuck-key":  "ansiyellow",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -94,45 +105,55 @@ def main() -> None:
 
     ui = SprintUI(console=console)
 
-    # --- Startup checks ---
-    summary = run_checks()
-    _print_startup_banner(console, summary)
-    if not summary.git_ok:
-        console.print(
-            "\n[yellow]No git repo detected. Run [bold]/init[/bold] to scaffold a project, "
-            "or cd into an existing repo.[/yellow]"
-        )
+    session = PromptSession(
+        history=InMemoryHistory(),
+        auto_suggest=AutoSuggestFromHistory(),
+        style=_PROMPT_STYLE,
+        mouse_support=False,
+    )
 
-    ui.start()
+    # patch_stdout redirects all print()/Console output so it appears above
+    # the prompt_toolkit input bar rather than overwriting it.
+    with patch_stdout():
+        # --- Startup checks ---
+        summary = run_checks()
+        _print_startup_banner(console, summary)
+        if not summary.git_ok:
+            console.print(
+                "\n[yellow]No git repo detected. Run [bold]/init[/bold] to scaffold "
+                "a project, or cd into an existing repo.[/yellow]\n"
+            )
 
-    try:
-        while True:
-            stuck = state.get_stuck()
-            if stuck:
-                prompt = f"[bold yellow]({stuck[0]} needs help)[/bold yellow] > "
-            else:
-                prompt = "[bold cyan]>[/bold cyan] "
+        try:
+            while True:
+                stuck = state.get_stuck()
+                if stuck:
+                    prompt_msg = HTML(
+                        f'<class="prompt.stuck">({stuck[0]} needs help)</class> '
+                        f'<class="prompt">&gt;</class> '
+                    )
+                else:
+                    prompt_msg = HTML('<class="prompt">&gt;</class> ')
 
-            try:
-                # Rich doesn't have a built-in input; use plain input() with rendered prompt
-                console.print(Text.from_markup(prompt), end="")
-                line = input()
-            except (EOFError, KeyboardInterrupt):
-                console.print("\n[dim]Bye.[/dim]")
-                break
+                try:
+                    line = session.prompt(prompt_msg)
+                except KeyboardInterrupt:
+                    continue          # Ctrl-C clears the line, stays in loop
+                except EOFError:
+                    break             # Ctrl-D exits
 
-            line = line.strip()
-            if not line:
-                continue
+                line = line.strip()
+                if not line:
+                    continue
 
-            if line.startswith("/"):
-                _handle_slash(line, state, ui, executor, console)
-            else:
-                _handle_chat(line, state, console)
+                if line.startswith("/"):
+                    _handle_slash(line, state, ui, executor, console)
+                else:
+                    _handle_chat(line, state, console)
 
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
-        ui.stop()
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+            console.print("[dim]Bye.[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -144,8 +165,7 @@ def _handle_slash(line: str, state: ReplState, ui: SprintUI, executor: ThreadPoo
     cmd = parts[0].lower()
 
     if cmd in ("/exit", "/quit"):
-        console.print("[dim]Bye.[/dim]")
-        sys.exit(0)
+        raise EOFError  # caught by the main loop, triggers clean shutdown
 
     elif cmd == "/jira":
         if len(parts) < 2:
