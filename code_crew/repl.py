@@ -154,8 +154,9 @@ def main() -> None:
                 else:
                     _handle_chat(line, state, console)
 
-        executor.shutdown(wait=False, cancel_futures=True)
-        console.print("[dim]Bye.[/dim]")
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+            console.print("[dim]Bye.[/dim]")
 
 
 # ---------------------------------------------------------------------------
