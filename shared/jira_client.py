@@ -43,6 +43,7 @@ class JiraTicket:
     acceptance_criteria: list[str]
     sprint_goal: str
     figma_url: str
+    html_design_ref: str
     add_refs: list[str]
     depends: list[str] = field(default_factory=list)
     raw: str = ""
@@ -83,6 +84,7 @@ def fetch(issue_key: str) -> JiraTicket:
     acs = extracted.get("acceptance_criteria") or []
     sprint_goal = extracted.get("sprint_goal") or summary
     figma_url = extracted.get("figma_url") or ""
+    html_design_ref = extracted.get("html_design_ref") or ""
     add_refs = extracted.get("add_refs") or []
 
     if not story:
@@ -113,6 +115,7 @@ def fetch(issue_key: str) -> JiraTicket:
         acceptance_criteria=acs,
         sprint_goal=sprint_goal,
         figma_url=figma_url,
+        html_design_ref=html_design_ref,
         add_refs=add_refs,
         depends=depends,
         raw=raw,

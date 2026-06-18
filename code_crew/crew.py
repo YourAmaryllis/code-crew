@@ -181,7 +181,8 @@ def _format_context(sprint_input: dict) -> str:
         f"**Jira key**: {sprint_input.get('jira_key', 'UNKNOWN')}\n"
         f"**Sprint goal**: {sprint_input.get('sprint_goal', '')}\n"
         f"**Story**: {sprint_input.get('story', '')}\n"
-        f"**Figma**: {sprint_input.get('figma_url', 'not provided')}\n"
+        f"**Figma**: {sprint_input.get('figma_url', '') or 'not provided'}\n"
+        f"**HTML design**: {sprint_input.get('html_design_ref', '') or 'not provided'}\n"
         f"**Relevant ADDs**: {add_refs}\n\n"
         f"**Acceptance criteria**:\n{acs}",
     ]

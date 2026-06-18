@@ -15,8 +15,8 @@ You are opening the sprint. For each user story provided in the input, evaluate 
 against the **Definition of Ready** from SOP-3-Dev-Process:
 
 1. **Written as a user story**: "As a [who], I want [what], so that [why]"
-2. **Acceptance criteria**: defined in Given/When/Then format
-3. **Designs complete**: at least wireframes in Figma, linked in the Jira story
+2. **Acceptance criteria**: clear, testable statements (plain English bullets or checklist — Gherkin belongs in BDD feature files, not in Jira ACs)
+3. **Designs** *(optional — use whatever is available)*: Figma URL if linked; or an HTML design explicitly referenced in the Jira description (e.g. "see attached design.html"); or no design at all for small/mechanical changes (e.g. making a field mandatory, renaming a label). Do NOT flag missing Figma as a blocker unless the ticket clearly involves new UI flows or visual design decisions.
 4. **Dependencies identified**: no unresolved blockers
 5. **Story points estimated**: team has estimated complexity
 6. **No known blockers**

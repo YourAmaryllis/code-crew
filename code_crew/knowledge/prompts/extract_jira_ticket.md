@@ -15,6 +15,7 @@ Return ONLY a valid JSON object — no markdown fences, no explanation — with 
   "acceptance_criteria": ["<AC 1>", "<AC 2>", ...],
   "sprint_goal": "<one-sentence goal derived from the ticket summary>",
   "figma_url": "<Figma URL if present, else null>",
+  "html_design_ref": "<filename or short description if description explicitly references an attached HTML design, else null>",
   "add_refs": ["<ADD-NNN or ADR-NNN references found in the description, else []>"]
 }
 ```
@@ -24,6 +25,7 @@ Rules:
 - `acceptance_criteria`: list each discrete AC item as a plain string. Strip numbering, bullet characters, and Jira markup. Omit any item shorter than 10 characters. Set to `[]` if no AC section exists.
 - `sprint_goal`: a concise, action-oriented sentence suitable for a sprint board. Derive it from the ticket summary — do NOT copy the summary verbatim; rephrase as a goal.
 - `figma_url`: extract only actual Figma URLs (figma.com). Set to `null` if absent.
+- `html_design_ref`: set only when the description explicitly directs the team to use an attached HTML design file (e.g. "see attached design.html", "use the attached mockup"). Extract the filename or a short description of the reference. Set to `null` if absent or ambiguous.
 - `add_refs`: extract any ADD-NNN, ADR-NNN, or SOP-NNN identifiers mentioned in the description. Set to `[]` if absent.
 
-Do not include any keys beyond the five listed above.
+Do not include any keys beyond the six listed above.

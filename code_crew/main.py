@@ -65,6 +65,7 @@ def run(jira, story, ac, sprint_goal, figma, add, output):
     resolved_acs = list(ac) if ac else ticket.acceptance_criteria
     resolved_goal = sprint_goal or ticket.sprint_goal
     resolved_figma = figma or ticket.figma_url
+    resolved_html_design = ticket.html_design_ref
     resolved_adds = list(add) + ticket.add_refs  # merge: CLI extras + ticket refs
 
     click.echo(f"  Story: {resolved_story[:80]}...")
@@ -82,6 +83,7 @@ def run(jira, story, ac, sprint_goal, figma, add, output):
         "acceptance_criteria": resolved_acs,
         "sprint_goal": resolved_goal,
         "figma_url": resolved_figma,
+        "html_design_ref": resolved_html_design,
         "add_refs": resolved_adds,
         "user_context": user_context,
     }
