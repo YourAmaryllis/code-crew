@@ -2,6 +2,7 @@
 type: CrewAI Agent
 title: Backend Developer
 description: Implements backend features BDD-first, following ADDs and coding standards
+model: standard
 tags: [backend, go, python, bdd, trunk-based, implementation]
 timestamp: 2026-06-17T00:00:00Z
 role: >

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from crewai import Agent, Crew, Process, Task
 
-from shared.bedrock import get_fast_llm, get_llm
+from shared.bedrock import get_llm_for_tier
 from shared.okf_loader import load_bundle_agents, load_bundle_tasks
 from shared.tools import (
     BDDTestRunnerTool,
@@ -63,55 +63,24 @@ def build_agents(tools: dict) -> dict:
     mm = tools["memory_tool"]
     dc = tools["dod_checker"]
 
+    def _agent(name: str, agent_tools: list) -> Agent:
+        c = ac[name]
+        return Agent(
+            role=c.role,
+            goal=c.goal,
+            backstory=c.backstory,
+            tools=agent_tools,
+            llm=get_llm_for_tier(c.model),
+            verbose=True,
+        )
+
     return {
-        "scrum_master": Agent(
-            role=ac["scrum_master"].role,
-            goal=ac["scrum_master"].goal,
-            backstory=ac["scrum_master"].backstory,
-            tools=[kr, dc, jv, mm],
-            llm=get_fast_llm(),
-            verbose=True,
-        ),
-        "tech_lead": Agent(
-            role=ac["tech_lead"].role,
-            goal=ac["tech_lead"].goal,
-            backstory=ac["tech_lead"].backstory,
-            tools=[kr, ws, jv, sh],
-            llm=get_llm(),
-            verbose=True,
-        ),
-        "backend_developer": Agent(
-            role=ac["backend_developer"].role,
-            goal=ac["backend_developer"].goal,
-            backstory=ac["backend_developer"].backstory,
-            tools=[kr, ws, jv, sh, pr],
-            llm=get_llm(),
-            verbose=True,
-        ),
-        "frontend_developer": Agent(
-            role=ac["frontend_developer"].role,
-            goal=ac["frontend_developer"].goal,
-            backstory=ac["frontend_developer"].backstory,
-            tools=[kr, ws, jv, sh, pr],
-            llm=get_llm(),
-            verbose=True,
-        ),
-        "qa_engineer": Agent(
-            role=ac["qa_engineer"].role,
-            goal=ac["qa_engineer"].goal,
-            backstory=ac["qa_engineer"].backstory,
-            tools=[kr, ws, jv, sh, br, pr],
-            llm=get_llm(),
-            verbose=True,
-        ),
-        "security_reviewer": Agent(
-            role=ac["security_reviewer"].role,
-            goal=ac["security_reviewer"].goal,
-            backstory=ac["security_reviewer"].backstory,
-            tools=[kr, ws, sh, pr],
-            llm=get_llm(),
-            verbose=True,
-        ),
+        "scrum_master":      _agent("scrum_master",      [kr, dc, jv, mm]),
+        "tech_lead":         _agent("tech_lead",         [kr, ws, jv, sh]),
+        "backend_developer": _agent("backend_developer", [kr, ws, jv, sh, pr]),
+        "frontend_developer":_agent("frontend_developer",[kr, ws, jv, sh, pr]),
+        "qa_engineer":       _agent("qa_engineer",       [kr, ws, jv, sh, br, pr]),
+        "security_reviewer": _agent("security_reviewer", [kr, ws, sh, pr]),
     }
 
 

@@ -57,6 +57,7 @@ class AgentConcept:
     role: str
     goal: str
     backstory: str
+    model: str = "standard"          # fast | standard | powerful
     tags: list[str] = field(default_factory=list)
     sop_refs: list[str] = field(default_factory=list)
     raw_frontmatter: dict[str, Any] = field(default_factory=dict)
@@ -72,6 +73,7 @@ class AgentConcept:
             role=fm.get("role", "").strip(),
             goal=fm.get("goal", "").strip(),
             backstory=backstory.strip(),
+            model=fm.get("model", "standard"),
             tags=fm.get("tags", []),
             sop_refs=fm.get("sop_refs", []),
             raw_frontmatter=fm,

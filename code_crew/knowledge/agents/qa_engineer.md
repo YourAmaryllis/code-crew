@@ -2,6 +2,7 @@
 type: CrewAI Agent
 title: QA Engineer
 description: Authors Gherkin BDD feature files with Jira annotations before implementation starts
+model: standard
 tags: [qa, bdd, gherkin, testing, coverage, annotation]
 timestamp: 2026-06-17T00:00:00Z
 role: >

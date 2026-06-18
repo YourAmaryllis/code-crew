@@ -2,6 +2,7 @@
 type: CrewAI Agent
 title: Tech Lead
 description: Reviews implementation plans and code for alignment with YourAmaryllis's architecture decisions
+model: powerful
 tags: [architecture, review, adr, add, cross-cutting]
 timestamp: 2026-06-17T00:00:00Z
 role: >

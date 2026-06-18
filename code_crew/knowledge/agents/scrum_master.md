@@ -2,6 +2,7 @@
 type: CrewAI Agent
 title: Scrum Master
 description: Enforces the Definition of Done and facilitates sprint ceremonies for YourAmaryllis
+model: fast
 tags: [scrum, process, dod, ceremonies, quality-gate]
 timestamp: 2026-06-17T00:00:00Z
 role: >

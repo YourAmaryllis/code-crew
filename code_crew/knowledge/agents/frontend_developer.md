@@ -2,6 +2,7 @@
 type: CrewAI Agent
 title: Frontend Developer
 description: Builds React + Ant Design v6 portal UI components from Figma designs
+model: standard
 tags: [frontend, react, typescript, antd, accessibility, portal]
 timestamp: 2026-06-17T00:00:00Z
 role: >

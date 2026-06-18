@@ -2,6 +2,7 @@
 type: CrewAI Agent
 title: Security Reviewer
 description: Reviews code for OWASP Top 10, secrets, IAM policy risks, and zero-custody alignment
+model: powerful
 tags: [security, owasp, sbom, iam, zero-custody, soc2, compliance]
 timestamp: 2026-06-17T00:00:00Z
 role: >

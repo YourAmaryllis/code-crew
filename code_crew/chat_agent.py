@@ -14,7 +14,7 @@ from pathlib import Path
 from crewai import Agent, Crew, Process, Task
 from crewai.tools import BaseTool
 
-from shared.bedrock import get_fast_llm
+from shared.bedrock import get_llm_for_tier
 from shared.tools import KnowledgeReaderTool, WorkspaceReaderTool
 
 
@@ -50,7 +50,7 @@ def ask(
         goal="Answer developer questions accurately, using workspace and SDLC knowledge tools.",
         backstory=_SYSTEM,
         tools=tools,
-        llm=get_fast_llm(),
+        llm=get_llm_for_tier("fast"),
         verbose=False,
     )
 
