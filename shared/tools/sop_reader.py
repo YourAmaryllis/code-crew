@@ -54,14 +54,17 @@ def _ensure_designs(root: Path) -> Path:
 
 
 def _load_bundle(designs_root: Path) -> dict[str, str]:
-    """Pre-load all OKF .md files from {root}/SOP/, ADR/, ADD/, SDLC/ into {stem: content}."""
+    """Pre-load OKF .md files from {root}/ADR/, ADD/, SDLC/ into {stem: content}.
+
+    SOP/ is intentionally excluded — all relevant content has been migrated to SDLC/.
+    """
     docs: dict[str, str] = {}
-    for subdir in ("SOP", "ADR", "ADD"):
+    for subdir in ("ADR", "ADD"):
         directory = designs_root / subdir
         if not directory.exists():
             continue
         for md_file in sorted(directory.glob("*.md")):
-            if md_file.stem in ("SOP", "ADR", "ADD", "CRD", "EVAL", "README"):
+            if md_file.stem in ("ADR", "ADD", "CRD", "EVAL", "README"):
                 continue
             docs[md_file.stem] = md_file.read_text(encoding="utf-8")
 
@@ -88,10 +91,11 @@ class SOPReaderInput(BaseModel):
 class SOPReaderTool(BaseTool):
     name: str = "sop_reader"
     description: str = (
-        "Read an architecture or process document (SOP, ADD, ADR) from the project's "
+        "Read an architecture or process document (ADD, ADR, SDLC) from the project's "
         "knowledge repo. Pass the filename stem (without .md) to retrieve the full "
-        "document content. Use this to look up design documents and process guidelines "
-        "rather than relying on memory. All documents are pre-loaded at startup."
+        "document content. Use this to look up design documents, process guidelines, "
+        "and role-based SDLC knowledge rather than relying on memory. "
+        "All documents are pre-loaded at startup."
     )
     args_schema: type[BaseModel] = SOPReaderInput
     _docs: dict[str, str] = {}
