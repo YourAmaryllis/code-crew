@@ -35,12 +35,15 @@ Confirm the Jira issue (key provided in the sprint input) contains:
   implementation diverged, an updated ADD or tracked doc-debt ticket must exist)
 
 **Section 2 — Tests and traceability**
+Use the `bdd_runner` tool to actually run the BDD scenarios tagged with the Jira key
+(e.g. `tags="@LOOPLAT-92"`). Include the runner output verbatim in this report as evidence.
+"Scenarios were specified" is NOT sufficient — tests must be implemented and pass.
+
 Confirm:
-- BDD scenarios exist and are annotated with the Jira issue key and category tags
-- All acceptance criteria are covered by at least one scenario (100% per ADR-010)
+- BDD scenarios exist, are annotated with the Jira issue key and category tags, and cover 100% of ACs
+- `bdd_runner` output shows all scenarios PASSING (attach output as evidence)
 - A human has verified (or is scheduled to verify) acceptance scenarios — mark pending if not yet done
-- All automated tests pass (or list which are pending/failing)
-- A test report URL or summary is available for Jira comment
+- A test report summary is available for Jira comment
 
 **Section 3 — Pull request format**
 Confirm:

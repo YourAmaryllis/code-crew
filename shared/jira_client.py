@@ -45,6 +45,7 @@ class JiraTicket:
     figma_url: str
     html_design_ref: str
     add_refs: list[str]
+    comment_context: str
     depends: list[str] = field(default_factory=list)
     raw: str = ""
 
@@ -86,6 +87,7 @@ def fetch(issue_key: str) -> JiraTicket:
     figma_url = extracted.get("figma_url") or ""
     html_design_ref = extracted.get("html_design_ref") or ""
     add_refs = extracted.get("add_refs") or []
+    comment_context = extracted.get("comment_context") or ""
 
     if not story:
         raise MissingStoryError(
@@ -117,6 +119,7 @@ def fetch(issue_key: str) -> JiraTicket:
         figma_url=figma_url,
         html_design_ref=html_design_ref,
         add_refs=add_refs,
+        comment_context=comment_context,
         depends=depends,
         raw=raw,
     )

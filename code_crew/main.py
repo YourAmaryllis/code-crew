@@ -85,6 +85,7 @@ def run(jira, story, ac, sprint_goal, figma, add, output):
         "figma_url": resolved_figma,
         "html_design_ref": resolved_html_design,
         "add_refs": resolved_adds,
+        "comment_context": ticket.comment_context,
         "user_context": user_context,
     }
 

@@ -150,23 +150,30 @@ def build_crew(sprint_input: dict) -> Crew:
         context=[arch_review, bdd_authoring],
     )
 
+    code_review = Task(
+        description=f"{context_header}\n\n{tc['code_review'].description}",
+        expected_output=tc["code_review"].expected_output,
+        agent=tech_lead,
+        context=[backend_impl, frontend_impl],
+    )
+
     sec_review = Task(
         description=f"{context_header}\n\n{tc['security_review'].description}",
         expected_output=tc["security_review"].expected_output,
         agent=security_reviewer,
-        context=[backend_impl, frontend_impl],
+        context=[backend_impl, frontend_impl, code_review],
     )
 
     dod_check = Task(
         description=f"{context_header}\n\n{tc['dod_check'].description}",
         expected_output=tc["dod_check"].expected_output,
         agent=scrum_master,
-        context=[sprint_planning, arch_review, bdd_authoring, backend_impl, frontend_impl, sec_review],
+        context=[sprint_planning, arch_review, bdd_authoring, backend_impl, frontend_impl, code_review, sec_review],
     )
 
     return Crew(
         agents=[scrum_master, tech_lead, qa_engineer, backend_developer, frontend_developer, security_reviewer],
-        tasks=[sprint_planning, arch_review, bdd_authoring, backend_impl, frontend_impl, sec_review, dod_check],
+        tasks=[sprint_planning, arch_review, bdd_authoring, backend_impl, frontend_impl, code_review, sec_review, dod_check],
         process=Process.sequential,
         verbose=True,
     )
@@ -176,6 +183,7 @@ def _format_context(sprint_input: dict) -> str:
     acs = "\n".join(f"- {ac}" for ac in sprint_input.get("acceptance_criteria", []))
     add_refs = ", ".join(sprint_input.get("add_refs", [])) or "none specified"
     user_context = sprint_input.get("user_context", "")
+    comment_context = sprint_input.get("comment_context", "")
     sections = [
         f"## Sprint context\n\n"
         f"**Jira key**: {sprint_input.get('jira_key', 'UNKNOWN')}\n"
@@ -186,6 +194,8 @@ def _format_context(sprint_input: dict) -> str:
         f"**Relevant ADDs**: {add_refs}\n\n"
         f"**Acceptance criteria**:\n{acs}",
     ]
+    if comment_context:
+        sections.append(f"## Context from Jira comments\n\n{comment_context}")
     if user_context:
         sections.append(user_context)
     return "\n\n".join(sections)
