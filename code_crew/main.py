@@ -3,13 +3,12 @@ Entry point for the code crew.
 
 Usage:
   code-crew run --jira LOOPLAT-72
-  code-crew run --jira LOOPLAT-72 --sprint-goal "Custom goal override"
-  code-crew memory add "staging DB migrated to RDS" --category env
+  code-crew sprint --sprint "Sprint 5"
+  code-crew sprint --jira LOOPLAT-92 LOOPLAT-93 LOOPLAT-95
+  code-crew memory add "note" --category env
   code-crew memory list
-  code-crew memory remove <id>
 
-Story, ACs, sprint goal, Figma URL, and ADD refs are extracted from the Jira
-ticket automatically. All flags below are optional overrides.
+Config is loaded from ~/code-crew/config first, then local .env (if present) as overrides.
 """
 
 from pathlib import Path
@@ -17,16 +16,62 @@ from pathlib import Path
 import click
 from dotenv import load_dotenv
 
+# Load global config first, then local .env overrides
+from shared.home import CONFIG_FILE, ensure_home
+ensure_home()
+load_dotenv(CONFIG_FILE)
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 
 @click.group()
 def cli():
-    """YourAmaryllis virtual code crew — run sprints and manage memory."""
+    """Virtual code crew — run sprints and manage memory."""
 
 
 # ---------------------------------------------------------------------------
-# Run
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _run_ticket(jira_key: str, sprint_name: str = "", extra_adds: list[str] | None = None) -> str:
+    """Fetch, plan, and run the crew for a single ticket. Returns output text."""
+    from code_crew.crew import build_crew
+    from shared.jira_client import fetch
+    from shared.user_memory import UserMemory
+
+    ticket = fetch(jira_key)
+
+    memory = UserMemory()
+    terms = [jira_key] + ticket.acceptance_criteria + ticket.sprint_goal.split()
+    user_context = memory.format_for_context(jira_key=jira_key, terms=terms)
+
+    sprint_input = {
+        "jira_key": jira_key,
+        "story": ticket.story,
+        "acceptance_criteria": ticket.acceptance_criteria,
+        "sprint_goal": ticket.sprint_goal,
+        "figma_url": ticket.figma_url,
+        "html_design_ref": ticket.html_design_ref,
+        "add_refs": ticket.add_refs + (extra_adds or []),
+        "comment_context": ticket.comment_context,
+        "sprint_name": sprint_name,
+        "user_context": user_context,
+    }
+
+    crew = build_crew(sprint_input)
+    result = crew.kickoff(inputs=sprint_input)
+    return str(result)
+
+
+def _save_output(text: str, sprint_name: str, ticket_key: str) -> Path:
+    from shared.home import output_path
+    path = output_path(sprint_name, ticket_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Run (single ticket)
 # ---------------------------------------------------------------------------
 
 @cli.command()
@@ -35,21 +80,20 @@ def cli():
 @click.option("--ac", multiple=True, help="Override extracted ACs (repeat for multiple)")
 @click.option("--sprint-goal", default="", help="Override extracted sprint goal")
 @click.option("--figma", default="", help="Override extracted Figma URL")
-@click.option("--add", multiple=True, help="Extra ADD/ADR names to include (repeat for multiple)")
+@click.option("--add", multiple=True, help="Extra ADD/ADR names to include")
 @click.option("--output", default=None, help="Write crew output to this file path")
 def run(jira, story, ac, sprint_goal, figma, add, output):
-    """Run the code crew for a single sprint story.
+    """Run the code crew for a single ticket.
 
     Story, ACs, sprint goal, Figma URL, and ADD refs are extracted from the
     Jira ticket automatically. Pass flags above to override any extracted field.
     """
     import sys
 
-    from code_crew.crew import build_crew  # noqa: PLC0415 — import after env load
+    from code_crew.crew import build_crew
     from shared.jira_client import MissingACError, MissingStoryError, fetch
     from shared.user_memory import UserMemory
 
-    # --- Fetch and extract ticket fields via LLM ---
     click.echo(f"Fetching {jira} from Jira...")
     try:
         ticket = fetch(jira)
@@ -60,19 +104,15 @@ def run(jira, story, ac, sprint_goal, figma, add, output):
         click.echo(str(exc), err=True)
         sys.exit(1)
 
-    # CLI overrides win over extracted values
     resolved_story = story or ticket.story
     resolved_acs = list(ac) if ac else ticket.acceptance_criteria
     resolved_goal = sprint_goal or ticket.sprint_goal
     resolved_figma = figma or ticket.figma_url
-    resolved_html_design = ticket.html_design_ref
-    resolved_adds = list(add) + ticket.add_refs  # merge: CLI extras + ticket refs
 
     click.echo(f"  Story: {resolved_story[:80]}...")
     click.echo(f"  ACs:   {len(resolved_acs)} items")
     click.echo(f"  Goal:  {resolved_goal}")
 
-    # Recall relevant user context
     memory = UserMemory()
     terms = [jira] + resolved_acs + resolved_goal.split()
     user_context = memory.format_for_context(jira_key=jira, terms=terms)
@@ -83,16 +123,16 @@ def run(jira, story, ac, sprint_goal, figma, add, output):
         "acceptance_criteria": resolved_acs,
         "sprint_goal": resolved_goal,
         "figma_url": resolved_figma,
-        "html_design_ref": resolved_html_design,
-        "add_refs": resolved_adds,
+        "html_design_ref": ticket.html_design_ref,
+        "add_refs": list(add) + ticket.add_refs,
         "comment_context": ticket.comment_context,
         "user_context": user_context,
     }
 
     crew = build_crew(sprint_input)
     result = crew.kickoff(inputs=sprint_input)
-
     output_text = str(result)
+
     if output:
         out_path = Path(output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -100,6 +140,126 @@ def run(jira, story, ac, sprint_goal, figma, add, output):
         click.echo(f"Output written to {output}")
     else:
         click.echo(output_text)
+
+
+# ---------------------------------------------------------------------------
+# Sprint (all tickets in a sprint)
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--sprint", "sprint_name", default="", help="Sprint name (default: active sprint). Requires JIRA_URL/JIRA_USER/JIRA_TOKEN.")
+@click.option("--jira", "jira_keys", multiple=True, help="Ticket keys to include (alternative to --sprint).")
+@click.option("--output-dir", default=None, help="Directory for per-ticket output files (default: ~/code-crew/outputs/<sprint>/).")
+@click.option("--dry-run", is_flag=True, help="Show sprint plan without running any crews.")
+def sprint(sprint_name, jira_keys, output_dir, dry_run):
+    """Run the code crew for all tickets in a sprint, in dependency order.
+
+    \b
+    Examples:
+      # Fetch active sprint tickets automatically (needs JIRA_URL/USER/TOKEN):
+      code-crew sprint
+      code-crew sprint --sprint "Sprint 5"
+
+      # Specify tickets explicitly:
+      code-crew sprint --jira LOOPLAT-92 --jira LOOPLAT-93 --jira LOOPLAT-95
+
+      # Preview the plan without running:
+      code-crew sprint --jira LOOPLAT-92 --jira LOOPLAT-93 --dry-run
+    """
+    import os
+    import sys
+
+    from shared.jira_client import MissingACError, MissingStoryError
+    from shared.sprint_planner import (
+        fetch_sprint_tickets,
+        list_sprint_ticket_keys,
+        plan_execution_order,
+    )
+
+    effective_sprint = sprint_name or "active-sprint"
+
+    # --- Step 1: Get ticket keys ---
+    if jira_keys:
+        keys = list(jira_keys)
+    else:
+        click.echo(f"Listing tickets for sprint: {sprint_name or 'active'}...")
+        try:
+            keys = list_sprint_ticket_keys(
+                project=os.environ.get("JIRA_PROJECT", ""),
+                sprint_name=sprint_name,
+            )
+        except RuntimeError as exc:
+            click.echo(str(exc), err=True)
+            sys.exit(1)
+
+    if not keys:
+        click.echo("No tickets found.")
+        return
+
+    click.echo(f"Found {len(keys)} tickets: {', '.join(keys)}")
+
+    # --- Step 2: Fetch and extract each ticket ---
+    click.echo("\nFetching ticket details...")
+    tickets, skipped = fetch_sprint_tickets(keys)
+
+    if skipped:
+        click.echo("\nSkipped (missing story/ACs — update Jira before running crew):")
+        for s in skipped:
+            click.echo(f"  ❌ {s['key']}: {s['reason'][:120]}")
+
+    if not tickets:
+        click.echo("\nNo actionable tickets found.", err=True)
+        sys.exit(1)
+
+    # --- Step 3: Sprint planning — dependency analysis ---
+    click.echo(f"\nPlanning execution order for {len(tickets)} tickets...")
+    waves = plan_execution_order(tickets)
+
+    click.echo("\nExecution plan:")
+    for i, wave in enumerate(waves, 1):
+        keys_str = ", ".join(t.key for t in wave)
+        label = "(parallel)" if len(wave) > 1 else ""
+        click.echo(f"  Wave {i}: {keys_str} {label}")
+
+    if dry_run:
+        click.echo("\n--dry-run: stopping here.")
+        return
+
+    # --- Step 4: Execute each ticket in wave order ---
+    results: dict[str, str] = {}
+    failed: list[str] = []
+
+    click.echo("")
+    for wave_idx, wave in enumerate(waves, 1):
+        click.echo(f"── Wave {wave_idx} {'─' * 50}")
+        for ticket in wave:
+            click.echo(f"\n▶ {ticket.key}: {ticket.summary}")
+            try:
+                output_text = _run_ticket(ticket.key, sprint_name=effective_sprint)
+                results[ticket.key] = output_text
+
+                out_path = (
+                    Path(output_dir) / f"{ticket.key}.md"
+                    if output_dir
+                    else _save_output(output_text, effective_sprint, ticket.key)
+                )
+                click.echo(f"  ✅ Done → {out_path}")
+
+            except Exception as exc:
+                failed.append(ticket.key)
+                click.echo(f"  ❌ Failed: {exc}", err=True)
+
+    # --- Summary ---
+    click.echo(f"\n{'─' * 60}")
+    click.echo(f"Sprint run complete.")
+    click.echo(f"  ✅ Completed: {len(results)} tickets")
+    if skipped:
+        click.echo(f"  ⏭  Skipped:   {len(skipped)} tickets (missing story/ACs)")
+    if failed:
+        click.echo(f"  ❌ Failed:    {len(failed)} tickets: {', '.join(failed)}")
+
+    outputs_dir = Path(output_dir) if output_dir else _save_output("", effective_sprint, "_placeholder").parent
+    click.echo(f"\nOutputs: {outputs_dir}")
 
 
 # ---------------------------------------------------------------------------
@@ -117,22 +277,17 @@ def memory():
     "--category", "-c",
     default="notes",
     type=click.Choice(["decisions", "blockers", "env", "jira", "security", "notes", "always"]),
-    help=(
-        "Category: 'always' = injected every run; "
-        "'jira' = tag with --tag to link to a ticket; "
-        "others = keyword-matched."
-    ),
+    help="Category: 'always' = injected every run; others = keyword-matched.",
 )
-@click.option("--tag", "-t", multiple=True, help="Jira key or other tag (e.g. LOOPLAT-72). Repeat for multiple.")
+@click.option("--tag", "-t", multiple=True, help="Jira key or other tag. Repeat for multiple.")
 def memory_add(content, category, tag):
     """Add a context entry to memory.
 
     \b
     Examples:
-      code-crew memory add "staging DB migrated to RDS on 2026-06-17" --category env
-      code-crew memory add "LOOPLAT-72 blocked by LOOPLAT-50 auth refactor" --category blockers --tag LOOPLAT-72
+      code-crew memory add "staging DB migrated to RDS" --category env
+      code-crew memory add "LOOPLAT-72 blocked by auth refactor" --category blockers --tag LOOPLAT-72
       code-crew memory add "use pgx v5 for all new DB code" --category decisions
-      code-crew memory add "AWS profile for youramaryllis is 'youramaryllis-dev'" --category always
     """
     from shared.user_memory import UserMemory
     mem = UserMemory()
@@ -142,12 +297,11 @@ def memory_add(content, category, tag):
 
 @memory.command("list")
 @click.option("--category", "-c", default=None, help="Filter by category.")
-@click.option("--tag", "-t", default=None, help="Filter by tag (e.g. LOOPLAT-72).")
+@click.option("--tag", "-t", default=None, help="Filter by tag.")
 def memory_list(category, tag):
     """List memory entries."""
     from shared.user_memory import UserMemory
-    mem = UserMemory()
-    entries = mem.list(category=category, tag=tag)
+    entries = UserMemory().list(category=category, tag=tag)
     if not entries:
         click.echo("No entries found.")
         return
@@ -160,21 +314,18 @@ def memory_list(category, tag):
 def memory_remove(entry_id):
     """Remove a memory entry by ID."""
     from shared.user_memory import UserMemory
-    mem = UserMemory()
-    if mem.remove(entry_id):
+    if UserMemory().remove(entry_id):
         click.echo(f"Removed entry {entry_id}.")
     else:
         click.echo(f"Entry '{entry_id}' not found.", err=True)
 
 
 @memory.command("clear")
-@click.option("--category", "-c", default=None, help="Clear only this category. Omit to clear all.")
+@click.option("--category", "-c", default=None, help="Clear only this category.")
 @click.confirmation_option(prompt="This will delete memory entries. Continue?")
 def memory_clear(category):
     """Clear all (or one category of) memory entries."""
-    from shared.user_memory import UserMemory
-    mem = UserMemory()
-    n = mem.clear(category=category)
+    n = UserMemory().clear(category=category)
     click.echo(f"Cleared {n} entries.")
 
 
@@ -183,12 +334,8 @@ def memory_clear(category):
 def memory_show(jira):
     """Preview what memory the crew would see for a given Jira key."""
     from shared.user_memory import UserMemory
-    mem = UserMemory()
-    ctx = mem.format_for_context(jira_key=jira)
-    if ctx:
-        click.echo(ctx)
-    else:
-        click.echo("No relevant memory entries found.")
+    ctx = UserMemory().format_for_context(jira_key=jira)
+    click.echo(ctx if ctx else "No relevant memory entries found.")
 
 
 if __name__ == "__main__":

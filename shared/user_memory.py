@@ -1,9 +1,10 @@
 """
 User-managed memory store for the code and ops crews.
 
-A JSONL file (default: ~/.youramaryllis/crew-memory.jsonl) that users populate via
-the CLI. At crew startup, relevant entries are retrieved by keyword match against
-the Jira key, sprint terms, and tags, then injected into the context header.
+A JSONL file (default: ~/code-crew/memory/crew-memory.jsonl) that users
+populate via the CLI. At crew startup, relevant entries are retrieved by
+keyword match against the Jira key, sprint terms, and tags, then injected
+into the context header.
 
 No LLM or embedder required — user context is explicit, not inferred.
 """
@@ -18,10 +19,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from shared.home import default_memory_path
+
 
 def _memory_path() -> Path:
-    raw = os.environ.get("CREW_MEMORY_PATH", "~/.youramaryllis/crew-memory.jsonl")
-    path = Path(raw).expanduser()
+    raw = os.environ.get("CREW_MEMORY_PATH", "")
+    path = Path(raw).expanduser() if raw else default_memory_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

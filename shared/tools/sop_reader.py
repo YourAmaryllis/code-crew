@@ -18,26 +18,38 @@ from pathlib import Path
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from shared.home import default_designs_path
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _designs_root() -> Path:
-    return Path(os.environ.get("DESIGNS_PATH", str(_REPO_ROOT / "designs")))
+    explicit = os.environ.get("DESIGNS_PATH", "")
+    return Path(explicit) if explicit else default_designs_path()
 
 
 def _ensure_designs(root: Path) -> Path:
-    """Clone the knowledge repo if DESIGNS_PATH doesn't exist and DESIGNS_REPO is set."""
-    if root.exists():
-        return root
+    """Clone or pull the knowledge repo."""
     repo_url = os.environ.get("DESIGNS_REPO", "")
-    if not repo_url:
-        return root  # missing — handled gracefully in model_post_init
     branch = os.environ.get("DESIGNS_BRANCH", "main")
-    print(f"[sop_reader] Cloning knowledge repo {repo_url} → {root}")
-    subprocess.run(
-        ["git", "clone", "--depth=1", "--branch", branch, repo_url, str(root)],
-        check=True,
-    )
+
+    if not root.exists():
+        if not repo_url:
+            return root  # missing and no repo configured — warn in model_post_init
+        print(f"[sop_reader] Cloning {repo_url} → {root}")
+        subprocess.run(
+            ["git", "clone", "--depth=1", "--branch", branch, repo_url, str(root)],
+            check=True,
+            capture_output=True,
+        )
+    elif (root / ".git").exists() and repo_url:
+        print(f"[sop_reader] Pulling latest from {repo_url}")
+        subprocess.run(
+            ["git", "-C", str(root), "pull", "--ff-only"],
+            check=False,          # don't crash if offline or dirty
+            capture_output=True,
+        )
+
     return root
 
 
