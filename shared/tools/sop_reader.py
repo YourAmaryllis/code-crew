@@ -54,7 +54,7 @@ def _ensure_designs(root: Path) -> Path:
 
 
 def _load_bundle(designs_root: Path) -> dict[str, str]:
-    """Pre-load all OKF .md files from {root}/SOP/, ADR/, ADD/ into {stem: content}."""
+    """Pre-load all OKF .md files from {root}/SOP/, ADR/, ADD/, SDLC/ into {stem: content}."""
     docs: dict[str, str] = {}
     for subdir in ("SOP", "ADR", "ADD"):
         directory = designs_root / subdir
@@ -64,6 +64,13 @@ def _load_bundle(designs_root: Path) -> dict[str, str]:
             if md_file.stem in ("SOP", "ADR", "ADD", "CRD", "EVAL", "README"):
                 continue
             docs[md_file.stem] = md_file.read_text(encoding="utf-8")
+
+    # Load SDLC role/function files (SDLC/**/*.md)
+    sdlc_dir = designs_root / "SDLC"
+    if sdlc_dir.exists():
+        for md_file in sorted(sdlc_dir.rglob("*.md")):
+            docs[md_file.stem] = md_file.read_text(encoding="utf-8")
+
     return docs
 
 
@@ -72,7 +79,8 @@ class SOPReaderInput(BaseModel):
         description=(
             "Filename stem of the document to read (without .md extension). "
             "Examples: 'SOP-3-Dev-Process', 'ADD-018-Terraform-Module-Structure', "
-            "'ADR-025-GSD-Agent-Assisted-Development', 'SOP-DoD-Definition-of-Done'"
+            "'ADR-025-GSD-Agent-Assisted-Development', 'SOP-DoD-Definition-of-Done', "
+            "'code-architecture', 'bdd-authoring', 'definition-of-done', 'overview'"
         )
     )
 
