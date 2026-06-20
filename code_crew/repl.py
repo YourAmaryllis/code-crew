@@ -408,7 +408,7 @@ def main() -> None:
     # module level, which calls Telemetry.set_tracer() and installs CrewAI's own
     # OTLP provider.  Our provider must be in place first so CrewAI skips its own.
     from shared.telemetry import setup_langfuse
-    langfuse_ok = setup_langfuse()
+    langfuse_ok, langfuse_error = setup_langfuse()
 
     from code_crew.startup import run_checks
     from code_crew.ui import SprintUI
@@ -420,7 +420,7 @@ def main() -> None:
     # This avoids patch_stdout's sys.stdout proxy which mangles ANSI escape codes.
     _clear_screen()
     banner_console = Console(force_terminal=True, highlight=False)
-    _print_startup_banner(banner_console, summary, langfuse_ok=langfuse_ok)
+    _print_startup_banner(banner_console, summary, langfuse_ok=langfuse_ok, langfuse_error=langfuse_error)
     if not summary.git_ok:
         banner_console.print(
             "\n[yellow]No git repo detected. Run [bold]/init[/bold] to scaffold "
@@ -1048,15 +1048,28 @@ def _clear_screen() -> None:
     sys.stdout.flush()
 
 
-def _print_startup_banner(console: Console, summary, langfuse_ok: bool = False) -> None:
+def _print_startup_banner(
+    console: Console,
+    summary,
+    langfuse_ok: bool = False,
+    langfuse_error: str = "",
+) -> None:
     from rich.table import Table
 
     active_profile = os.environ.get("CODE_CREW_PROFILE", "")
     profile_str = f"  [dim cyan]profile: {active_profile}[/dim cyan]" if active_profile else ""
-    trace_str   = "  [dim green]langfuse ✓[/dim green]" if langfuse_ok else "  [dim]no tracing[/dim]"
+    if langfuse_ok:
+        trace_str = "  [dim green]langfuse ✓[/dim green]"
+    elif langfuse_error:
+        trace_str = f"  [red]langfuse ✗[/red]"
+    else:
+        trace_str = "  [dim]no tracing[/dim]"
 
     console.print()
     console.print(f"[bold]code-crew[/bold]{profile_str}{trace_str}", end="  ")
+    if langfuse_error:
+        console.print()
+        console.print(f"  [red]langfuse error:[/red] {langfuse_error}")
     if summary.detected_stacks:
         console.print(f"[dim]stacks: {', '.join(summary.detected_stacks)}[/dim]")
     else:
