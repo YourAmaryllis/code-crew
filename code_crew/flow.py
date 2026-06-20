@@ -233,6 +233,7 @@ class TicketFlow:
         crew = build_single_task_crew(task_name, sprint_input, code_path=self.state.code_path)
         try:
             result = crew.kickoff(inputs=sprint_input)
+            output = str(result)
         except Exception as exc:
             if is_aws_auth_error(exc):
                 aws_profile = __import__("os").environ.get("AWS_PROFILE", "")
@@ -241,8 +242,16 @@ class TicketFlow:
                     f"AWS credentials expired during {task_name}. "
                     f"Run `{hint}` then re-run /jira {self.state.jira_key}."
                 ) from exc
-            raise
-        return str(result)
+            # CrewAI / Bedrock parse failures raise here (format_answer fallback).
+            # Return a rejection marker so review gates can retry implementation
+            # rather than crashing the whole flow.
+            output = f"INCOMPLETE: agent failed during {task_name} — {str(exc)[:300]}"
+
+        # Same recovery for silent parse failures (AgentFinish with failure thought).
+        if "Failed to parse LLM response" in output or output.strip().startswith("INCOMPLETE:"):
+            output = f"INCOMPLETE: {task_name} could not produce output. Retry with more focused instructions."
+
+        return output
 
     # ------------------------------------------------------------------
     # Human escalation

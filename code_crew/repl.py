@@ -23,8 +23,19 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import warnings
 from concurrent.futures import ThreadPoolExecutor, Future
 from pathlib import Path
+
+# CrewAI 1.14.7 / Bedrock: format_answer() falls back to AgentFinish when the
+# LLM response can't be parsed, causing a Pydantic serialization mismatch warning.
+# The warning is harmless (we handle the incomplete output in flow._execute).
+warnings.filterwarnings(
+    "ignore",
+    message="Pydantic serializer warnings",
+    category=UserWarning,
+    module="pydantic",
+)
 
 from dotenv import load_dotenv
 from prompt_toolkit import PromptSession
