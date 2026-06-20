@@ -15,7 +15,7 @@ Slash commands:
 
 Free text (no leading /) → chat agent with workspace access.
 
-Config: ~/code-crew/config then local .env
+Config: ~/.code-crew/config then local .env
 """
 
 from __future__ import annotations
@@ -35,7 +35,11 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 from rich.console import Console
 
-from shared.home import CONFIG_FILE, ensure_home
+from shared.home import (
+    CONFIG_FILE, CONFIG_YAML, PROFILES_DIR,
+    ensure_home, list_profiles, profile_path, legacy_profile_path,
+)
+from shared.pt_console import PTConsole as _PTConsole
 
 _PROMPT_STYLE = Style.from_dict({
     "prompt":            "ansigreen bold",
@@ -48,12 +52,289 @@ _PROMPT_STYLE = Style.from_dict({
 # Bootstrap
 # ---------------------------------------------------------------------------
 
-def _bootstrap() -> None:
+def _bootstrap(profile: str | None = None) -> None:
+    from shared.config import load_yaml_config
+
     ensure_home()
-    load_dotenv(CONFIG_FILE)
+
+    # 1. Global config — yaml wins; fall back to legacy dotenv
+    if CONFIG_YAML.exists():
+        load_yaml_config(CONFIG_YAML, override=False)
+    elif CONFIG_FILE.exists():
+        load_dotenv(CONFIG_FILE)
+
+    # 2. Profile
+    name = profile or os.environ.get("CODE_CREW_PROFILE") or _read_project_profile()
+    if name:
+        ppath = profile_path(name)                     # preferred: .yaml
+        legacy = legacy_profile_path(name)             # fallback:  .env
+        if ppath.exists():
+            load_yaml_config(ppath, override=True)
+            os.environ["CODE_CREW_PROFILE"] = name
+        elif legacy.exists():
+            load_dotenv(legacy, override=True)
+            os.environ["CODE_CREW_PROFILE"] = name
+            sys.stderr.write(
+                f"code-crew: profile '{name}' using legacy .env format — "
+                f"migrate to {ppath}\n"
+            )
+        else:
+            sys.stderr.write(
+                f"code-crew: profile '{name}' not found "
+                f"(expected {ppath})\n"
+            )
+
+    # 3. Project yaml env: section (overrides profile)
+    _apply_project_yaml_env()
+
+    # 4. Local .env (legacy / secrets, highest priority)
     local_env = Path.cwd() / ".env"
     if local_env.exists():
-        load_dotenv(local_env)
+        load_dotenv(local_env, override=True)
+
+
+def _apply_project_yaml_env() -> None:
+    """Apply env: section from .code-crew.yaml (project overrides profile)."""
+    from shared.config import load_yaml_config
+    cfg = Path.cwd() / ".code-crew.yaml"
+    if cfg.exists():
+        try:
+            load_yaml_config(cfg, override=True)
+        except Exception:
+            pass
+
+
+def _read_project_profile() -> str | None:
+    """Read `profile:` key from .code-crew.yaml in cwd, if present."""
+    return _read_project_yaml().get("profile") or None
+
+
+def _read_project_yaml() -> dict:
+    """Load .code-crew.yaml from cwd as a dict (empty dict if absent or invalid)."""
+    import yaml
+    cfg = Path.cwd() / ".code-crew.yaml"
+    if not cfg.exists():
+        return {}
+    try:
+        return yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+
+def _write_project_yaml(data: dict) -> None:
+    """Write data to .code-crew.yaml in cwd, preserving unrelated keys."""
+    import yaml
+    cfg = Path.cwd() / ".code-crew.yaml"
+    existing = _read_project_yaml()
+    existing.update(data)
+    cfg.write_text(yaml.dump(existing, default_flow_style=False), encoding="utf-8")
+
+
+def _switch_profile(name: str) -> bool:
+    """
+    Switch to a different profile in the running process.
+    Clears keys set by the current profile first, then loads the new one.
+    Returns True if the profile was found and loaded.
+    """
+    from dotenv import dotenv_values
+    from shared.config import load_yaml_config, yaml_env_keys
+
+    # Clear keys set by the current profile
+    current = os.environ.get("CODE_CREW_PROFILE", "")
+    if current:
+        curr_yaml = profile_path(current)
+        curr_env  = legacy_profile_path(current)
+        if curr_yaml.exists():
+            for key in yaml_env_keys(curr_yaml):
+                os.environ.pop(key, None)
+        elif curr_env.exists():
+            for key in dotenv_values(curr_env):
+                os.environ.pop(key, None)
+
+    ppath  = profile_path(name)
+    legacy = legacy_profile_path(name)
+    if ppath.exists():
+        load_yaml_config(ppath, override=True)
+    elif legacy.exists():
+        load_dotenv(legacy, override=True)
+    else:
+        return False
+
+    os.environ["CODE_CREW_PROFILE"] = name
+    return True
+
+
+# ---------------------------------------------------------------------------
+# CrewAI verbosity control
+# ---------------------------------------------------------------------------
+
+# Tools the human doesn't need to see — pure background context loading.
+_SUPPRESS_TOOLS = frozenset({
+    "jira_view", "jira_sprint_list",   # ticket details already known
+    "knowledge_reader", "sop_reader",  # internal doc lookups
+    "memory_recall",                   # memory hydration
+})
+
+
+def _tool_label(tool_name: str, args) -> str | None:
+    """Return a compact one-liner for a tool call, or None to suppress."""
+    if tool_name in _SUPPRESS_TOOLS:
+        return None
+
+    if isinstance(args, str):
+        try:
+            import json
+            args = json.loads(args)
+        except Exception:
+            args = {}
+
+    if tool_name == "workspace_reader":
+        op   = args.get("operation", "read_file") if isinstance(args, dict) else "read"
+        path = args.get("path", "")               if isinstance(args, dict) else ""
+        pat  = args.get("pattern", "")            if isinstance(args, dict) else ""
+        if op == "read_file":
+            return f"  [dim]reading {path}[/dim]"
+        if op == "search":
+            return f"  [dim]searching '{pat[:40]}' in {path or 'workspace'}[/dim]"
+        if op == "list_dir":
+            return f"  [dim]listing {path or '/'}[/dim]"
+        return f"  [dim]{op} {path}[/dim]"
+
+    if tool_name == "platform_shell":
+        cmd = (args.get("command", "") if isinstance(args, dict) else str(args))
+        cmd = cmd.strip().split("\n")[0][:70]
+        return f"  [dim]$ {cmd}[/dim]"
+
+    if tool_name == "bdd_runner":
+        return "  [dim]running BDD tests[/dim]"
+
+    if tool_name == "dod_checker":
+        return "  [dim]checking definition of done[/dim]"
+
+    # Generic fallback — show the name, drop noisy args
+    label = tool_name.replace("_", " ")
+    return f"  [dim]→ {label}[/dim]"
+
+
+def _quieten_crewai_verbosity() -> None:
+    """
+    Replace CrewAI's verbose panels with compact one-liners on the console.
+
+    We replace the singleton EventListener's formatter with a minimal subclass
+    that only shows what a human needs to track progress:
+      - which task is running (bold header)
+      - which files are being read/written (dim one-liners)
+      - when tests or DoD checks run
+      - errors (always kept)
+
+    Everything else (LLM calls, reasoning, tool output, observations) goes to
+    Langfuse via OTLP.
+    """
+    try:
+        from crewai.events.event_listener import EventListener
+    except ImportError:
+        return
+
+    class _QuietFormatter:
+        """
+        Minimal console formatter — one-liners only, no Rich panels.
+
+        Does NOT inherit from ConsoleFormatter so that __getattr__ reliably
+        catches every handle_* method that isn't explicitly overridden here.
+        (Inheritance would cause Python to find the parent's panel-printing
+        implementations before reaching __getattr__.)
+        """
+
+        def __init__(self, console) -> None:
+            self.verbose = False
+            self.console = console
+
+        # ── Tool calls — show one-liner on start, nothing on finish ─────
+
+        # event_listener: handle_tool_usage_started(tool_name, tool_args, run_attempts)
+        def handle_tool_usage_started(
+            self, tool_name: str, tool_args="", run_attempts=None
+        ) -> None:
+            label = _tool_label(tool_name, tool_args)
+            if label:
+                self.console.print(label)
+
+        def handle_tool_usage_finished(
+            self, tool_name: str, output: str = "", run_attempts=None
+        ) -> None:
+            pass  # full output → Langfuse
+
+        def handle_tool_usage_error(
+            self, tool_name: str, error, run_attempts=None
+        ) -> None:
+            self.console.print(f"  [red]✗ {tool_name}: {str(error)[:120]}[/red]")
+
+        # ── Task lifecycle ────────────────────────────────────────────────
+
+        # event_listener: handle_task_started(source.id, task_name)
+        def handle_task_started(self, task_id: str, task_name=None) -> None:
+            raw = (task_name or task_id or "").strip()
+            name = raw.split("\n")[0].replace("_", " ").strip()[:60]
+            if name:
+                self.console.print(f"\n[bold dim]{name}[/bold dim]")
+
+        # event_listener: handle_task_status(source.id, agent_role, status, task_name)
+        def handle_task_status(
+            self, task_id: str, agent_role: str, status: str = "completed",
+            task_name=None,
+        ) -> None:
+            raw = (task_name or task_id or "").strip()
+            name = raw.split("\n")[0].replace("_", " ").strip()[:60]
+            if status == "completed":
+                self.console.print(f"  [dim green]✓ {name}[/dim green]")
+            elif status in ("failed", "error"):
+                self.console.print(f"  [red]✗ {name}[/red]")
+
+        # ── Crew lifecycle ────────────────────────────────────────────────
+
+        # event_listener: handle_crew_started(crew_name, source.id)
+        def handle_crew_started(self, crew_name: str, source_id) -> None:
+            pass  # ticket key already shown by the REPL
+
+        # event_listener: handle_crew_status(crew_name, source.id, status, output?)
+        def handle_crew_status(
+            self, crew_name: str, source_id, status: str = "completed",
+            output=None,
+        ) -> None:
+            if status == "completed":
+                self.console.print("\n[bold green]Done.[/bold green]")
+            elif status in ("failed", "error"):
+                self.console.print("\n[bold red]Failed.[/bold red]")
+
+        # ── Catch-all: suppress every other handle_* call ────────────────
+        def __getattr__(self, name: str):
+            if name.startswith("handle_"):
+                return lambda *a, **kw: None
+            raise AttributeError(name)
+
+    # Replace the singleton formatter so all registered event closures use ours.
+    try:
+        listener = EventListener()
+        original_console = listener.formatter.console
+        listener.formatter = _QuietFormatter(original_console)
+        # TraceCollectionListener shares the same formatter ref; update it too.
+        from crewai.events.listeners.tracing.trace_listener import TraceCollectionListener
+        tc = TraceCollectionListener()
+        if tc.formatter is not None:
+            tc.formatter = listener.formatter
+    except Exception:
+        pass  # non-fatal; user will just see more output than expected
+
+    # Suppress crewai_core.PRINTER.print() calls — these print tool results,
+    # agent reasoning, and task descriptions directly, bypassing the formatter.
+    # set_suppress_console_output() is a ContextVar and doesn't propagate to
+    # ThreadPoolExecutor workers, so we patch the method directly instead.
+    # Our _QuietFormatter calls self.console.print() which is unaffected.
+    try:
+        from crewai_core.printer import Printer
+        Printer.print = staticmethod(lambda *a, **kw: None)  # type: ignore[method-assign]
+    except ImportError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -93,19 +374,66 @@ class ReplState:
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    _bootstrap()
+_BARE_EXIT = frozenset(("exit", "quit", "bye", ":q", "q"))
 
-    # force_terminal=True: Rich outputs ANSI codes even when stdout is
-    # redirected by patch_stdout() (which replaces sys.stdout with a
-    # non-terminal wrapper, causing Rich to strip all colour by default).
-    console = Console(force_terminal=True, highlight=False)
-    state = ReplState()
-    executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="flow")
+
+def main() -> None:
+    import argparse
+    import shutil
+
+    parser = argparse.ArgumentParser(prog="code-crew", add_help=False)
+    parser.add_argument(
+        "--profile", "-p",
+        default=None,
+        metavar="NAME",
+        help="Config profile to activate (~/.code-crew/profiles/<NAME>.env).",
+    )
+    args, _ = parser.parse_known_args()
+
+    _bootstrap(profile=args.profile)
+
+    # setup_langfuse() MUST run before any crewai import.
+    # crewai/events/event_listener.py creates the EventListener singleton at
+    # module level, which calls Telemetry.set_tracer() and installs CrewAI's own
+    # OTLP provider.  Our provider must be in place first so CrewAI skips its own.
+    from shared.telemetry import setup_langfuse
+    langfuse_ok = setup_langfuse()
 
     from code_crew.startup import run_checks
     from code_crew.ui import SprintUI
 
+    # --- Startup checks (before patch_stdout so Rich writes to the real terminal) ---
+    summary = run_checks()
+
+    # Clear screen and print banner directly to the real terminal.
+    # This avoids patch_stdout's sys.stdout proxy which mangles ANSI escape codes.
+    _clear_screen()
+    banner_console = Console(force_terminal=True, highlight=False)
+    _print_startup_banner(banner_console, summary, langfuse_ok=langfuse_ok)
+    if not summary.git_ok:
+        banner_console.print(
+            "\n[yellow]No git repo detected. Run [bold]/init[/bold] to scaffold "
+            "a project, or cd into an existing repo.[/yellow]"
+        )
+
+    # Push the prompt toward the bottom of the terminal.
+    rows = shutil.get_terminal_size().lines
+    padding = max(0, rows - 18)   # 18 ≈ banner height + some breathing room
+    if padding:
+        sys.stdout.write("\n" * padding)
+        sys.stdout.flush()
+
+    # Reduce CrewAI's default verbosity: replace full tool-output panels with
+    # compact one-liners and silence the result dump (raw file contents, etc.)
+    _quieten_crewai_verbosity()
+
+    # raw=True tells StdoutProxy to call write_raw() instead of write().
+    # write() replaces \x1b with ?, corrupting all ANSI colour codes.
+    # write_raw() passes bytes through unchanged, so Rich panels from any code
+    # (including CrewAI's ConsoleFormatter) render with correct colours.
+    console = _PTConsole(force_terminal=True, highlight=False)
+    state = ReplState()
+    executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="flow")
     ui = SprintUI(console=console)
 
     session = PromptSession(
@@ -115,18 +443,7 @@ def main() -> None:
         mouse_support=False,
     )
 
-    # patch_stdout redirects all print()/Console output so it appears above
-    # the prompt_toolkit input bar rather than overwriting it.
-    with patch_stdout():
-        # --- Startup checks ---
-        summary = run_checks()
-        _print_startup_banner(console, summary)
-        if not summary.git_ok:
-            console.print(
-                "\n[yellow]No git repo detected. Run [bold]/init[/bold] to scaffold "
-                "a project, or cd into an existing repo.[/yellow]\n"
-            )
-
+    with patch_stdout(raw=True):
         try:
             while True:
                 stuck = state.get_stuck()
@@ -141,15 +458,17 @@ def main() -> None:
                 try:
                     line = session.prompt(prompt_msg)
                 except KeyboardInterrupt:
-                    continue          # Ctrl-C clears the line, stays in loop
+                    continue
                 except (EOFError, SystemExit):
-                    break             # Ctrl-D or /exit
+                    break
 
                 line = line.strip()
                 if not line:
                     continue
 
-                if line.startswith("/"):
+                if line.lower() in _BARE_EXIT:
+                    break
+                elif line.startswith("/"):
                     _handle_slash(line, state, ui, executor, console)
                 else:
                     _handle_chat(line, state, console)
@@ -219,6 +538,30 @@ def _handle_slash(line: str, state: ReplState, ui: SprintUI, executor: ThreadPoo
         else:
             console.print("[dim]No runs this session.[/dim]")
 
+    elif cmd == "/stack":
+        _handle_stack(parts[1:], console)
+
+    elif cmd == "/profiles":
+        _show_profiles(console)
+
+    elif cmd == "/profile":
+        if len(parts) < 2:
+            current = os.environ.get("CODE_CREW_PROFILE", "")
+            if current:
+                console.print(f"Active profile: [bold cyan]{current}[/bold cyan]")
+            else:
+                console.print("[dim]No profile active (using global config).[/dim]")
+            _show_profiles(console)
+        else:
+            name = parts[1]
+            if _switch_profile(name):
+                console.print(f"[green]Switched to profile [bold]{name}[/bold][/green]")
+            else:
+                console.print(
+                    f"[red]Profile '{name}' not found.[/red]  "
+                    f"Create [dim]{PROFILES_DIR / (name + '.env')}[/dim] to add it."
+                )
+
     else:
         console.print(f"[red]Unknown command: {cmd}[/red]  Type [bold]/help[/bold] ... or just ask a question.")
 
@@ -249,6 +592,19 @@ def _start_ticket(
     except TrackerError as exc:
         console.print(f"[red]Tracker error: {exc}[/red]")
         return
+    except Exception as exc:
+        from shared.aws_auth import is_aws_auth_error, sso_login
+        if not is_aws_auth_error(exc):
+            raise
+        if not _run_sso_login(console):
+            return
+        # Retry once after successful login
+        try:
+            tracker = IssueTrackerClient()
+            ticket = tracker.get_ticket(key)
+        except Exception as retry_exc:
+            console.print(f"[red]Still failing after login: {retry_exc}[/red]")
+            return
 
     memory = UserMemory()
     terms = [key] + ticket.acceptance_criteria + ticket.sprint_goal.split()
@@ -547,6 +903,119 @@ def _sprint_context_str(state: ReplState) -> str:
 # Helpers
 # ---------------------------------------------------------------------------
 
+_KNOWN_STACKS = (
+    "go-backend",
+    "typescript-react",
+    "python",
+    "terraform-aws",
+)
+
+
+def _handle_stack(args: list[str], console: Console) -> None:
+    """
+    /stack                       — show active stacks and source
+    /stack <name> [name ...]     — set stacks (replaces all)
+    /stack add <name> [name ...] — add to existing stacks
+    /stack rm  <name> [name ...] — remove from existing stacks
+    """
+    from code_crew.startup import detect_stacks, _stacks_from_yaml
+
+    root = Path.cwd()
+    yaml_stacks = _stacks_from_yaml(root)
+    active = detect_stacks(root)
+    profile_name = os.environ.get("CODE_CREW_PROFILE", "")
+    if os.environ.get("CODE_CREW_STACKS", "").strip():
+        source = "[dim](CODE_CREW_STACKS env var)[/dim]"
+    elif yaml_stacks is not None:
+        source = "[dim](.code-crew.yaml)[/dim]"
+    elif os.environ.get("_CODE_CREW_STACKS_PROFILE", "").strip():
+        label = f"profile: {profile_name}" if profile_name else "profile"
+        source = f"[dim]({label})[/dim]"
+    else:
+        source = "[dim](auto-detected)[/dim]"
+
+    if not args:
+        # Show current stacks
+        if active:
+            console.print(f"Active stacks {source}: [cyan]{', '.join(active)}[/cyan]")
+        else:
+            console.print(f"No stacks detected {source}.")
+        console.print(f"[dim]Known stacks: {', '.join(_KNOWN_STACKS)}[/dim]")
+        console.print("[dim]Usage: /stack <name>...  |  /stack add <name>...  |  /stack rm <name>...[/dim]")
+        return
+
+    sub = args[0].lower()
+
+    if sub == "add":
+        names = args[1:]
+        if not names:
+            console.print("[red]Usage: /stack add <name> [name ...][/red]")
+            return
+        current = list(yaml_stacks or active)
+        for n in names:
+            if n not in current:
+                current.append(n)
+        _write_project_yaml({"stacks": current})
+        console.print(f"[green]Stacks set to:[/green] [cyan]{', '.join(current)}[/cyan]  [dim](.code-crew.yaml updated)[/dim]")
+
+    elif sub in ("rm", "remove"):
+        names = args[1:]
+        if not names:
+            console.print("[red]Usage: /stack rm <name> [name ...][/red]")
+            return
+        current = list(yaml_stacks or active)
+        removed = [n for n in names if n in current]
+        current = [s for s in current if s not in names]
+        _write_project_yaml({"stacks": current})
+        if removed:
+            console.print(f"[green]Removed:[/green] {', '.join(removed)}  →  [cyan]{', '.join(current) or '(none)'}[/cyan]  [dim](.code-crew.yaml updated)[/dim]")
+        else:
+            console.print(f"[yellow]Nothing to remove — {', '.join(names)} not in active stacks.[/yellow]")
+
+    else:
+        # /stack <name> [name ...] — set all
+        names = args  # sub is actually the first stack name
+        _write_project_yaml({"stacks": names})
+        console.print(f"[green]Stacks set to:[/green] [cyan]{', '.join(names)}[/cyan]  [dim](.code-crew.yaml updated)[/dim]")
+
+
+def _run_sso_login(console: Console) -> bool:
+    """
+    Detect the active AWS profile, print a hint, run `aws sso login`, return success.
+    Runs interactively so the browser flow works (subprocess inherits the terminal).
+    """
+    from shared.aws_auth import sso_login
+    aws_profile = os.environ.get("AWS_PROFILE", "")
+    profile_hint = f" --profile {aws_profile}" if aws_profile else ""
+    console.print(
+        f"[yellow]AWS credentials expired.[/yellow]  "
+        f"Running [bold]aws sso login{profile_hint}[/bold]..."
+    )
+    ok = sso_login(profile=aws_profile or None)
+    if ok:
+        console.print("[green]Authenticated.[/green]")
+    else:
+        console.print(
+            f"[red]SSO login failed or was cancelled.[/red]\n"
+            f"[dim]Run manually: aws sso login{profile_hint}[/dim]"
+        )
+    return ok
+
+
+def _show_profiles(console: Console) -> None:
+    profiles = list_profiles()
+    current = os.environ.get("CODE_CREW_PROFILE", "")
+    if not profiles:
+        console.print(
+            f"[dim]No profiles found. Add [bold]{PROFILES_DIR}/<name>.env[/bold] to create one.[/dim]"
+        )
+        return
+    console.print(f"[dim]Profiles ({PROFILES_DIR}):[/dim]")
+    for p in profiles:
+        marker = "  [bold cyan]●[/bold cyan] " if p == current else "    "
+        console.print(f"{marker}[cyan]{p}[/cyan]")
+
+
 def _parse_retries(args: list[str]) -> int:
     env_default = int(os.environ.get("MAX_RETRIES", "3"))
     try:
@@ -563,11 +1032,20 @@ def _slugify(text: str) -> str:
     return text.strip("-")[:40]
 
 
-def _print_startup_banner(console: Console, summary) -> None:
+def _clear_screen() -> None:
+    sys.stdout.write('\033[2J\033[H')
+    sys.stdout.flush()
+
+
+def _print_startup_banner(console: Console, summary, langfuse_ok: bool = False) -> None:
     from rich.table import Table
 
+    active_profile = os.environ.get("CODE_CREW_PROFILE", "")
+    profile_str = f"  [dim cyan]profile: {active_profile}[/dim cyan]" if active_profile else ""
+    trace_str   = "  [dim green]langfuse ✓[/dim green]" if langfuse_ok else "  [dim]no tracing[/dim]"
+
     console.print()
-    console.print("[bold]code-crew[/bold]", end="  ")
+    console.print(f"[bold]code-crew[/bold]{profile_str}{trace_str}", end="  ")
     if summary.detected_stacks:
         console.print(f"[dim]stacks: {', '.join(summary.detected_stacks)}[/dim]")
     else:

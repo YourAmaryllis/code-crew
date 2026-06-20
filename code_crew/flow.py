@@ -207,6 +207,7 @@ class TicketFlow:
         guidance into the task context when present.
         """
         from code_crew.crew import build_single_task_crew
+        from shared.aws_auth import is_aws_auth_error
 
         extra_context = ""
         if self.state.review_feedback:
@@ -217,7 +218,17 @@ class TicketFlow:
 
         sprint_input = _build_sprint_input(self.state, extra_context)
         crew = build_single_task_crew(task_name, sprint_input, code_path=self.state.code_path)
-        result = crew.kickoff(inputs=sprint_input)
+        try:
+            result = crew.kickoff(inputs=sprint_input)
+        except Exception as exc:
+            if is_aws_auth_error(exc):
+                aws_profile = __import__("os").environ.get("AWS_PROFILE", "")
+                hint = f"aws sso login{' --profile ' + aws_profile if aws_profile else ''}"
+                raise _FlowFailed(
+                    f"AWS credentials expired during {task_name}. "
+                    f"Run `{hint}` then re-run /jira {self.state.jira_key}."
+                ) from exc
+            raise
         return str(result)
 
     # ------------------------------------------------------------------

@@ -58,8 +58,9 @@ def run_checks(code_path: Path | None = None) -> StartupSummary:
     stacks = detect_stacks(root)
     required_clis = _required_clis_for_stacks(stacks)
 
-    # Always require gh
+    # Always require gh and aws (Bedrock + SSO login)
     required_clis.setdefault("gh", "brew install gh  # then: gh auth login")
+    required_clis.setdefault("aws", "brew install awscli")
 
     for cli, install_hint in sorted(required_clis.items()):
         found = shutil.which(cli) is not None
@@ -84,8 +85,32 @@ def run_checks(code_path: Path | None = None) -> StartupSummary:
 
 
 def detect_stacks(root: Path | None = None) -> list[str]:
-    """Return list of stack names detected from project files in root."""
+    """
+    Return the active stack list for the project.
+
+    Resolution order:
+      1. CODE_CREW_STACKS env var  — set in a profile or shell; comma-separated
+      2. `stacks:` in .code-crew.yaml  — project-level declaration
+      3. File-based auto-detection — go.mod, package.json, etc.
+    """
     root = root or Path.cwd()
+
+    # 1. Env var (set via profile or shell)
+    env_stacks = os.environ.get("CODE_CREW_STACKS", "").strip()
+    if env_stacks:
+        return [s.strip() for s in env_stacks.split(",") if s.strip()]
+
+    # 2. Project yaml stacks:
+    explicit = _stacks_from_yaml(root)
+    if explicit is not None:
+        return explicit
+
+    # 3. Profile stacks: (set as _CODE_CREW_STACKS_PROFILE when profile loads)
+    profile_stacks = os.environ.get("_CODE_CREW_STACKS_PROFILE", "").strip()
+    if profile_stacks:
+        return [s.strip() for s in profile_stacks.split(",") if s.strip()]
+
+    # 4. Auto-detect
     detected: list[str] = []
     if (root / "go.mod").exists():
         detected.append("go-backend")
@@ -93,10 +118,27 @@ def detect_stacks(root: Path | None = None) -> list[str]:
         detected.append("typescript-react")
     if (root / "pyproject.toml").exists() or (root / "setup.py").exists():
         detected.append("python")
-    tf_files = list(root.glob("*.tf")) + list((root / "terraform").glob("*.tf") if (root / "terraform").is_dir() else [])
+    tf_files = list(root.glob("*.tf")) + list(
+        (root / "terraform").glob("*.tf") if (root / "terraform").is_dir() else []
+    )
     if tf_files:
         detected.append("terraform-aws")
     return detected
+
+
+def _stacks_from_yaml(root: Path) -> list[str] | None:
+    """Read `stacks:` from .code-crew.yaml. Returns None if not set."""
+    cfg = root / ".code-crew.yaml"
+    if not cfg.exists():
+        return None
+    try:
+        data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+        stacks = data.get("stacks")
+        if isinstance(stacks, list) and stacks:
+            return [str(s) for s in stacks]
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------

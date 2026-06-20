@@ -72,6 +72,7 @@ def build_agents(tools: dict) -> dict:
             tools=agent_tools,
             llm=get_llm_for_tier(c.model),
             verbose=True,
+            max_iter=15,
         )
 
     return {
@@ -92,6 +93,7 @@ def build_tasks(agents: dict, sprint_input: dict, tasks_dir: Path | None = None)
 
     def task(name: str, agent_key: str, context_tasks: list | None = None) -> Task:
         return Task(
+            name=name,
             description=f"{ctx}\n\n{tc[name].description}",
             expected_output=tc[name].expected_output,
             agent=agents[agent_key],

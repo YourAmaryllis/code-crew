@@ -142,7 +142,7 @@ def _load_extraction_prompt() -> str:
 def _extract_with_llm(raw_ticket: str) -> dict:
     """Call the fast LLM to extract story, ACs, sprint_goal, figma_url, add_refs."""
     system_prompt = _load_extraction_prompt()
-    model_id = os.environ["BEDROCK_FAST_MODEL_ID"]
+    model_id = os.environ.get("BEDROCK_FAST_MODEL_ID") or os.environ["BEDROCK_MODEL_ID"]
     region = os.environ.get("BEDROCK_REGION", "us-east-1")
 
     llm = LLM(

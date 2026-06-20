@@ -8,7 +8,7 @@ Usage:
   code-crew memory add "note" --category env
   code-crew memory list
 
-Config is loaded from ~/code-crew/config first, then local .env (if present) as overrides.
+Config is loaded from ~/.code-crew/config first, then local .env (if present) as overrides.
 """
 
 from pathlib import Path
@@ -149,7 +149,7 @@ def run(jira, story, ac, sprint_goal, figma, add, output):
 @cli.command()
 @click.option("--sprint", "sprint_name", default="", help="Sprint name (default: active sprint). Requires JIRA_URL/JIRA_USER/JIRA_TOKEN.")
 @click.option("--jira", "jira_keys", multiple=True, help="Ticket keys to include (alternative to --sprint).")
-@click.option("--output-dir", default=None, help="Directory for per-ticket output files (default: ~/code-crew/outputs/<sprint>/).")
+@click.option("--output-dir", default=None, help="Directory for per-ticket output files (default: ~/.code-crew/outputs/<sprint>/).")
 @click.option("--dry-run", is_flag=True, help="Show sprint plan without running any crews.")
 def sprint(sprint_name, jira_keys, output_dir, dry_run):
     """Run the code crew for all tickets in a sprint, in dependency order.

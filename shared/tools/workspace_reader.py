@@ -92,8 +92,8 @@ class WorkspaceReaderTool(BaseTool):
         except OSError as exc:
             return f"ERROR: {exc}"
         lines = text.splitlines()
-        if len(lines) > 500:
-            text = "\n".join(lines[:500]) + f"\n… ({len(lines) - 500} more lines truncated)"
+        if len(lines) > 200:
+            text = "\n".join(lines[:200]) + f"\n… ({len(lines) - 200} more lines truncated)"
         return text or "(empty file)"
 
     def _list_dir(self, root: Path, rel_path: str, depth: int) -> str:
@@ -146,11 +146,11 @@ class WorkspaceReaderTool(BaseTool):
         lines = output.splitlines()
         # Make paths relative to root
         rel_lines = []
-        for line in lines[:100]:
+        for line in lines[:50]:
             if line.startswith(str(root)):
                 line = line[len(str(root)):].lstrip("/")
             rel_lines.append(line)
-        suffix = f"\n… ({len(lines) - 100} more matches truncated)" if len(lines) > 100 else ""
+        suffix = f"\n… ({len(lines) - 50} more matches truncated)" if len(lines) > 50 else ""
         return "\n".join(rel_lines) + suffix
 
     @staticmethod

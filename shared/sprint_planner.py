@@ -42,7 +42,7 @@ def list_sprint_ticket_keys(
     if not (base_url and user and token):
         raise RuntimeError(
             "Jira REST API credentials required for --sprint mode.\n"
-            "Set JIRA_URL, JIRA_USER, JIRA_TOKEN in ~/code-crew/config.\n"
+            "Set JIRA_URL, JIRA_USER, JIRA_TOKEN in ~/.code-crew/config.\n"
             "Or pass ticket keys directly: code-crew sprint --jira KEY1 KEY2 ..."
         )
 

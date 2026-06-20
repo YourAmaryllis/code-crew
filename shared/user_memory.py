@@ -1,7 +1,7 @@
 """
 User-managed memory store for the code and ops crews.
 
-A JSONL file (default: ~/code-crew/memory/crew-memory.jsonl) that users
+A JSONL file (default: ~/.code-crew/memory/crew-memory.jsonl) that users
 populate via the CLI. At crew startup, relevant entries are retrieved by
 keyword match against the Jira key, sprint terms, and tags, then injected
 into the context header.

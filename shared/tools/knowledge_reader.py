@@ -30,7 +30,7 @@ def _designs_root() -> Path:
 
 
 def _ensure_designs(root: Path) -> Path:
-    """Clone or pull the knowledge repo."""
+    """Clone or pull the knowledge repo. Returns root whether or not it succeeds."""
     repo_url = os.environ.get("DESIGNS_REPO", "")
     branch = os.environ.get("DESIGNS_BRANCH", "main")
 
@@ -38,16 +38,23 @@ def _ensure_designs(root: Path) -> Path:
         if not repo_url:
             return root  # missing and no repo configured — warn in model_post_init
         print(f"[knowledge_reader] Cloning {repo_url} → {root}")
-        subprocess.run(
-            ["git", "clone", "--depth=1", "--branch", branch, repo_url, str(root)],
-            check=True,
-            capture_output=True,
-        )
+        try:
+            subprocess.run(
+                ["git", "clone", "--depth=1", "--branch", branch, repo_url, str(root)],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.decode(errors="replace").strip() if exc.stderr else ""
+            print(
+                f"[knowledge_reader] Clone failed — SDLC knowledge unavailable.\n"
+                f"  Set DESIGNS_REPO/DESIGNS_PATH in your .env to enable it.\n"
+                + (f"  git: {stderr}" if stderr else "")
+            )
     elif (root / ".git").exists() and repo_url:
-        print(f"[knowledge_reader] Pulling latest from {repo_url}")
         subprocess.run(
             ["git", "-C", str(root), "pull", "--ff-only"],
-            check=False,          # don't crash if offline or dirty
+            check=False,
             capture_output=True,
         )
 

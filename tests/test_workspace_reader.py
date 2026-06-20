@@ -134,3 +134,30 @@ def test_unknown_operation(tool):
     with patch("shared.tools.workspace_reader._code_path", return_value=ws):
         result = t._run(operation="delete_everything")
     assert "Unknown operation" in result
+
+
+# ---------------------------------------------------------------------------
+# truncation limits
+# ---------------------------------------------------------------------------
+
+def test_read_file_truncates_at_200_lines(workspace):
+    big = workspace / "big.go"
+    big.write_text("\n".join(f"// line {i}" for i in range(300)))
+    t = WorkspaceReaderTool()
+    with patch("shared.tools.workspace_reader._code_path", return_value=workspace):
+        result = t._run(operation="read_file", path="big.go")
+    assert "100 more lines truncated" in result
+    assert result.count("// line") == 200
+
+
+def test_search_truncates_at_50_matches(workspace):
+    # 60 Go files each matching the pattern
+    src = workspace / "src"
+    src.mkdir()
+    for i in range(60):
+        (src / f"f{i}.go").write_text("package src\n// FINDME\n")
+    t = WorkspaceReaderTool()
+    with patch("shared.tools.workspace_reader._code_path", return_value=workspace):
+        result = t._run(operation="search", pattern="FINDME", glob="**/*.go")
+    assert "10 more matches truncated" in result
+    assert result.count("FINDME") == 50
