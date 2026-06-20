@@ -44,3 +44,5 @@ Produce the full `.feature` file content and a coverage matrix table:
 | Acceptance Criterion | Scenario(s) | Status |
 |---------------------|-------------|--------|
 | AC-1 | Scenario: ... | ✓ |
+
+**After writing**, use the `bdd_runner` tool to run the feature files for a syntax and compilation check. Scenarios will fail (implementation isn't done) — that is expected. Report the runner output in your summary so the backend developer can see what test IDs will need to pass.

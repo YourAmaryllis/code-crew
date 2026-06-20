@@ -54,18 +54,21 @@ def setup_langfuse() -> bool:
     except ImportError:
         return False
 
-    provider = TracerProvider()
-    provider.add_span_processor(
-        BatchSpanProcessor(
-            OTLPSpanExporter(
-                endpoint=endpoint,
-                headers={"Authorization": f"Basic {auth}"},
-            )
-        )
+    exporter = OTLPSpanExporter(
+        endpoint=endpoint,
+        headers={"Authorization": f"Basic {auth}"},
     )
+    provider = TracerProvider()
+    provider.add_span_processor(BatchSpanProcessor(exporter))
+
     # Always install ours — if crewai hasn't run yet, we pre-empt it;
     # if crewai already ran (shouldn't happen if called first), we take over.
     trace.set_tracer_provider(provider)
+
+    # Flush + shutdown on exit so BatchSpanProcessor doesn't drop in-flight spans.
+    import atexit
+    atexit.register(lambda: provider.force_flush(timeout_millis=5000))
+    atexit.register(provider.shutdown)
 
     _langfuse_enabled = True
     return True

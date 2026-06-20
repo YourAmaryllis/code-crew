@@ -627,7 +627,7 @@ def _start_ticket(
         "user_context": user_context,
     })
 
-    flow = TicketFlow(flow_state, on_status=ui.update)
+    flow = TicketFlow(flow_state, on_status=ui.update, on_task_complete=ui.show_summary)
 
     def run_and_cleanup():
         try:
@@ -763,7 +763,7 @@ def _start_ticket_from_object(ticket, max_retries, code_path, state, ui, executo
         "user_context": user_context,
     })
 
-    flow = TicketFlow(flow_state, on_status=ui.update)
+    flow = TicketFlow(flow_state, on_status=ui.update, on_task_complete=ui.show_summary)
 
     def run_and_cleanup():
         try:

@@ -17,6 +17,11 @@ expected_output: >
 Review the implementation outputs from the backend and frontend developers.
 Use `platform_shell` to inspect actual code where needed (grep, cat, git log).
 
+**Step 0 — Run BDD tests.**
+Before reviewing code, use the `bdd_runner` tool to execute the BDD feature files for this story. Include the test results in your report:
+- If all scenarios pass: mark "BDD: PASS" and proceed to code review.
+- If scenarios fail: identify whether the failure is in the implementation (logic bug) or in the test step definitions (missing step). List which scenarios failed and why. A failing BDD test is a Critical finding that blocks APPROVED.
+
 **Step 1 — Clean architecture.**
 Check that the implementation follows the platform's layered structure:
 

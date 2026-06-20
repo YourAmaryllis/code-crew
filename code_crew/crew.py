@@ -63,7 +63,7 @@ def build_agents(tools: dict) -> dict:
     mm = tools["memory_tool"]
     dc = tools["dod_checker"]
 
-    def _agent(name: str, agent_tools: list) -> Agent:
+    def _agent(name: str, agent_tools: list, max_iter: int = 15) -> Agent:
         c = ac[name]
         return Agent(
             role=c.role,
@@ -72,13 +72,13 @@ def build_agents(tools: dict) -> dict:
             tools=agent_tools,
             llm=get_llm_for_tier(c.model),
             verbose=True,
-            max_iter=15,
+            max_iter=max_iter,
         )
 
     return {
         "scrum_master":      _agent("scrum_master",      [kr, dc, jv, mm]),
         "tech_lead":         _agent("tech_lead",         [kr, ws, jv, sh]),
-        "backend_developer": _agent("backend_developer", [kr, ws, jv, sh, pr]),
+        "backend_developer": _agent("backend_developer", [kr, ws, jv, sh, pr], max_iter=25),
         "frontend_developer":_agent("frontend_developer",[kr, ws, jv, sh, pr]),
         "qa_engineer":       _agent("qa_engineer",       [kr, ws, jv, sh, br, pr]),
         "security_reviewer": _agent("security_reviewer", [kr, ws, sh, pr]),

@@ -27,7 +27,17 @@ if TYPE_CHECKING:
 # Column widths for the inline status lines
 _KEY_W  = 12
 _TASK_W = 26
-_AGT_W  = 16
+_AGT_W  = 18
+
+# Bold color per agent role — makes it immediately obvious who is working
+_AGENT_COLOR: dict[str, str] = {
+    "scrum-master":      "ansiyellow bold",
+    "tech-lead":         "ansicyan bold",
+    "backend-dev":       "ansiblue bold",
+    "frontend-dev":      "ansimagenta bold",
+    "qa-engineer":       "ansigreen bold",
+    "security-reviewer": "ansired bold",
+}
 
 
 class SprintUI:
@@ -71,6 +81,15 @@ class SprintUI:
 
         if emit:
             self._print_line(state)
+
+    def show_summary(self, ticket_key: str, task_name: str, summary: str) -> None:
+        """Print one dim line explaining what a task decided / why we're moving on."""
+        if not summary:
+            return
+        if summary.startswith("↩"):
+            _pt_print([("ansiyellow", f"    {summary}")])
+        else:
+            _pt_print([("dim", f"    {summary}")])
 
     def append_detail(self, ticket_key: str, task_name: str, output: str) -> None:
         with self._lock:
@@ -125,33 +144,37 @@ class SprintUI:
     def _print_line(self, state: "TicketState") -> None:
         icon, _ = _status_display(state.status)
         key     = state.jira_key.ljust(_KEY_W)
-        task    = (state.current_task or "").ljust(_TASK_W)
+        task    = (state.current_task or "").replace("_", " ").ljust(_TASK_W)
+        agent   = (state.current_agent or "").upper()
+        astyle  = _AGENT_COLOR.get(state.current_agent or "", "bold")
         elapsed = _fmt_elapsed(state.elapsed_seconds).rjust(6)
 
         if state.status == "needs_help":
             _pt_print([
-                ("ansiyellow bold", f"  ⚠  {key}"),
-                ("", f"  {task}"),
-                ("ansiyellow", f"  {state.needs_help_gate} exhausted retries — type /help <guidance>"),
+                (astyle,          f"  ⚠  {agent.ljust(_AGT_W)}"),
+                ("dim",           f"  {key}"),
+                ("ansiyellow",    f"  {state.needs_help_gate} exhausted retries — type /help <guidance>"),
             ])
         elif state.status == "passed":
             _pt_print([
-                ("ansigreen bold", f"  ✓  {key}"),
-                ("", f"  {task}"),
-                ("ansigreen", f"  passed  {elapsed}"),
+                (astyle,          f"  ✓  {agent.ljust(_AGT_W)}"),
+                ("dim",           f"  {key}"),
+                ("",              f"  {task}"),
+                ("ansigreen",     f"  {elapsed}"),
             ])
         elif state.status == "failed":
             _pt_print([
-                ("ansired bold", f"  ✗  {key}"),
-                ("", f"  {task}"),
-                ("ansired", "  failed"),
+                (astyle,          f"  ✗  {agent.ljust(_AGT_W)}"),
+                ("dim",           f"  {key}"),
+                ("",              f"  {task}"),
+                ("ansired",       "  failed"),
             ])
         else:
-            # running — task started
+            # running — role first, bold + color-coded so it's immediately obvious who is working
             _pt_print([
-                ("ansigreen", f"  ►  {key}"),
-                ("", f"  {task}"),
-                ("ansiblue dim", f"  {state.current_agent or ''}"),
+                (astyle,          f"  ►  {agent.ljust(_AGT_W)}"),
+                ("dim",           f"  {key}"),
+                ("",              f"  {task}"),
             ])
 
 

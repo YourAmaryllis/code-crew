@@ -83,6 +83,8 @@ class ReviewResult:
 
 # Callback type: (state: TicketState) -> None  — called on status changes
 StatusCallback = Callable[[TicketState], None]
+# Callback type: (jira_key, task_name, summary) -> None  — called after each task
+SummaryCallback = Callable[[str, str, str], None]
 
 
 class TicketFlow:
@@ -97,9 +99,11 @@ class TicketFlow:
         self,
         state: TicketState,
         on_status: StatusCallback | None = None,
+        on_task_complete: SummaryCallback | None = None,
     ) -> None:
         self.state = state
         self._on_status = on_status or (lambda _: None)
+        self._on_task_complete = on_task_complete or (lambda *_: None)
         self._feedback_event = threading.Event()
         self._task_start: float = 0.0
 
@@ -167,11 +171,19 @@ class TicketFlow:
                 setattr(self.state, retry_attr, retries)
                 self.state.review_feedback = result.feedback
 
+                reason = _extract_summary(result.feedback, max_len=100)
                 if retries > self.state.max_retries:
-                    # Escalate to human
+                    self._on_task_complete(
+                        self.state.jira_key, gate_task,
+                        f"↩ exhausted retries — escalating to human: {reason}",
+                    )
                     self._escalate(gate_task)
-                    # After human injects feedback, reset this gate's counter
                     setattr(self.state, retry_attr, 0)
+                else:
+                    self._on_task_complete(
+                        self.state.jira_key, gate_task,
+                        f"↩ REJECTED (attempt {retries}/{self.state.max_retries}) — {reason}",
+                    )
 
                 # Re-run implementation with feedback, then re-check this gate
                 self._run_implementation()
@@ -195,6 +207,7 @@ class TicketFlow:
 
         self.state.task_outputs[task_name] = output
         self.state.elapsed_seconds = time.monotonic() - self._task_start
+        self._on_task_complete(self.state.jira_key, task_name, _extract_summary(output))
         return output
 
     def _run_review_gate(self, task_name: str) -> ReviewResult:
@@ -288,3 +301,12 @@ def _build_sprint_input(state: TicketState, extra_context: str = "") -> dict:
 
 class _FlowFailed(Exception):
     pass
+
+
+def _extract_summary(output: str, max_len: int = 120) -> str:
+    """Return the first meaningful line of task output, capped at max_len chars."""
+    for line in output.strip().splitlines():
+        line = line.strip(" #*-|")
+        if line and not line.startswith("---") and not line.startswith("```"):
+            return line[:max_len]
+    return output.strip()[:max_len]
