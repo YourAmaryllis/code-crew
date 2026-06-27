@@ -2,14 +2,14 @@
 okf_version: "0.1"
 type: Bundle Index
 title: Code Crew Knowledge Bundle
-description: OKF knowledge bundle for the YourAmaryllis virtual code development team (SDLC phases 13-19).
+description: OKF knowledge bundle for the your organization virtual code development team (SDLC phases 13-19).
 tags: [crewai, code-crew, sdlc]
 timestamp: 2026-06-17T00:00:00Z
 ---
 
 # Code Crew Knowledge Bundle
 
-Agent instructions and task definitions for the YourAmaryllis virtual code development team.
+Agent instructions and task definitions for the your organization virtual code development team.
 All documents follow [OKF v0.1](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md).
 
 Covers SOP-0 phases 13–19: sprint planning, BDD test authoring, backend/frontend development,

@@ -2,14 +2,14 @@
 okf_version: "0.1"
 type: Bundle Index
 title: Ops Crew Knowledge Bundle
-description: OKF knowledge bundle for the YourAmaryllis virtual ops team (SDLC phases 12, 16, 20-22).
+description: OKF knowledge bundle for the your organization virtual ops team (SDLC phases 12, 16, 20-22).
 tags: [crewai, ops-crew, terraform, cicd, deployment]
 timestamp: 2026-06-17T00:00:00Z
 ---
 
 # Ops Crew Knowledge Bundle
 
-Agent instructions and task definitions for the YourAmaryllis virtual ops team.
+Agent instructions and task definitions for the your organization virtual ops team.
 Covers SOP-0 phases 12, 16, and 20–22: infrastructure code, environment preparation,
 staging deployment, production deployment, and post-launch monitoring.
 
