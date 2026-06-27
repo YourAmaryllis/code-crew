@@ -179,8 +179,10 @@ def build_tasks(agents: dict, sprint_input: dict, tasks_dir: Path | None = None)
     }
 
 
-# Tasks where agents tend to plan rather than execute — a fast manager LLM
-# drives the worker until work is actually done (files written, tests run, etc.)
+# Tasks where agents tend to plan rather than execute — a manager LLM drives
+# the worker until work is actually done (files written, tests run, etc.)
+# implementation uses standard manager (needs to judge whether a git diff shows
+# real code vs a plan); others use fast manager (scaffolding/ops are simpler to verify).
 MANAGED_TASKS = frozenset({
     "scaffold_code",
     "scaffold_test",
@@ -193,6 +195,7 @@ MANAGED_TASKS = frozenset({
     "staging_verification",
     "smoke_test",
 })
+_STANDARD_MANAGER_TASKS = frozenset({"implementation"})
 
 
 def build_single_task_crew(
@@ -222,11 +225,12 @@ def build_single_task_crew(
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
         if task_name in MANAGED_TASKS:
+            manager_tier = "standard" if task_name in _STANDARD_MANAGER_TASKS else "fast"
             return Crew(
                 agents=[t.agent],   # only the assigned worker; manager can't delegate elsewhere
                 tasks=[t],
                 process=Process.hierarchical,
-                manager_llm=get_llm_for_tier("fast"),
+                manager_llm=get_llm_for_tier(manager_tier),
                 verbose=True,
                 step_callback=guard,
             )

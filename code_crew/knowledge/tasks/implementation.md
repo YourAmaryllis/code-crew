@@ -9,9 +9,12 @@ context_agents:
   - architect
   - qa_lead
 expected_output: >
-  Implementation plan with proposed file paths, key function/method signatures, and unit
-  test stubs. If code generation is in scope: full implementation with passing unit tests
-  for both backend and frontend surfaces in scope.
+  Concrete evidence that code was written and verified — NOT a plan. Required:
+  1. `git diff HEAD` output (or `git show <sha> --stat`) showing new or modified production files.
+  2. `go build ./...` (or `npx tsc --noEmit`) output confirming 0 errors.
+  3. `go test ./... -count=1` output (or equivalent) confirming tests pass.
+  4. Final line: IMPLEMENTATION COMPLETE
+  If frontend is skipped due to no Figma link, state that explicitly and still provide (1)-(4) for backend.
 ---
 
 Implement the feature described in the sprint input, covering both backend and frontend
@@ -31,7 +34,9 @@ implied by each BDD scenario. Write test stubs before writing production code.
 Read comparable handlers, service functions, and React components. Match established patterns exactly.
 
 **Step 4 — Branch.**
-`git checkout -b feature/<JIRA-KEY>-<slug>` from `main`.
+Check out the feature branch. If it already exists: `git checkout feature/<JIRA-KEY>-<slug>`.
+If it does not: `git checkout -b feature/<JIRA-KEY>-<slug>` from `main`.
+Never create a new branch if one already exists for this key — `git branch -a | grep <JIRA-KEY>` to check.
 
 **Step 5 — Backend implementation (if in scope).**
 - Write `*_test.go` stubs first, then implement
@@ -40,8 +45,8 @@ Read comparable handlers, service functions, and React components. Match establi
 - `go test ./... -count=1` — all tests pass before committing
 
 **Step 6 — Frontend implementation (if in scope).**
-- If no Figma link in the Jira ticket: flag as blocker and stop
-- Write `types.ts` first, then `<Component>.test.tsx`, then `index.tsx`
+- Check the Jira ticket for a Figma link. If there is no Figma link: **skip the frontend only** — do NOT block or stop the entire task. Complete backend first, then note "Frontend skipped: no Figma design link in ticket" and continue to Step 7.
+- If a Figma link is present: write `types.ts` first, then `<Component>.test.tsx`, then `index.tsx`
 - Handle all four states: loading, error, empty, loaded
 - `npx tsc --noEmit` — no type errors before committing
 - Verify ARIA labels, keyboard nav, WCAG 2.1 AA colour contrast
