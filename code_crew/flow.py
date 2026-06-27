@@ -787,7 +787,14 @@ class TicketFlow:
                     f"Recent calls:\n  {recent}\n"
                     f"Please provide context or a different approach."
                 )
-            output = f"INCOMPLETE: agent failed during {task_name} — {str(exc)[:300]}"
+            # pydantic: model returned a tool-call object instead of text (some NVIDIA models)
+            if "Input should be a valid string" in str(exc) and "ChatCompletion" in str(exc):
+                output = (
+                    f"INCOMPLETE: {task_name} — model returned a function-call object instead of text. "
+                    "Try switching to a different model or running again."
+                )
+            else:
+                output = f"INCOMPLETE: agent failed during {task_name} — {str(exc)[:300]}"
             return output
 
         if "Failed to parse LLM response" in output:

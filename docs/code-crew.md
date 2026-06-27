@@ -616,9 +616,34 @@ Achieved via a `_QuietFormatter` replacing CrewAI's `EventListener.formatter` an
 
 ---
 
-## Checkpointing
+## Checkpointing and resume
 
 `TicketFlow` writes task outputs to `.code-crew/checkpoints/<KEY>.json` after each task. On re-run with the same key, completed tasks are replayed from cache (displayed as `[checkpoint]`) — only incomplete or failed tasks re-run the LLM call.
+
+### How resume works
+
+When `/issue <KEY>` is run and a checkpoint exists, the REPL shows:
+
+```
+Checkpoint found for LOOPLAT-92 (5 task(s) complete: sprint_planning, architecture_review, scaffold_code, scaffold_test, bdd_authoring).
+Resume? [Y/n]
+```
+
+- **Y** (default): replays the 5 completed tasks instantly as `[checkpoint]`, then picks up from the first incomplete task.
+- **N**: discards the checkpoint and starts from scratch.
+
+### When checkpoints are cleared
+
+- On normal completion (all tasks pass through to `release_notes`).
+- Manually: delete `.code-crew/checkpoints/<KEY>.json`.
+
+### Checkpoint file location
+
+`.code-crew/checkpoints/<KEY>.json` in the platform repo root. The file is gitignored (created by `/explore` / `/init`). Contains a map of `task_name → output_string` for every completed task.
+
+### Resuming after a crash or partial failure
+
+If a task returns `INCOMPLETE` (model error, tool failure, network drop), the checkpoint still holds all previously completed tasks. On next `/issue <KEY>`, the flow resumes from the failed task — you don't lose earlier work. For `bdd_arch_review` or `code_review` gate failures the flow retries automatically up to `max_retries` times; for hard errors (AWS auth expired, NoProgressError) the REPL prints the reason and you re-run after fixing the root cause.
 
 ---
 
