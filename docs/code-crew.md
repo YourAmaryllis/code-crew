@@ -1,16 +1,26 @@
 # code-crew — Design Document
 
 **Status:** Current
-**Last updated:** 2026-06-19
+**Last updated:** 2026-06-26
 **Related:** [ADR-031](../designs/ADR/ADR-031-Virtual-AI-Development-Team-CrewAI-Bedrock.md) · [ADD-044](../designs/ADD/ADD-044-Virtual-AI-Development-Team.md)
 
 ---
 
 ## What it is
 
-code-crew is a virtual AI development team for YourAmaryllis. It takes a Jira ticket and runs it through a full SDLC pipeline — sprint planning gate, architecture review, code scaffolding, BDD authoring, backend and frontend implementation, code review, security review, and Definition of Done check — using a crew of purpose-built AI agents backed by Amazon Bedrock.
+code-crew is a virtual AI development team. It takes a Jira, Linear, or GitHub Issues ticket and runs it through a full SDLC pipeline — sprint planning, architecture review, BDD authoring, implementation, code/security/compliance review, staging, and Definition of Done — using a crew of purpose-built AI agents backed by Amazon Bedrock (or any LiteLLM-compatible provider).
 
-The crew is not a chat assistant and not a single-agent coding tool. It is a structured pipeline where each agent has a specific role, reads the organisation's own SOPs and ADRs as its operating procedures, and hands off a typed output to the next agent. The human initiates the run and reviews the output; agents never push code, apply Terraform, or promote to production.
+The crew is not a chat assistant. It is a structured pipeline where each agent has a specific role, reads the organisation's own SOPs and ADRs as its operating procedures, and hands off typed output to the next agent. The human initiates a run and reviews the output; agents never push code, apply Terraform, or promote to production.
+
+Five distinct flows are supported:
+
+| Flow | Command | What it does |
+|------|---------|-------------|
+| **Ticket** | `/issue <KEY>` or `/sprint <name>` | Full SDLC pipeline: sprint planning → DoD → staging → release decision |
+| **Design** | `/design <KEY>` | Pre-implementation: ADD/ADR/TMD stub before any code is written |
+| **UX** | `/ux <KEY>` | Figma → component spec → implementation → UX review loop |
+| **Domain** | `/domain design <KEY>` | Async event storming (3-phase): flow discovery → per-flow storming → synthesis → `designs/DMD/` |
+| **Verify** | `/verify` | Full codebase audit: arch · security · compliance · domain drift |
 
 ---
 
@@ -18,126 +28,184 @@ The crew is not a chat assistant and not a single-agent coding tool. It is a str
 
 ### Multi-agent crew, not a single LLM
 
-Each agent is an independent LLM call with its own role, goal, backstory, tool set, and model tier. Agents do not share a conversation — they share only the typed output of upstream tasks via a structured context pass. This means the security reviewer's reasoning is not contaminated by the backend developer's implementation details; it reads only the implementation summary.
+Each agent is an independent LLM call with its own role, goal, backstory, tool set, and model tier. Agents share only the typed output of upstream tasks via structured context — the security reviewer reads the implementation summary, not the full agent conversation.
 
 ### Prompts as documents, not strings
 
-Every agent instruction and task description lives in an OKF markdown file under `*/knowledge/`. Python code never contains a prompt. This means:
-
-- A domain expert can read and update agent behaviour without touching Python.
-- Prompt changes appear as normal git diffs — reviewable, attributed, rolled back like code.
-- The knowledge base (SOPs, ADRs, ADDs) is loaded at runtime from a separate designs repo, not embedded in the tool.
+Every agent instruction and task description lives in an OKF markdown file under `code_crew/knowledge/`. Python code never contains a prompt. Changing agent behaviour is a markdown edit — reviewable in git, readable by domain experts without touching Python.
 
 ### Organisation's own knowledge base
 
-Agents read the organisation's actual ADRs, ADDs, and SDLC function guides — not generic best-practice instructions baked into the tool. When the tech lead does an architecture review, it reads the ADD for the relevant domain and the ADR that governs the design pattern. When the security reviewer checks a file upload, it reads ADD-035 (Secure Input and File Upload Standards). The tool has no opinion on these standards; the organisation's documents do.
+Agents load the organisation's ADRs, ADDs, SOPs, and function guides at runtime from the `designs/` repo. The tool has no embedded best practices — only pointers to the organisation's own standards.
 
 ### Human review gate
 
-The crew produces a complete implementation package — feature files, stub code, review reports, DoD compliance — for human review. No merge, no deploy, no Terraform apply happens without a human. This is enforced in the tool design, not just as a policy: agents have no write access to git remote, no AWS deploy credentials, and no Jira transition rights.
+No merge, no deploy, no Terraform apply without a human. Agents have no git remote credentials, no AWS deploy access, and no Jira transition rights.
 
 ### Model tiers per agent
 
-Not every agent needs the same model. Lightweight tasks (sprint planning, DoD check) run on a fast/cheap model. Implementation agents run on the standard model. Reviewer agents that must catch subtle bugs run on the most capable model. This is configured per-agent in the OKF file (`model: fast | standard | powerful`) and resolved to Bedrock model IDs at startup.
+Lightweight tasks run on `fast`, implementation agents on `standard`, reviewers on `powerful`. Configured per-agent in the OKF file and resolved at startup from the `bedrock:` or `llm:` config section.
+
+### Skills
+
+Skills are OKF `.md` files that modify agent output style for the current session. Injected at the top of every task context. Examples: `terse` (verdict first), `strict` (OWASP ASVS L3 evidence per item), `dry-run` (preview only). Installed from GitHub with `/skill install <user/repo>`.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  code-crew CLI  (code_crew/repl.py)                             │
-│                                                                 │
-│  /jira LOOPLAT-123  →  fetches Jira ticket                     │
-│                     →  TicketFlow (code_crew/flow.py)           │
-│                        runs tasks one at a time, streams status │
-└───────────────────────────┬─────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│  code-crew CLI  (code_crew/repl.py)                            │
+│                                                                │
+│  /issue → TicketFlow      /design → DesignFlow                 │
+│  /ux    → UxFlow          /domain → DomainFlow                 │
+│                           /verify → build_verify_crew()        │
+└───────────────────────────┬────────────────────────────────────┘
                             │
-          ┌─────────────────▼──────────────────┐
-          │  build_single_task_crew()           │
-          │  (code_crew/crew.py)                │
-          │                                     │
-          │  Crew  ──  Task  ──  Agent  ──  LLM │
-          │                          │           │
-          │                        Tools         │
-          └─────────────────────────────────────┘
+          ┌─────────────────▼─────────────────┐
+          │  build_*_crew() / build_*_task()  │
+          │  (code_crew/crew.py)              │
+          │                                   │
+          │  Crew ── Task ── Agent ── LLM     │
+          │                      │            │
+          │                    Tools          │
+          └───────────────────────────────────┘
                             │
-          ┌─────────────────┼─────────────────┐
-          │                 │                 │
-    knowledge_reader  workspace_reader  platform_shell
-    (designs repo)    (platform codebase)  (git, go build,
-                                            grep)
+          ┌─────────────────┼──────────────────┐
+          │                 │                  │
+    knowledge_reader  workspace_reader   platform_shell
+    (designs repo)    (platform codebase) (git, go, grep)
 ```
 
 ### Key components
 
 | Component | Path | Purpose |
 |-----------|------|---------|
-| REPL | `code_crew/repl.py` | Interactive terminal UI (prompt_toolkit + Rich). Handles `/jira`, `/memory`, profile loading, Langfuse init. |
-| Flow | `code_crew/flow.py` | `TicketFlow` — iterates through the 10 tasks, calls `build_single_task_crew()` per task, streams status to REPL. |
-| Crew builder | `code_crew/crew.py` | Builds agents and tasks from OKF files. `build_single_task_crew()` creates a minimal crew for one task. |
+| REPL | `code_crew/repl.py` | Interactive terminal UI (prompt_toolkit + Rich). Dispatches all slash commands, manages profile loading, streams flow status. |
+| Flows | `code_crew/flow.py` | `TicketFlow`, `DesignFlow`, `UxFlow`, `DomainFlow` — manage multi-task loops with retry gates, human escalation, and checkpointing. |
+| Crew builder | `code_crew/crew.py` | Builds agents and tasks from OKF files. `build_single_task_crew()`, `build_design_single_task()`, `build_domain_single_task()`, `build_verify_crew()`, `build_domain_extract_crew()`. |
 | OKF loader | `shared/okf_loader.py` | Parses OKF markdown into `AgentConcept` / `TaskConcept` structs. |
-| Bedrock factory | `shared/bedrock.py` | Creates `crewai.LLM` instances for each model tier. IAM auth only — no API keys. |
+| LLM factory | `shared/llm_factory.py` | Resolves agent → tier → model. Supports Bedrock, OpenAI, Anthropic, Groq, Ollama via LiteLLM prefix convention. |
+| Bedrock shim | `shared/bedrock.py` | Re-exports `get_llm`, `get_fast_llm`, `get_powerful_llm` from `llm_factory.py` for backward compat. |
+| Config | `shared/config.py` | Loads structured YAML profiles and project configs into `os.environ`. |
 | Telemetry | `shared/telemetry.py` | Installs OTLP TracerProvider pointing at Langfuse. Must run before any crewai import. |
-| Profile system | `shared/config.py` | Loads `~/.code-crew/profiles/{name}.yaml`. Profiles hold all env vars — Bedrock IDs, Jira config, Langfuse keys. |
-| Knowledge | `code_crew/knowledge/` | OKF markdown — one file per agent, one per task, one per standalone prompt. |
+| AWS auth | `shared/aws_auth.py` | Detects expired credential errors and formats actionable `aws sso login` hints. |
+| Knowledge | `code_crew/knowledge/` | OKF markdown: `agents/`, `tasks/`, `stacks/`, `functions/`, `skills/`, `prompts/`. |
 
 ---
 
-## The 10-task pipeline (code-crew)
+## Flows
 
-Tasks run sequentially. Each task receives the typed outputs of its upstream dependencies as context — it does not see the full conversation of prior agents, only the structured result.
+### Ticket flow (`/issue <KEY>`, `/sprint <name>`)
+
+Full SDLC for one ticket. Tasks run sequentially with retry gates on each review step.
 
 ```
-sprint_planning_check     scrum_master     DoR gate — checks ACs are testable, story is sized
-        │
-architecture_review       tech_lead        Reads ADRs/ADDs, proposes design, identifies gaps
-        │
-scaffold_code             backend_dev      Checks for existing code; creates stubs only if new
-        │                                  Runs go build after writing any Go files
-scaffold_test             qa_engineer      Creates test file stubs matching the scaffold
-        │
-bdd_test_authoring        qa_engineer      Writes Gherkin .feature files from acceptance criteria
-        │
-backend_implementation    backend_dev      Implements against BDD scenarios; unit tests inline
-        │
-frontend_implementation   frontend_dev     React components, follows Figma/HTML design refs
-        │
-code_review               tech_lead        Reviews backend + frontend output, flags issues
-        │
-security_review           security_rev     OWASP Top 10, ADD-035 file upload standards, STRIDE
-        │
-dod_check                 scrum_master     Loads DoD from designs repo, produces PASS/FAIL report
+sprint_planning       scrum_master     DoR gate — ACs testable, story sized
+architecture_review   architect        Reads ADRs/ADDs, proposes design
+scaffold_code         manager→engineer Creates stubs; runs go build
+scaffold_test         manager→qa_lead  Creates test stubs matching scaffold
+bdd_authoring         manager→qa_lead  Writes Gherkin .feature files
+bdd_po_review         product_owner    Validates business language
+bdd_arch_review       architect        Validates technical correctness
+bdd_finalization      manager→qa_lead  Consolidates BDD feedback (loops until APPROVED)
+implementation        manager→engineer Implements against BDD; unit tests inline
+devops_coordination   manager→devops   Dockerfile, CI pipeline, migration config
+code_review           architect        [gate] REJECTED → retry implementation
+security_review       security_lead    [gate] REJECTED → retry implementation
+compliance_review     compliance_officer [gate] REJECTED → retry implementation
+dod_check             scrum_master     [gate] REJECTED → retry implementation
+release_notes         manager→release  Changelog entry + GitHub Release draft
+promote_staging       manager→devops   Push rc tag, ECS redeploy staging
+staging_verification  manager→qa_lead  BDD smoke on staging (loops on failure)
+launch_decision       release_engineer Go/no-go for production (human gate follows)
+smoke_test            manager→qa_lead  Read-only smoke on production
 ```
 
-Each task in `crew.py` is a `Task(name=..., description=ctx+okf_description, expected_output=..., agent=..., context=[upstream_tasks])`. The `name=` field is critical — it prevents CrewAI from falling back to the full description as the display name in the REPL.
+Review gates retry up to `flow.max_retries` (default 3) before escalating to human via `REPL /help`.
+
+### Design flow (`/design <KEY>`)
+
+Pre-implementation. Produces ADD/ADR/TMD stub. Chief Architect approval loop.
+
+```
+design_requirements      architect   Extract requirements and constraints
+design_add_draft         architect   Draft ADD (context, decisions, alternatives)
+design_security_input    security_lead  Security analysis + TMD stub
+design_compliance_input  compliance_officer  Compliance requirements
+design_chief_review      architect   Chief Architect reviews via ask_human; loops on REVISION NEEDED
+design_finalize          engineer    Commit files, push branch, open PR, update ticket
+```
+
+### UX flow (`/ux <KEY>`)
+
+Figma frame → component implementation → UX review loop.
+
+```
+ux_spec           ux_lead    Fetch Figma frame + tokens, write spec.md + tokens.json
+ux_implementation engineer   Generate component from spec
+ux_review         ux_lead    Verify spec match + WCAG 2.1 AA (loops on REVISION NEEDED)
+```
+
+### Domain flow (`/domain design <KEY>`)
+
+Async three-phase event storming facilitated by the Architect. Each phase blocks for SME input via `ask_human` (batched 3–5 questions per round, ending with `AWAITING SME RESPONSE`).
+
+```
+Phase 1 — domain_flow_discovery  (once)
+  Identify 3–7 named business flows, classify as core/supporting/generic.
+
+Phase 2 — domain_event_storming  (once per flow)
+  For each flow: events → commands → actors → aggregates → policies → hot spots.
+  Output: structured EVENT BOARD per flow.
+
+Phase 3 — domain_synthesis  (once)
+  Read all event boards → bounded contexts, aggregate definitions,
+  ubiquitous language glossary, Mermaid class diagram.
+  Writes: designs/DMD/<system>-domain.md + designs/DMD/<system>-diagram.mmd
+```
+
+`/domain extract [path]` runs `domain_extract` as a standalone task — scans existing code and produces the same DMD output format by reverse-engineering.
+
+### Verify (`/verify`)
+
+Six-task sequential audit. No retry loops — produces a report with FINDING / PASS / REQUIRED lines.
+
+```
+verify_arch_scan        architect             Architecture compliance vs ADRs/ADDs
+verify_security_scan    security_lead         OWASP + STRIDE + compliance stacks
+verify_compliance_scan  compliance_officer    Regulatory evidence gaps
+verify_domain_scan      architect             DMD drift — code entities vs designs/DMD/
+verify_chief_review     architect             Aggregates findings; marks REQUIRED / EXEMPT / PASS
+verify_report           scrum_master          Writes .code-crew/verify-report-YYYYMMDD.md
+```
+
+REQUIRED findings are parsed from the chief review output. REPL prompts to open Jira issues for each.
 
 ---
 
 ## Agents
 
-### Code crew
+| Agent key | Role | Model tier | Primary tasks |
+|-----------|------|-----------|---------------|
+| `scrum_master` | Scrum Master | fast | sprint_planning, dod_check, verify_report |
+| `architect` | Senior Architect | powerful | architecture_review, code_review, domain_*, verify_arch_scan, verify_chief_review |
+| `chief_architect` | Chief Architect | powerful | design_chief_review (via ask_human) |
+| `engineer` | Full-stack Engineer | standard | scaffold_code, implementation, ux_implementation, domain_extract |
+| `qa_lead` | QA Lead | standard | scaffold_test, bdd_authoring, bdd_finalization, staging_verification, smoke_test |
+| `product_owner` | Product Owner | standard | bdd_po_review |
+| `security_lead` | Security Lead | powerful | security_review, verify_security_scan |
+| `compliance_officer` | Compliance Officer | standard | compliance_review, verify_compliance_scan |
+| `devops_lead` | DevOps Lead | standard | devops_coordination, promote_staging |
+| `release_engineer` | Release Engineer | standard | release_notes, launch_decision |
+| `ux_lead` | UX Lead | standard | ux_spec, ux_review |
 
-| Agent key | Role | Model tier | Tools |
-|-----------|------|-----------|-------|
-| `scrum_master` | Scrum Master | fast | knowledge_reader, dod_checker, jira_view, memory_tool |
-| `tech_lead` | Tech Lead / Architect | standard | knowledge_reader, workspace_reader, jira_view, platform_shell |
-| `backend_developer` | Senior Backend Developer | standard | knowledge_reader, workspace_reader, jira_view, platform_shell, python_repl |
-| `frontend_developer` | Senior Frontend Developer | standard | knowledge_reader, workspace_reader, jira_view, platform_shell, python_repl |
-| `qa_engineer` | QA Engineer | standard | knowledge_reader, workspace_reader, jira_view, platform_shell, bdd_runner, python_repl |
-| `security_reviewer` | Security Reviewer | powerful | knowledge_reader, workspace_reader, platform_shell, python_repl |
+All agents: `max_iter=15`, `verbose=True` (suppressed at display layer).
 
-All agents: `max_iter=15`, `verbose=True` (suppressed at display layer — see Verbosity below).
+**Manager–worker tasks** (`Process.hierarchical`): scaffold_code, scaffold_test, bdd_authoring, bdd_finalization, implementation, devops_coordination, release_notes, promote_staging, staging_verification, smoke_test, ux_implementation, domain_extract.
 
-### Ops crew
-
-| Agent key | Role | Tools |
-|-----------|------|-------|
-| `ops_lead` | Ops Lead | knowledge_reader, workspace_reader, platform_shell |
-| `terraform_engineer` | Terraform Engineer | knowledge_reader, workspace_reader, platform_shell |
-| `cicd_engineer` | CI/CD Engineer | knowledge_reader, workspace_reader, platform_shell |
-| `monitoring_engineer` | Monitoring Engineer | knowledge_reader, workspace_reader, platform_shell |
-| `release_manager` | Release Manager | knowledge_reader, workspace_reader, platform_shell |
+**Sequential tasks** (no manager): all review, planning, and evaluation tasks.
 
 ---
 
@@ -145,15 +213,15 @@ All agents: `max_iter=15`, `verbose=True` (suppressed at display layer — see V
 
 | Tool | Class | What it does |
 |------|-------|-------------|
-| `knowledge_reader` | `KnowledgeReaderTool` | Reads OKF docs from the designs repo (ADR, ADD, SDLC roles/functions/stacks). Pre-loads all docs at startup from `DESIGNS_PATH`. Falls back gracefully if repo unavailable. |
-| `workspace_reader` | `WorkspaceReaderTool` | Read/list/search the platform codebase. File cap: 200 lines. Search cap: 50 matches. Paths relative to cwd. No writes. |
-| `dod_checker` | `DoDCheckerTool` | Loads and parses the DoD document from the designs repo. Returns structured checklist for Scrum Master to reason over. |
-| `jira_view` | `JiraViewTool` | Fetches a Jira ticket by key (summary, description, ACs, comments, linked issues). |
-| `jira_list` | `JiraSprintListTool` | Lists tickets in the current sprint for context. |
-| `platform_shell` | `PlatformShellTool` | Sandboxed shell in the platform repo. Runs git, go, npm commands. No network access, no writes outside cwd. |
-| `python_repl` | `PythonREPLTool` | In-process Python REPL for data inspection and scripting. |
-| `bdd_runner` | `BDDTestRunnerTool` | Runs BDD feature files in the integration test suite. Returns pass/fail with output. |
-| `memory_tool` | `MemoryTool` | Read/write crew memory (`code-crew memory add/list`). Persists context across runs. |
+| `knowledge_reader` | `KnowledgeReaderTool` | Reads OKF docs from the designs repo (ADR, ADD, SDLC functions, stacks). Pre-loaded at startup from `DESIGNS_PATH`. |
+| `workspace_reader` | `WorkspaceReaderTool` | Read/list/search the platform codebase. 200-line file cap, 50-match search cap. No writes. |
+| `platform_shell` | `PlatformShellTool` | Sandboxed shell in the platform repo. Runs git, go, npm, python. No network, no writes outside cwd. |
+| `api_spec` | `ApiSpecTool` | Reads OpenAPI 3.1 spec, lists routes, checks drift between spec and source file route annotations. |
+| `dod_checker` | `DoDCheckerTool` | Loads and parses the DoD document, returns structured checklist for Scrum Master to evaluate against. |
+| `jira_view` | `JiraViewTool` | Fetches a ticket by key (summary, description, ACs, comments, linked issues). |
+| `jira_list` | `JiraSprintListTool` | Lists tickets in the current sprint. |
+| `memory_tool` | `MemoryTool` | Read/write crew memory (`code-crew memory add/list`). Persists across runs. |
+| `ask_human` / `HumanRelay` | `HumanInputTool` | Thread-safe bridge for async SME input. Used by domain modeling and design chief review. Questions batched 3–5 per round; ends with `AWAITING SME RESPONSE`. |
 
 ---
 
@@ -163,89 +231,276 @@ All agents: `max_iter=15`, `verbose=True` (suppressed at display layer — see V
 
 All knowledge files use OKF (Open Knowledge Format): YAML frontmatter for structured fields, markdown body for content.
 
-Agent files (`knowledge/agents/<name>.md`) supply `role`, `goal`, `model` (tier), and the body becomes the agent's backstory. Task files (`knowledge/tasks/<name>.md`) supply `description` (loaded as the task instruction) and `expected_output`.
+- `agents/<name>.md` — `role`, `goal`, `model` (tier); body → backstory
+- `tasks/<name>.md` — `description`, `expected_output`
+- `stacks/<name>.md` — activated via `CODE_CREW_STACKS` or `stacks:` in config; injected as context when active
+- `functions/<name>.md` — SDLC process guides (BDD, DB schema, API standards, deployment, etc.) loaded via `knowledge_reader`
+- `skills/<name>.md` — style modifiers injected at the top of every task context when active
 
 No prompt text lives in Python. Changing agent behaviour is a markdown edit.
 
-### Designs repo
+### Designs repo (`designs/`)
 
-The crew loads the organisation's knowledge at startup from `DESIGNS_PATH`:
+Loaded at startup from `DESIGNS_PATH`:
 
 ```
-$DESIGNS_PATH/ADR/     Architecture Decision Records
-$DESIGNS_PATH/ADD/     Architecture Design Documents
-$DESIGNS_PATH/SDLC/    Role definitions, function guides, stack conventions
+designs/ADR/   Architecture Decision Records
+designs/ADD/   Architecture Design Documents
+designs/SOP/   Standard Operating Procedures (incl. DoD)
+designs/TMD/   OTM threat model files (auto-generated by /explore)
+designs/DMD/   Domain model files (generated by /domain design)
 ```
 
-Two modes:
-- **Local checkout** — `DESIGNS_PATH=/path/to/designs`
-- **Auto-clone** — set `DESIGNS_REPO=git@...` and `DESIGNS_PATH=./designs`; cloned on first run
+Preferred setup: `git submodule add <designs-repo> designs` in your platform repo.
 
-If the designs repo is unavailable, agents continue with a warning and no loaded knowledge.
+### Stacks
+
+Stacks are activated via `stacks:` in project config or `CODE_CREW_STACKS=a,b` env var. Each active stack's `.md` file is prepended to every task context.
+
+Available stacks:
+
+| Stack | What it adds |
+|-------|-------------|
+| `go-backend` | Go-specific coding standards, module layout, linting rules |
+| `typescript-react` | React component patterns, TypeScript strict mode |
+| `python` | Python conventions, type hints, ruff/mypy |
+| `terraform` / `terraform-aws` | Terraform style, AWS-specific naming |
+| `ecs-deployment` | ECS task def format, health check conventions |
+| `ai-ml` | OWASP LLM Top 10 + PLOT4ai mandatory coverage; activates PLOT4ai diagrams |
+| `bdd-testing` | Gherkin conventions, scenario structure |
+| `hipaa` / `gdpr` / `ccpa` | Regulatory compliance requirements |
+| `owasp` | OWASP ASVS L2 controls checklist |
+| `fips-140-3` | FIPS crypto constraints |
+| `soc2` / `nist` | SOC 2 / NIST SP 800-53 controls |
+| `arch-clean` / `arch-hexagonal` / `arch-onion` | Architecture layer rules (auto-injected by `/explore`) |
 
 ---
 
 ## Configuration
 
-### Profile system
+All config uses structured YAML. The `env:` flat dict section is deprecated.
 
-All environment configuration lives in `~/.code-crew/profiles/{name}.yaml`. The profile is selected at CLI startup via `--profile` flag or `.code-crew.yaml` in the project directory.
+### Profile (`~/.code-crew/profiles/<name>.yaml`)
 
 ```yaml
-# ~/.code-crew/profiles/youramaryllis.yaml
-env:
-  BEDROCK_MODEL_ID: us.anthropic.claude-sonnet-4-6
-  BEDROCK_FAST_MODEL_ID: us.anthropic.claude-haiku-4-5-20251001-v1:0
-  BEDROCK_POWERFUL_MODEL_ID: us.anthropic.claude-opus-4-8-20260101-v1:0
-  BEDROCK_REGION: us-west-2
-  AWS_PROFILE: youramaryllis
-  JIRA_URL: https://your-org.atlassian.net
-  JIRA_USER: you@example.com
-  DESIGNS_REPO: git@github.com:your-org/designs.git
-  LANGFUSE_PUBLIC_KEY: pk-lf-...
-  LANGFUSE_SECRET_KEY: sk-lf-...
+bedrock:
+  model_id: us.anthropic.claude-sonnet-4-6
+  fast_model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+  powerful_model_id: us.anthropic.claude-opus-4-8-20260101-v1:0
+  region: us-west-2
+  temperature: "0.2"
+  # guardrail_id: abc123
+  # guardrail_version: "1"
+
+aws:
+  profile: my-aws-profile
+
+issue_tracker:
+  type: jira
+  project_key: PROJ
+  jira:
+    url: https://your-org.atlassian.net
+    user: you@your-org.com
+    # token: <token>  # or set JIRA_TOKEN in env
+
+designs:
+  repo: git@github.com:your-org/designs.git
+  branch: main
+
+telemetry:
+  langfuse_public_key: pk-lf-...
+  langfuse_secret_key: sk-lf-...
+  langfuse_host: https://us.cloud.langfuse.com
 ```
 
-### Project-level config
-
-`.code-crew.yaml` in any platform directory selects a profile and declares tech stacks:
+### Project config (`.code-crew/config.yaml` in your platform repo)
 
 ```yaml
-profile: youramaryllis
 stacks:
-  - terraform-aws
   - go-backend
   - typescript-react
+  - terraform-aws
+
+architecture:
+  style: hexagonal   # clean | hexagonal | onion — overrides /explore detection
+
+db:
+  migration_tool: goose   # alembic | goose | atlas
+  schema_path: db/migrations
+
+testing:
+  framework: pytest   # pytest | jest | go-test
+  bdd: behave         # behave | cucumber | godog
+
+api:
+  doc_standard: openapi
+
+domain:
+  methodology: event-storming   # event-storming | ddd | c4
+  diagram_format: mermaid
+
+flow:
+  max_retries: 3
 ```
 
-Stacks control which `SDLC/stacks/*.md` documents are pre-loaded and which stack agents are wired to.
+### Named profiles
+
+Switch at runtime: `/profile <name>` in the REPL. Profiles live in `~/.code-crew/profiles/<name>.yaml`. Switch cleans up the previous profile's env vars before loading the new one.
+
+### Multi-LLM backends
+
+The `llm:` config section (or `LLM_CONFIG` env var) overrides the default Bedrock resolution. Supports any LiteLLM-compatible provider:
+
+```yaml
+llm:
+  default:
+    provider: bedrock
+    model: us.anthropic.claude-sonnet-4-6
+  tiers:
+    fast:
+      provider: bedrock
+      model: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    powerful:
+      provider: bedrock
+      model: us.anthropic.claude-opus-4-8-20260101-v1:0
+  # Agent-level overrides:
+  agents:
+    security_lead:
+      provider: anthropic
+      model: claude-opus-4-8-20260101
+```
+
+Providers other than Bedrock require their API key in the environment (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). Install extras as needed: `pip install "code-crew[anthropic]"`.
 
 ### Environment variables
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `BEDROCK_MODEL_ID` | Yes | Standard model (cross-region inference profile ID) |
-| `BEDROCK_FAST_MODEL_ID` | No | Fast/cheap tier — falls back to standard |
-| `BEDROCK_POWERFUL_MODEL_ID` | No | Powerful tier for reviewers — falls back to standard |
-| `BEDROCK_REGION` | Yes | AWS region |
-| `AWS_PROFILE` | No | AWS profile name for IAM auth |
-| `BEDROCK_GUARDRAIL_ID` | No | Bedrock Guardrails ID for content policy |
-| `DESIGNS_PATH` | Yes | Path to knowledge repo checkout |
-| `DESIGNS_REPO` | No | Git URL — auto-cloned if DESIGNS_PATH missing |
-| `DESIGNS_BRANCH` | No | Branch to clone (default: main) |
-| `PLATFORM_PATH` | Yes | Path to codebase agents work on |
-| `JIRA_PROJECT` | Yes | Jira project key (e.g. LOOPLAT) |
+| `BEDROCK_MODEL_ID` | Yes (default) | Standard model (cross-region inference profile ID) |
+| `BEDROCK_FAST_MODEL_ID` | No | Fast tier — falls back to standard |
+| `BEDROCK_POWERFUL_MODEL_ID` | No | Powerful tier — falls back to standard |
+| `BEDROCK_REGION` | Yes (Bedrock) | AWS region |
+| `AWS_PROFILE` | No | AWS profile for IAM auth |
+| `BEDROCK_GUARDRAIL_ID` | No | Bedrock Guardrails ID |
+| `BEDROCK_GUARDRAIL_VERSION` | No | Guardrails version (default: `1`) |
+| `LLM_CONFIG` | No | JSON-serialised `llm:` section — set automatically from config |
+| `ISSUE_TRACKER` | No | `jira` (default) \| `linear` \| `github` |
+| `PROJECT_KEY` | Yes | Issue tracker project key |
 | `JIRA_URL` | Yes | Jira base URL |
 | `JIRA_USER` | Yes | Jira user email |
 | `JIRA_TOKEN` | Yes | Jira API token |
+| `DESIGNS_PATH` | No | Path to designs repo checkout (auto-detected from `./designs/`) |
+| `DESIGNS_REPO` | No | Git URL — auto-cloned if `DESIGNS_PATH` missing |
+| `DESIGNS_BRANCH` | No | Branch to clone (default: `main`) |
+| `DOD_PATH` | No | Override path to DoD document |
+| `CODE_CREW_STACKS` | No | Comma-separated active stacks |
+| `CODE_CREW_SKILLS` | No | Comma-separated active skills |
+| `ARCHITECTURE_STYLE` | No | `clean` \| `hexagonal` \| `onion` |
+| `DB_MIGRATION_TOOL` | No | `alembic` \| `goose` \| `atlas` |
+| `DB_SCHEMA_PATH` | No | Relative path to migration directory |
+| `TESTING_FRAMEWORK` | No | `pytest` \| `jest` \| `go-test` |
+| `TESTING_BDD` | No | `behave` \| `cucumber` \| `godog` |
+| `API_DOC_STANDARD` | No | `openapi` |
+| `DOMAIN_METHODOLOGY` | No | `event-storming` (default) \| `ddd` \| `c4` |
+| `DOMAIN_DIAGRAM_FORMAT` | No | `mermaid` (default) |
+| `MAX_RETRIES` | No | Review gate retry limit (default: 3) |
+| `FIGMA_TOKEN` | No | Figma API token for UX flow |
 | `LANGFUSE_PUBLIC_KEY` | No | Langfuse tracing (OTLP) |
 | `LANGFUSE_SECRET_KEY` | No | Langfuse tracing (OTLP) |
+| `LANGFUSE_HOST` | No | Langfuse host (default: `https://cloud.langfuse.com`) |
+
+---
+
+## Skills
+
+Skills are OKF `.md` files that modify agent output style and rigor. They are injected at the top of every task context when active.
+
+**Search path** (priority order):
+1. `.code-crew/skills/` — project-level
+2. `~/.code-crew/skills/` — user-level
+3. `code_crew/knowledge/skills/` — bundled
+
+**Install from GitHub:**
+```
+/skill install juliusbrussee/caveman   # installs from github.com/juliusbrussee/caveman
+/skill install https://github.com/...  # full URL also works
+```
+
+Skills can also activate via `CODE_CREW_SKILLS=name1,name2`.
+
+---
+
+## Architecture patterns
+
+`/explore` detects the project's architecture pattern and injects it as context so agents follow the correct layer rules.
+
+| Pattern | Config value | Detection signal |
+|---------|-------------|-----------------|
+| Clean Architecture | `clean` | `usecases/` or `domain/` + `adapters/` dirs |
+| Hexagonal | `hexagonal` | `ports/` with `driving/` or `driven/` |
+| Onion | `onion` | `domain/model/` + `application/` |
+
+When active, the architect and engineer agents are instructed to load the matching `stacks/arch-<style>.md` knowledge doc which details layer rules, allowed dependency directions, and anti-patterns.
+
+---
+
+## Domain modeling
+
+Three-phase async event storming facilitated by the Architect agent. SME input is batched (3–5 questions per round, ending with `AWAITING SME RESPONSE`).
+
+| Phase | Task | Output |
+|-------|------|--------|
+| 1 — Flow Discovery | `domain_flow_discovery` | Ordered list of named business flows with core/supporting/generic classification |
+| 2 — Event Storming | `domain_event_storming` (×N) | EVENT BOARD per flow: events, commands, actors, aggregates, policies, hot spots |
+| 3 — Synthesis | `domain_synthesis` | Bounded context map, aggregate definitions, ubiquitous language glossary, Mermaid class diagram |
+
+Output files in `designs/DMD/`:
+- `<system>-domain.md` — structured domain model document
+- `<system>-diagram.mmd` — raw Mermaid classDiagram (importable into any Mermaid renderer)
+
+`/domain extract [path]` runs `domain_extract` as a standalone task — reverse-engineers the model from existing code.
+
+`/verify` includes `verify_domain_scan` — compares `designs/DMD/` against actual code entities and flags `FINDING [DOMAIN]` for drift.
+
+Methodology is configurable (`domain.methodology` in config or `DOMAIN_METHODOLOGY` env var):
+- `event-storming` — three-phase collaborative; best for complex or poorly-understood domains
+- `ddd` — single top-down architect session; best for well-understood greenfield domains
+- `c4` — system context + container diagrams; best for documenting boundaries and integrations
+
+---
+
+## DB schema management
+
+Agents generate migration files; they never apply them. Applying is a human + CI step.
+
+`/explore` auto-detects the tool from repo signals and writes it to `.code-crew/structure.md`.
+
+| Tool | Detection signal | Stack |
+|------|-----------------|-------|
+| alembic | `alembic.ini` | python |
+| goose | `-- +goose` header in `.sql` files | go-backend |
+| atlas | `atlas.hcl` or `atlas.sum` | any |
+
+See `functions/db-schema.md` for naming conventions, the no-edit-applied-migrations rule, and the schema review checklist.
+
+---
+
+## API standards
+
+All stacks maintain an OpenAPI 3.1 spec committed alongside code. The `api_spec` tool (`ApiSpecTool`) is wired to the engineer agent and used during implementation to:
+- Read the current spec (`read_spec`)
+- List routes defined in the spec (`list_routes`)
+- Check for drift between spec routes and source file route annotations (`check_drift`)
+
+`/explore` sets `API_DOC_STANDARD=openapi` when a spec file is detected.
+
+See `functions/api-standards.md` for URL conventions, error schema, pagination, auth headers, and versioning policy.
 
 ---
 
 ## Observability
 
-Traces are sent to Langfuse via OpenTelemetry OTLP. CrewAI instruments all crew/task/agent/LLM lifecycle events via the global `TracerProvider`. Because CrewAI installs its own provider at import time, `setup_langfuse()` in `shared/telemetry.py` must run before any crewai import — this is enforced in `repl.py`'s `main()` by ordering the import after profile load.
+Traces are sent to Langfuse via OpenTelemetry OTLP. `setup_langfuse()` in `shared/telemetry.py` must run before any crewai import — enforced by import ordering in `repl.py`'s `main()`.
 
 The REPL banner shows `langfuse ✓` or `langfuse ✗` at startup.
 
@@ -253,38 +508,30 @@ The REPL banner shows `langfuse ✓` or `langfuse ✗` at startup.
 
 ## Console verbosity
 
-CrewAI's default console output is extremely verbose: full task descriptions, agent reasoning, tool inputs and outputs. The REPL suppresses this to show only:
+The REPL suppresses CrewAI's default verbose output (full task descriptions, agent reasoning, tool I/O) to show only:
 
 - Current task name and assigned agent
-- Tool call one-liners (tool name + key arg, no output)
+- Tool call one-liners (name + key arg, no output)
 - Task completion tick or failure
-- Critical errors
 
-This is achieved by replacing CrewAI's `EventListener.formatter` with a minimal `_QuietFormatter` (plain class, no inheritance, `__getattr__` catch-all) and monkey-patching `crewai_core.printer.Printer.print` to a no-op (ContextVar suppression doesn't propagate to ThreadPoolExecutor workers).
+Achieved via a `_QuietFormatter` replacing CrewAI's `EventListener.formatter` and monkey-patching `crewai_core.printer.Printer.print` to a no-op.
 
 ---
 
-## Planned crews
+## Checkpointing
 
-The tools repo will grow to cover the full product lifecycle with three purpose-built crews:
-
-### code-crew (current)
-Development. Takes a Jira story, delivers a reviewed, DoD-gated implementation package.
-
-### requirements-crew (planned)
-Product intake and requirements. Takes a raw idea, problem statement, or customer feedback and produces a structured Jira story with acceptance criteria, ADR/ADD references, and scope boundaries. This is the "office hours" layer — challenging scope, surfacing assumptions, producing a story the code-crew can execute. Agents: product analyst, requirements engineer, architect (for ADD selection).
-
-### post-launch-crew (planned)
-Post-launch monitoring and retrospective. Takes a deployed release, reads monitoring data, synthesises feedback, produces a retrospective report and follow-up tickets. Agents: release analyst, monitoring reviewer, feedback synthesiser.
+`TicketFlow` writes task outputs to `.code-crew/checkpoints/<KEY>.json` after each task. On re-run with the same key, completed tasks are replayed from cache (displayed as `[checkpoint]`) — only incomplete or failed tasks re-run the LLM call.
 
 ---
 
 ## Security constraints
 
-These are architectural constraints, not just policy:
+Architectural constraints, not just policy:
 
-- **No API keys in code** — Bedrock auth is IAM only. Keys never appear in OKF files, Python, or `.env`.
+- **No API keys in code** — Bedrock auth is IAM only. Keys never appear in OKF files, Python, or env files committed to git.
 - **No autonomous deploys** — agents have no AWS deploy credentials, no git push rights, no Jira transition rights.
-- **No prompt injection via knowledge docs** — Bedrock Guardrails (`BEDROCK_GUARDRAIL_ID`) can be applied to all completions; the knowledge reader tool returns document content but agents cannot execute it.
-- **Workspace sandbox** — `platform_shell` and `workspace_reader` are scoped to the platform codebase. Path traversal outside the root is rejected.
-- **Scaffold gate** — `scaffold_code` checks for existing files before writing; runs `go build` after writing Go files to catch syntax errors before they propagate.
+- **Human gate on production** — `launch_decision` produces a go/no-go, then the flow pauses for a human to trigger `workflow_dispatch` (GHA) or a GitLab manual job. The flow resumes only after `/feedback` in the REPL.
+- **Workspace sandbox** — `platform_shell` and `workspace_reader` are scoped to the platform codebase root. Path traversal outside root is rejected.
+- **Scaffold gate** — `scaffold_code` checks for existing files before writing; runs `go build` after writing Go files to catch syntax errors.
+- **No prompt injection via knowledge docs** — Bedrock Guardrails (`BEDROCK_GUARDRAIL_ID`) can be applied to all completions.
+- **`TEST_RESET_ENABLED` must be false/unset in staging and production** — this env var is only for local developer teardown.

@@ -4,9 +4,11 @@ description: Create the directory structure and code stubs for the user story
 expected_output: Manifest of created files and directories with their purpose
 ---
 
-Read the `scaffold-code` document using the knowledge_reader tool to understand the scaffolding process and structure.
+Load the scaffolding guide and stack conventions with `knowledge_reader`:
+- **`scaffold-code`** — scaffolding process and stub format
+- **`go-backend`** and/or **`typescript-react`** — exact directory layout and stub format for the relevant stack(s)
 
-Then read the relevant stack document(s) (e.g. `go-backend`, `typescript-react`, `python`, `terraform-aws`) to determine the exact directory layout and stub file format for this project's tech stack.
+If the project has a `.code-crew/stacks/` directory, those files override the built-in stack guides.
 
 **FIRST — check what already exists.**
 Before creating any file, use workspace_reader (list_dir or read_file) to check if the target path already exists.
@@ -30,3 +32,10 @@ Using the acceptance criteria and story context:
 4. **After writing any Go files**, run `go build ./...` in the module directory (e.g. `portal/backend`). If the build fails, report the error in the manifest and do NOT continue.
 
 Output a manifest listing each path and its status: "created", "existing — no change", or "build error: <message>". Include a note on which parts the backend engineer should implement first.
+
+**Completion signal — required.**
+End your output with exactly one of:
+- `TASK COMPLETE` — you have produced the full output described above.
+- `INCOMPLETE: <reason>` — you could not finish (missing data, tool failure, ambiguity). Describe what is blocking you so a human can resolve it.
+
+Do NOT end with a planning statement or partial summary.

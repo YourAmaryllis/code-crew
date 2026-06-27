@@ -36,7 +36,7 @@ Confirm the Jira issue (key provided in the sprint input) contains:
 
 **Section 2 — Tests and traceability**
 Use the `bdd_runner` tool to actually run the BDD scenarios tagged with the Jira key
-(e.g. `tags="@LOOPLAT-92"`). Include the runner output verbatim in this report as evidence.
+(e.g. `tags="@PROJ-NNN"`). Include the runner output verbatim in this report as evidence.
 "Scenarios were specified" is NOT sufficient — tests must be implemented and pass.
 
 Confirm:
@@ -48,7 +48,7 @@ Confirm:
 **Section 3 — Pull request format**
 Confirm:
 - One primary PR per story
-- PR title includes Jira key and REQ ID (e.g., `feat(portal): … [REQ:DATA-02] LOOPLAT-72`)
+- PR title includes Jira key and REQ ID (e.g., `feat(portal): … [REQ:DATA-02] PROJ-NNN`)
 - PR description links the Jira issue and design docs
 
 **Section 4 — Jira ↔ GitHub linking**
@@ -67,3 +67,5 @@ Production promotion is human-triggered only — mark as pending human action if
 Produce the DoD Compliance Report with one clear section per DoD section, PASS or FAIL,
 and specific evidence (or "evidence not available — requires human confirmation" where
 you cannot verify programmatically). End with the overall verdict.
+
+If you cannot complete the review (tools unavailable, missing context, etc.), output `INCOMPLETE: <reason>` instead of APPROVED/BLOCKED.

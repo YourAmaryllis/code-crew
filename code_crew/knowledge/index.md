@@ -22,7 +22,7 @@ code review, and Definition of Done enforcement.
 * [Backend Developer](agents/backend_developer.md) - BDD-first backend implementation
 * [Frontend Developer](agents/frontend_developer.md) - React + Ant Design portal UI
 * [QA Engineer](agents/qa_engineer.md) - Gherkin BDD feature authoring
-* [Security Reviewer](agents/security_reviewer.md) - OWASP, SBOM, zero-custody alignment
+* [Security Reviewer](agents/security_reviewer.md) - OWASP, SBOM, platform constraint check
 
 ## Tasks
 

@@ -71,7 +71,13 @@ def run_checks(code_path: Path | None = None) -> StartupSummary:
             fix=install_hint if not found else "",
         ))
 
-    warnings = sum(1 for c in checks if not c.ok and c.name != "git repo")
+    checks.append(_check_langfuse())
+
+    # langfuse "not configured" is optional — don't count as warning
+    warnings = sum(
+        1 for c in checks
+        if not c.ok and c.name not in ("git repo", "langfuse")
+    )
     errors = sum(1 for c in checks if not c.ok and c.name == "git repo")
 
     return StartupSummary(
@@ -100,7 +106,7 @@ def detect_stacks(root: Path | None = None) -> list[str]:
     if env_stacks:
         return [s.strip() for s in env_stacks.split(",") if s.strip()]
 
-    # 2. Project yaml stacks:
+    # 2. Project config stacks:
     explicit = _stacks_from_yaml(root)
     if explicit is not None:
         return explicit
@@ -127,8 +133,8 @@ def detect_stacks(root: Path | None = None) -> list[str]:
 
 
 def _stacks_from_yaml(root: Path) -> list[str] | None:
-    """Read `stacks:` from .code-crew.yaml. Returns None if not set."""
-    cfg = root / ".code-crew.yaml"
+    """Read `stacks:` from .code-crew/config.yaml. Returns None if not set."""
+    cfg = root / ".code-crew" / "config.yaml"
     if not cfg.exists():
         return None
     try:
@@ -144,6 +150,22 @@ def _stacks_from_yaml(root: Path) -> list[str] | None:
 # ---------------------------------------------------------------------------
 # Git check
 # ---------------------------------------------------------------------------
+
+def _check_langfuse() -> CheckResult:
+    """Check Langfuse credentials (optional — not configured is OK)."""
+    pk = os.environ.get("LANGFUSE_PUBLIC_KEY", "").strip()
+    if not pk:
+        return CheckResult("langfuse", True, "not configured (optional)", "")
+    from shared.telemetry import setup_langfuse
+    ok, err = setup_langfuse()
+    if ok:
+        host = os.environ.get("LANGFUSE_HOST", "cloud.langfuse.com").replace("https://", "")
+        return CheckResult("langfuse", True, host, "")
+    return CheckResult(
+        "langfuse", False, "",
+        err or "invalid credentials — check LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY",
+    )
+
 
 def _check_git(root: Path) -> tuple[bool, str]:
     result = subprocess.run(
@@ -205,7 +227,11 @@ def _designs_path() -> Path | None:
     if raw:
         p = Path(raw).expanduser()
         return p if p.exists() else None
-    # Fall back to sibling designs/ relative to this file's package root
+    # Prefer designs/ submodule in cwd (inside the platform repo)
+    local = Path.cwd() / "designs"
+    if local.exists():
+        return local
+    # Fall back to sibling designs/ in the tools repo (dev mode)
     candidate = Path(__file__).parent.parent / "designs"
     return candidate if candidate.exists() else None
 

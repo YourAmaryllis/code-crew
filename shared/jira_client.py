@@ -21,9 +21,8 @@ from crewai import LLM
 
 _PROMPT_PATH = Path(__file__).parent.parent / "code_crew" / "knowledge" / "prompts" / "extract_jira_ticket.md"
 
-# Project key used in Jira URLs (override via JIRA_PROJECT env)
-_JIRA_PROJECT = os.environ.get("JIRA_PROJECT", "LOOPLAT")
-_JIRA_BASE_URL = f"https://youramaryllis.atlassian.net/browse"
+# Project key used in Jira URLs
+_JIRA_PROJECT = os.environ.get("JIRA_PROJECT", os.environ.get("PROJECT_KEY", ""))
 
 
 class MissingStoryError(Exception):
@@ -95,7 +94,7 @@ def fetch(issue_key: str) -> JiraTicket:
             f"Expected format in the Jira description:\n"
             f"  As a <role>, I want to <action> so that <outcome>.\n\n"
             f"Please update the ticket before running the crew:\n"
-            f"  {_JIRA_BASE_URL}/{issue_key}"
+            f"  {os.environ.get('JIRA_URL', 'https://your-org.atlassian.net')}/browse/{issue_key}"
         )
 
     if not acs:
@@ -106,7 +105,7 @@ def fetch(issue_key: str) -> JiraTicket:
             f"  1. ...\n"
             f"  2. ...\n\n"
             f"Please update the ticket before running the crew:\n"
-            f"  {_JIRA_BASE_URL}/{issue_key}"
+            f"  {os.environ.get('JIRA_URL', 'https://your-org.atlassian.net')}/browse/{issue_key}"
         )
 
     return JiraTicket(

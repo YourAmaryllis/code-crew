@@ -38,6 +38,16 @@ class _PTFile:
         return True
 
 
+def pt_print(fragments: list[tuple[str, str]]) -> None:
+    """Print styled text above the prompt_toolkit prompt from any thread.
+
+    fragments: list of (style, text) tuples — same format as FormattedText.
+    Works correctly inside patch_stdout() context.
+    """
+    from prompt_toolkit.formatted_text import FormattedText
+    print_formatted_text(FormattedText(fragments))
+
+
 class PTConsole(Console):
     """Drop-in for rich.Console that works inside prompt_toolkit's patch_stdout.
 

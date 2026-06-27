@@ -2,7 +2,7 @@
 Entry point for the ops crew.
 
 Usage:
-  python -m ops.main --jira LOOPLAT-80 \
+  python -m ops.main --jira PROJ-NNN \
       --description "Add CloudWatch alarms for attestation service" \
       --service attestation --service portal \
       --env dev --env staging \
@@ -18,7 +18,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 
 @click.command()
-@click.option("--jira", required=True, help="Jira issue key (e.g. LOOPLAT-80)")
+@click.option("--jira", required=True, help="Jira issue key (e.g. PROJ-NNN)")
 @click.option("--description", required=True, help="What infrastructure work is needed")
 @click.option("--service", multiple=True, help="Service name(s) affected (repeat for multiple)")
 @click.option("--env", multiple=True, default=["dev", "staging"], help="Target environment(s)")

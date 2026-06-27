@@ -56,7 +56,7 @@ def test_detect_empty(tmp_path):
 def test_env_var_stacks_override_yaml_and_auto(tmp_path, monkeypatch):
     # Even with yaml and go.mod present, env var wins
     (tmp_path / "go.mod").write_text("module example.com/foo\n")
-    (tmp_path / ".code-crew.yaml").write_text("stacks:\n  - python\n")
+    (tmp_path / ".code-crew" / "config.yaml").write_text("stacks:\n  - python\n")
     monkeypatch.setenv("CODE_CREW_STACKS", "terraform-aws,typescript-react")
     assert detect_stacks(tmp_path) == ["terraform-aws", "typescript-react"]
 
@@ -75,26 +75,26 @@ def test_empty_env_var_falls_through(tmp_path, monkeypatch):
 def test_yaml_stacks_override_auto_detection(tmp_path):
     # Even though go.mod exists, yaml stacks take precedence
     (tmp_path / "go.mod").write_text("module example.com/foo\n")
-    (tmp_path / ".code-crew.yaml").write_text("stacks:\n  - python\n  - terraform-aws\n")
+    (tmp_path / ".code-crew" / "config.yaml").write_text("stacks:\n  - python\n  - terraform-aws\n")
     assert detect_stacks(tmp_path) == ["python", "terraform-aws"]
 
 
 def test_yaml_stacks_empty_list_falls_back_to_auto(tmp_path):
     # Empty stacks: [] in yaml → fall back to file detection
     (tmp_path / "go.mod").write_text("module example.com/foo\n")
-    (tmp_path / ".code-crew.yaml").write_text("stacks: []\n")
+    (tmp_path / ".code-crew" / "config.yaml").write_text("stacks: []\n")
     assert "go-backend" in detect_stacks(tmp_path)
 
 
 def test_yaml_without_stacks_key_falls_back_to_auto(tmp_path):
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
-    (tmp_path / ".code-crew.yaml").write_text("profile: dev\n")
+    (tmp_path / ".code-crew" / "config.yaml").write_text("profile: dev\n")
     assert detect_stacks(tmp_path) == ["python"]
 
 
 def test_yaml_stacks_invalid_yaml_falls_back_to_auto(tmp_path):
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
-    (tmp_path / ".code-crew.yaml").write_text("stacks: [\nbad yaml{{{\n")
+    (tmp_path / ".code-crew" / "config.yaml").write_text("stacks: [\nbad yaml{{{\n")
     # Should not raise; falls back to auto-detection
     result = detect_stacks(tmp_path)
     assert "python" in result

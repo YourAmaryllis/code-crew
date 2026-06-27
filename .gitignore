@@ -7,3 +7,7 @@ dist/
 build/
 .venv/
 designs/
+.code-crew/checkpoints/
+*.env
+.langfuse.env
+.claude/

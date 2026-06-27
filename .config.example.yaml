@@ -1,0 +1,153 @@
+# code-crew global configuration
+#
+# Copy to: ~/.code-crew/config.yaml
+#
+# Named profiles live at ~/.code-crew/profiles/<name>.yaml
+# Activate with:
+#   export CODE_CREW_PROFILE=<name>   — shell
+#   /profile <name>                   — REPL (switches live)
+#
+# Project-specific overrides: .code-crew/config.yaml in your project root
+
+# ─────────────────────────────────────────────
+# LLM backends
+#
+# Option A — Bedrock only (default, IAM auth, no API keys)
+# ─────────────────────────────────────────────
+bedrock:
+  model_id: us.anthropic.claude-sonnet-4-6-20251001-v1:0
+  fast_model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+  powerful_model_id: us.anthropic.claude-opus-4-8-20260101-v1:0
+  region: us-east-1
+  temperature: 0.2
+  # guardrail_id: ""
+  # guardrail_version: DRAFT
+
+# ─────────────────────────────────────────────
+# Option B — multi-provider llm: section
+# When llm: is present it takes full precedence over bedrock: for model routing.
+# Install provider extras: pip install -e ".[openai]" / "[groq]" / "[ollama]" / "[all-providers]"
+# ─────────────────────────────────────────────
+# llm:
+#   default:
+#     provider: bedrock
+#     model: us.anthropic.claude-sonnet-4-6-20251001-v1:0
+#   tiers:
+#     fast:
+#       provider: groq                         # cheap+fast for planning tasks
+#       model: llama-3.1-8b-instant
+#     standard:
+#       provider: bedrock
+#       model: us.anthropic.claude-sonnet-4-6-20251001-v1:0
+#     powerful:
+#       provider: anthropic                    # direct API for reviewer agents
+#       model: claude-opus-4-8-20260101
+#   agents:
+#     security_lead:
+#       provider: openai                       # per-agent override
+#       model: gpt-4o
+#     scrum_master:
+#       provider: ollama                       # local model for lightweight tasks
+#       model: llama3
+#
+# Provider API keys (set in environment, not in this file):
+#   ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY
+#   Ollama: no key needed; Ollama must be running locally (ollama serve)
+
+# ─────────────────────────────────────────────
+# AWS credentials
+# ─────────────────────────────────────────────
+# aws:
+#   profile: my-profile
+
+# ─────────────────────────────────────────────
+# Knowledge / designs repository
+#
+# Option A — designs/ is a submodule inside your platform repo (preferred):
+#   No config needed — code-crew checks ./designs/ relative to cwd.
+#
+# Option B — separate git repo, auto-cloned on first run:
+designs:
+  repo: git@github.com:your-org/designs.git
+  branch: main
+#
+# Option C — explicit local path override:
+# designs:
+#   path: /path/to/designs
+#
+# Definition of Done override (relative to designs/ or absolute):
+# designs:
+#   dod_path: SOP/SOP-DoD-Definition-of-Done.md
+# ─────────────────────────────────────────────
+
+# ─────────────────────────────────────────────
+# Issue tracker
+# ─────────────────────────────────────────────
+issue_tracker:
+  type: jira          # jira | linear | github
+  project_key: PROJ
+  # jira:
+  #   url: https://yourorg.atlassian.net
+  #   user: you@yourorg.com
+  #   token: your-api-token  # https://id.atlassian.com/manage-profile/security/api-tokens
+  # GitHub Issues: authenticate with: gh auth login (no extra config needed)
+
+# ─────────────────────────────────────────────
+# Tech stacks — overrides auto-detection from file patterns.
+# Known values: go-backend, typescript-react, python, terraform-aws,
+#               ecs-deployment, ai-ml, bdd-testing
+# ─────────────────────────────────────────────
+# stacks:
+#   - python
+#   - typescript-react
+
+# ─────────────────────────────────────────────
+# Figma (for /ux command)
+# Get a personal access token from:
+#   Figma → Settings → Account → Personal access tokens
+# ─────────────────────────────────────────────
+# figma:
+#   token: figd_your-token-here
+
+# ─────────────────────────────────────────────
+# Architecture pattern
+# auto-detected by /explore; override here if needed
+# ─────────────────────────────────────────────
+# architecture:
+#   style: clean        # clean | hexagonal | onion
+
+# ─────────────────────────────────────────────
+# DB schema management
+# auto-detected by /explore; override here if needed
+# ─────────────────────────────────────────────
+# db:
+#   migration_tool: goose   # alembic | goose | atlas
+#   schema_path: migrations/
+
+# ─────────────────────────────────────────────
+# Testing
+# auto-detected by /init; override here if needed
+# ─────────────────────────────────────────────
+# testing:
+#   framework: pytest   # pytest | go-test | jest
+#   bdd: true           # true if *.feature files present
+
+# ─────────────────────────────────────────────
+# API documentation standard
+# auto-detected by /init; override here if needed
+# ─────────────────────────────────────────────
+# api:
+#   doc_standard: openapi   # openapi (only supported value today)
+
+# ─────────────────────────────────────────────
+# Domain modeling
+# ─────────────────────────────────────────────
+# domain:
+#   methodology: event-storming   # event-storming | ddd | c4 (default: event-storming)
+#   diagram_format: mermaid       # mermaid (default; only supported value today)
+
+# ─────────────────────────────────────────────
+# Flow behaviour
+# ─────────────────────────────────────────────
+flow:
+  max_retries: 3

@@ -2,25 +2,23 @@
 Entry point for the code crew.
 
 Usage:
-  code-crew run --jira LOOPLAT-72
+  code-crew run --jira PROJ-NNN
   code-crew sprint --sprint "Sprint 5"
-  code-crew sprint --jira LOOPLAT-92 LOOPLAT-93 LOOPLAT-95
+  code-crew sprint --jira PROJ-NNN PROJ-NNN PROJ-NNN
   code-crew memory add "note" --category env
   code-crew memory list
 
-Config is loaded from ~/.code-crew/config first, then local .env (if present) as overrides.
+Config is loaded from ~/.code-crew/config.yaml (see .config.example.yaml for format).
 """
 
-from pathlib import Path
-
 import click
-from dotenv import load_dotenv
 
-# Load global config first, then local .env overrides
-from shared.home import CONFIG_FILE, ensure_home
+from shared.config import load_yaml_config
+from shared.home import CONFIG_YAML, ensure_home
+
 ensure_home()
-load_dotenv(CONFIG_FILE)
-load_dotenv(Path(__file__).parent.parent / ".env")
+if CONFIG_YAML.exists():
+    load_yaml_config(CONFIG_YAML, override=False)
 
 
 @click.group()
@@ -75,7 +73,7 @@ def _save_output(text: str, sprint_name: str, ticket_key: str) -> Path:
 # ---------------------------------------------------------------------------
 
 @cli.command()
-@click.option("--jira", required=True, help="Jira issue key (e.g. LOOPLAT-72)")
+@click.option("--jira", required=True, help="Jira issue key (e.g. PROJ-NNN)")
 @click.option("--story", default="", help="Override extracted user story")
 @click.option("--ac", multiple=True, help="Override extracted ACs (repeat for multiple)")
 @click.option("--sprint-goal", default="", help="Override extracted sprint goal")
@@ -161,10 +159,10 @@ def sprint(sprint_name, jira_keys, output_dir, dry_run):
       code-crew sprint --sprint "Sprint 5"
 
       # Specify tickets explicitly:
-      code-crew sprint --jira LOOPLAT-92 --jira LOOPLAT-93 --jira LOOPLAT-95
+      code-crew sprint --jira PROJ-NNN --jira PROJ-NNN --jira PROJ-NNN
 
       # Preview the plan without running:
-      code-crew sprint --jira LOOPLAT-92 --jira LOOPLAT-93 --dry-run
+      code-crew sprint --jira PROJ-NNN --jira PROJ-NNN --dry-run
     """
     import os
     import sys
@@ -286,7 +284,7 @@ def memory_add(content, category, tag):
     \b
     Examples:
       code-crew memory add "staging DB migrated to RDS" --category env
-      code-crew memory add "LOOPLAT-72 blocked by auth refactor" --category blockers --tag LOOPLAT-72
+      code-crew memory add "PROJ-NNN blocked by auth refactor" --category blockers --tag PROJ-NNN
       code-crew memory add "use pgx v5 for all new DB code" --category decisions
     """
     from shared.user_memory import UserMemory

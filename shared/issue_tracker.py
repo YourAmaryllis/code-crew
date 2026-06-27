@@ -1,5 +1,5 @@
 """
-Issue tracker abstraction: Jira or Linear.
+Issue tracker abstraction: Jira, Linear, or GitHub Issues.
 
 Routes to the right backend based on ISSUE_TRACKER env var (default: jira).
 Provides a unified Ticket type and three operations:
@@ -7,8 +7,9 @@ Provides a unified Ticket type and three operations:
   - list_sprint_tickets(sprint_name) -> list[str] of keys
   - post_comment(key, body)
 
-Jira: delegates to jira_client.py (jira CLI + LLM extraction).
-Linear: delegates to the linear CLI (npm i -g @linear/linear).
+Jira:         jira_client.py — jira CLI (brew install jira-cli)
+Linear:       linear CLI — npm i -g @linear/linear
+GitHub Issues: gh CLI — brew install gh; gh auth login
 """
 
 from __future__ import annotations
@@ -87,16 +88,22 @@ class IssueTrackerClient:
     def get_ticket(self, key: str) -> Ticket:
         if self._tracker == "linear":
             return self._linear_get(key)
+        if self._tracker == "github":
+            return self._github_get(key)
         return self._jira_get(key)
 
     def list_sprint_tickets(self, sprint_name: str = "") -> list[str]:
         if self._tracker == "linear":
             return self._linear_list_sprint(sprint_name)
+        if self._tracker == "github":
+            return self._github_list_sprint(sprint_name)
         return self._jira_list_sprint(sprint_name)
 
     def post_comment(self, key: str, body: str) -> None:
         if self._tracker == "linear":
             self._linear_comment(key, body)
+        elif self._tracker == "github":
+            self._github_comment(key, body)
         else:
             self._jira_comment(key, body)
 
@@ -175,6 +182,58 @@ class IssueTrackerClient:
         if result.returncode != 0:
             raise TrackerError(f"Failed to post Linear comment: {result.stderr.strip()}")
 
+    # ------------------------------------------------------------------
+    # GitHub Issues backend
+    # ------------------------------------------------------------------
+
+    def _github_get(self, key: str) -> Ticket:
+        """key is a GitHub issue number (#123) or org/repo#123."""
+        _require_gh_cli()
+        # Normalize: strip leading # if present
+        issue_ref = key.lstrip("#")
+        repo_args = []
+        if "/" in issue_ref and "#" in issue_ref:
+            repo, num = issue_ref.rsplit("#", 1)
+            repo_args = ["--repo", repo]
+            issue_ref = num
+        result = subprocess.run(
+            ["gh", "issue", "view", issue_ref, "--json",
+             "number,title,body,state,labels,assignees,comments"] + repo_args,
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            raise TrackerError(f"gh CLI error: {result.stderr.strip()}")
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise TrackerError(f"Could not parse gh output: {exc}") from exc
+        return _github_to_ticket(key, data)
+
+    def _github_list_sprint(self, sprint_name: str) -> list[str]:
+        """List open GitHub Issues with the given milestone (sprint_name)."""
+        _require_gh_cli()
+        args = ["gh", "issue", "list", "--json", "number", "--state", "open"]
+        if sprint_name:
+            args += ["--milestone", sprint_name]
+        result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise TrackerError(f"gh CLI error: {result.stderr.strip()}")
+        try:
+            issues = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise TrackerError(f"Could not parse gh output: {exc}") from exc
+        return [f"#{issue['number']}" for issue in issues]
+
+    def _github_comment(self, key: str, body: str) -> None:
+        _require_gh_cli()
+        issue_ref = key.lstrip("#")
+        result = subprocess.run(
+            ["gh", "issue", "comment", issue_ref, "--body", body],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            raise TrackerError(f"Failed to post GitHub comment: {result.stderr.strip()}")
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -187,6 +246,34 @@ def _require_linear_cli() -> None:
             "linear CLI not found. Install with: npm i -g @linear/linear\n"
             "Then authenticate: linear auth login"
         )
+
+
+def _require_gh_cli() -> None:
+    result = subprocess.run(["which", "gh"], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise TrackerError(
+            "gh CLI not found. Install with: brew install gh\n"
+            "Then authenticate: gh auth login"
+        )
+
+
+def _github_to_ticket(key: str, data: dict) -> Ticket:
+    """Map GitHub Issue JSON to a Ticket. Extracts story/ACs from body."""
+    body = data.get("body", "")
+    story, acs = _parse_story_and_acs(body)
+    comments_text = ""
+    for c in data.get("comments", [])[:5]:
+        comments_text += f"\n---\n{c.get('body', '')}"
+    return Ticket(
+        key=key,
+        summary=data.get("title", ""),
+        status=data.get("state", ""),
+        story=story,
+        acceptance_criteria=acs,
+        sprint_goal=data.get("title", ""),
+        comment_context=comments_text.strip(),
+        raw=json.dumps(data),
+    )
 
 
 def _linear_to_ticket(data: dict) -> Ticket:

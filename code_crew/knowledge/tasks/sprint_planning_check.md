@@ -12,7 +12,7 @@ expected_output: >
 ---
 
 You are opening the sprint. For each user story provided in the input, evaluate it
-against the **Definition of Ready** from SOP-3-Dev-Process:
+against the **Definition of Ready**:
 
 1. **Written as a user story**: "As a [who], I want [what], so that [why]"
 2. **Acceptance criteria**: clear, testable statements (plain English bullets or checklist — Gherkin belongs in BDD feature files, not in Jira ACs)
@@ -22,9 +22,6 @@ against the **Definition of Ready** from SOP-3-Dev-Process:
 6. **No known blockers**
 7. **Linked to technical requirements**: TR-XXX or BR-XXX linked in Jira
 
-Use the `sop_reader` tool to load SOP-3-Dev-Process if you need to verify the exact
-DoR criteria. Do not rely on memory for the criteria wording.
-
 For each story, state READY or NOT READY with the specific missing items. A NOT READY
 story must not be pulled into the sprint without explicit Product Owner escalation —
 note this clearly in your report.
@@ -32,3 +29,10 @@ note this clearly in your report.
 Also confirm that the sprint has a clear **Sprint Goal** (one sentence describing
 what the team will deliver). If no Sprint Goal is provided, flag this as a blocker
 before the sprint can start.
+
+**Completion signal — required.**
+End your output with exactly one of:
+- `TASK COMPLETE` — you have produced the full output described above.
+- `INCOMPLETE: <reason>` — you could not finish (missing data, tool failure, ambiguity). Describe what is blocking you so a human can resolve it.
+
+Do NOT end with a planning statement or partial summary.

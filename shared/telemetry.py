@@ -1,17 +1,12 @@
 """
-Langfuse telemetry via OpenTelemetry.
+Langfuse telemetry via the official Langfuse Python SDK.
 
-CrewAI creates OTLP spans via `trace.get_tracer("crewai.telemetry")` — the
-global TracerProvider.  If we install our own TracerProvider pointing at Langfuse
-before CrewAI's EventListener singleton is initialised, CrewAI's set_tracer()
-finds an existing (non-Proxy) provider and skips installing its own.  All spans
-(crew/task/agent/LLM lifecycle) then flow to Langfuse automatically.
+The SDK initialises its own OTel TracerProvider that pipes spans to Langfuse.
+Calling setup_langfuse() BEFORE any crewai import means CrewAI's own OTel spans
+flow to Langfuse automatically (CrewAI skips installing its own provider when it
+finds one already registered).
 
-IMPORTANT: setup_langfuse() must be called BEFORE any crewai import, because
-crewai/events/event_listener.py creates the EventListener singleton at module
-level, which triggers Telemetry.set_tracer() and installs CrewAI's own provider.
-
-Required env vars (set via profile):
+Required env vars:
     LANGFUSE_PUBLIC_KEY   pk-lf-…
     LANGFUSE_SECRET_KEY   sk-lf-…
 
@@ -27,21 +22,21 @@ import os
 import urllib.error
 import urllib.request
 
-_langfuse_enabled = False
+_client = None  # langfuse.Langfuse instance, set once
 
 
 def setup_langfuse() -> tuple[bool, str]:
     """
-    Probe Langfuse credentials, then install an OTLP TracerProvider.
+    Probe credentials then initialise the Langfuse SDK client.
 
     Returns (ok, error_message):
-      (True,  "")          — configured and credentials valid
-      (False, "")          — no keys set, tracing skipped silently
-      (False, "message")   — keys set but invalid / unreachable
+      (True,  "")        — configured and credentials valid
+      (False, "")        — no keys, tracing skipped silently
+      (False, "message") — keys set but invalid / unreachable
     Must be called before any crewai import.
     """
-    global _langfuse_enabled
-    if _langfuse_enabled:
+    global _client
+    if _client is not None:
         return True, ""
 
     pk = os.environ.get("LANGFUSE_PUBLIC_KEY", "").strip()
@@ -52,45 +47,38 @@ def setup_langfuse() -> tuple[bool, str]:
     host = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com").rstrip("/")
     auth = base64.b64encode(f"{pk}:{sk}".encode()).decode()
 
-    # Probe credentials before installing the provider so startup shows the
-    # error immediately rather than silently dropping spans later.
     probe_error = _probe_credentials(host, auth)
     if probe_error:
         return False, probe_error
 
     try:
-        from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-    except ImportError:
-        return False, "opentelemetry packages not installed (pip install opentelemetry-sdk opentelemetry-exporter-otlp-proto-http)"
+        from langfuse import Langfuse
+        # SDK installs its own OTel TracerProvider — must happen before crewai.
+        _client = Langfuse(public_key=pk, secret_key=sk, host=host)
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
 
-    endpoint = f"{host}/api/public/otel/v1/traces"
-    exporter = OTLPSpanExporter(
-        endpoint=endpoint,
-        headers={"Authorization": f"Basic {auth}"},
-    )
-    provider = TracerProvider()
-    provider.add_span_processor(BatchSpanProcessor(exporter))
 
-    # Always install ours — must pre-empt CrewAI's own provider.
-    trace.set_tracer_provider(provider)
+def get_langfuse():
+    """Return the Langfuse client, or None if not configured."""
+    return _client
 
-    # Flush + shutdown on exit so BatchSpanProcessor doesn't drop in-flight spans.
-    import atexit
-    atexit.register(lambda: provider.force_flush(timeout_millis=5000))
-    atexit.register(provider.shutdown)
 
-    _langfuse_enabled = True
-    return True, ""
+def flush() -> None:
+    """Flush buffered spans to Langfuse (call before process exit)."""
+    if _client is not None:
+        try:
+            _client.flush()
+        except Exception:
+            pass
 
 
 def _probe_credentials(host: str, auth: str) -> str:
     """
     Quick credential check against the Langfuse REST API.
     Returns "" on success, an error string on failure.
-    Network errors are treated as warnings (provider still installs).
+    Network errors are treated as warnings (client still initialises).
     """
     url = f"{host}/api/public/traces?limit=1"
     req = urllib.request.Request(url, headers={"Authorization": f"Basic {auth}"})
@@ -101,10 +89,12 @@ def _probe_credentials(host: str, auth: str) -> str:
             return f"unexpected status {resp.status}"
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
-            return f"invalid credentials — check LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY and LANGFUSE_HOST ({host})"
+            return (
+                f"invalid credentials — check LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY "
+                f"and LANGFUSE_HOST ({host})"
+            )
         if exc.code == 403:
-            return f"forbidden — key may lack required permissions (HTTP 403)"
+            return "forbidden — key may lack required permissions (HTTP 403)"
         return f"HTTP {exc.code} from {host}"
     except Exception:
-        # Network unreachable, DNS failure, timeout — don't block startup.
-        return ""
+        return ""  # network unreachable — don't block startup

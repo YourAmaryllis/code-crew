@@ -13,13 +13,13 @@ from pydantic import BaseModel, Field
 
 
 def _jira_project() -> str:
-    return os.environ.get("JIRA_PROJECT", "LOOPLAT")
+    return os.environ.get("JIRA_PROJECT", "PROJ")
 
 
 class JiraViewInput(BaseModel):
     issue_key: str = Field(
         description=(
-            "Jira issue key to view (e.g. 'LOOPLAT-72' or 'CTO-11'). "
+            "Jira issue key to view (e.g. 'PROJ-NNN' or 'CTO-11'). "
             "Returns full issue details: summary, description, acceptance criteria, status, assignee."
         )
     )
@@ -28,7 +28,7 @@ class JiraViewInput(BaseModel):
 class JiraViewTool(BaseTool):
     name: str = "jira_view"
     description: str = (
-        "View a Jira issue by key (e.g. LOOPLAT-72). Returns the full issue details "
+        "View a Jira issue by key (e.g. PROJ-NNN). Returns the full issue details "
         "including summary, description, acceptance criteria, status, assignee, and labels. "
         "Use this to get the full story context, ACs, and design references for a ticket."
     )

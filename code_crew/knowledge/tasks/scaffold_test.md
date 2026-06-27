@@ -4,9 +4,11 @@ description: Create BDD feature file stubs and step definition stubs for each ac
 expected_output: Feature file path and step definition path, with one scenario stub per AC tagged with the Jira key
 ---
 
-Read the `scaffold-test` document using the knowledge_reader tool to understand the test scaffolding process.
+Load the test scaffolding guide with `knowledge_reader`:
+- **`scaffold-test`** — test scaffolding process and stub format
+- **`bdd-authoring`** — file naming conventions, required tags, godog step file location
 
-Then read the relevant stack document(s) (e.g. `go-backend`, `typescript-react`, `python`) to determine where feature files and step definitions live in this project's layout.
+Check existing feature files first (`workspace_reader` list_dir on `integration/features/`) — do not recreate files that already exist.
 
 Using the acceptance criteria from the sprint context:
 
@@ -25,3 +27,10 @@ Using the acceptance criteria from the sprint context:
 3. Use the platform_shell tool to write both files.
 
 Output the paths of the created files and confirm how many scenario stubs were created (one per AC + negatives). Include a reminder that QA fills in the Gherkin steps before the engineer implements the step definitions.
+
+**Completion signal — required.**
+End your output with exactly one of:
+- `TASK COMPLETE` — you have produced the full output described above.
+- `INCOMPLETE: <reason>` — you could not finish (missing data, tool failure, ambiguity). Describe what is blocking you so a human can resolve it.
+
+Do NOT end with a planning statement or partial summary.

@@ -249,7 +249,7 @@ def test_switch_profile_falls_back_to_legacy_env(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_read_project_profile_from_yaml(tmp_path, monkeypatch):
-    (tmp_path / ".code-crew.yaml").write_text("profile: staging\nproject: myapp\n")
+    (tmp_path / ".code-crew" / "config.yaml").write_text("profile: staging\nproject: myapp\n")
     monkeypatch.chdir(tmp_path)
 
     import code_crew.repl as repl_mod

@@ -28,7 +28,7 @@ code-crew is a standalone Python CLI that runs a **true multi-agent pipeline**: 
 | Model tiers | Single model for all roles | fast / standard / powerful per agent |
 | Instructions | Inline markdown prompts per role | External OKF docs (`knowledge/agents/`, `knowledge/tasks/`) |
 | Domain knowledge | Generic best practices baked in | Organisation's own ADRs, ADDs, SDLC docs loaded at runtime |
-| Work queue | None — human invokes per branch | Jira integration — `/jira LOOPLAT-123` fetches ticket + ACs |
+| Work queue | None — human invokes per branch | Jira integration — `/jira PROJ-NNN` fetches ticket + ACs |
 | Observability | None | Langfuse OTLP traces (crew / task / agent / LLM spans) |
 | Setup | 30 seconds, no infrastructure | AWS Bedrock + Jira + designs repo required |
 | Parallel agents | No | Yes (TicketFlow runs tasks sequentially; CrewAI supports parallel process) |
@@ -57,7 +57,7 @@ code-crew is a standalone Python CLI that runs a **true multi-agent pipeline**: 
 
 **Organisation's own knowledge.** When the tech lead does an architecture review, it reads *your* ADRs and ADDs, not generic guidance. The security reviewer reads ADD-035 (your file upload standards), not a built-in OWASP checklist. The DoD checker enforces *your* DoD document. gstack has no equivalent; its guidance is generic.
 
-**Jira as the canonical work queue.** `/jira LOOPLAT-123` fetches the ticket, acceptance criteria, comments, and linked tickets. The sprint context is injected into every agent's task. There is no equivalent in gstack — the human copies and pastes context into the prompt.
+**Jira as the canonical work queue.** `/jira PROJ-NNN` fetches the ticket, acceptance criteria, comments, and linked tickets. The sprint context is injected into every agent's task. There is no equivalent in gstack — the human copies and pastes context into the prompt.
 
 **Bedrock + IAM auth.** No Anthropic API key required. AWS consolidated billing. Bedrock Guardrails for content policy. Private VPC endpoints available. gstack requires Claude Code and therefore an Anthropic subscription.
 

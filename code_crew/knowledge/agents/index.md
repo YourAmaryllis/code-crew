@@ -5,4 +5,4 @@
 * [Backend Developer](backend_developer.md) - BDD-first Go/Python backend implementation
 * [Frontend Developer](frontend_developer.md) - React + Ant Design v6 portal UI
 * [QA Engineer](qa_engineer.md) - Gherkin BDD feature authoring and coverage gate
-* [Security Reviewer](security_reviewer.md) - OWASP, SBOM, zero-custody, approval gate
+* [Security Reviewer](security_reviewer.md) - OWASP, SBOM, platform constraint check, approval gate

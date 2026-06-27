@@ -64,3 +64,5 @@ Verify the proposed branch name and commit subject follow SOP-DoD Section 3:
 
 List every finding with: severity (Critical / High / Medium / Minor), file path (if applicable),
 description, and required fix.
+
+If you cannot complete the review (tools unavailable, missing context, etc.), output `INCOMPLETE: <reason>` instead of APPROVED/BLOCKED.

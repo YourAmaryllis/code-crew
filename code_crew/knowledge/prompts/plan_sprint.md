@@ -18,8 +18,8 @@ Return ONLY a JSON object where each key is a ticket key and the value is a list
 
 ```json
 {
-  "LOOPLAT-95": ["LOOPLAT-92"],
-  "LOOPLAT-96": ["LOOPLAT-92", "LOOPLAT-93"]
+  "PROJ-NNN": ["PROJ-NNN"],
+  "PROJ-NNN": ["PROJ-NNN", "PROJ-NNN"]
 }
 ```
 

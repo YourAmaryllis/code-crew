@@ -83,13 +83,12 @@ class SprintUI:
             self._print_line(state)
 
     def show_summary(self, ticket_key: str, task_name: str, summary: str) -> None:
-        """Print one dim line explaining what a task decided / why we're moving on."""
+        """Print the task conclusion — one or more dim lines."""
         if not summary:
             return
-        if summary.startswith("↩"):
-            _pt_print([("ansiyellow", f"    {summary}")])
-        else:
-            _pt_print([("dim", f"    {summary}")])
+        style = "ansiyellow" if summary.startswith("↩") else "dim"
+        for line in summary.splitlines():
+            _pt_print([(style, f"    {line}")])
 
     def append_detail(self, ticket_key: str, task_name: str, output: str) -> None:
         with self._lock:
@@ -170,6 +169,7 @@ class SprintUI:
                 ("ansired",       "  failed"),
             ])
         else:
+            _pt_print([("", "")])
             # running — role first, bold + color-coded so it's immediately obvious who is working
             _pt_print([
                 (astyle,          f"  ►  {agent.ljust(_AGT_W)}"),

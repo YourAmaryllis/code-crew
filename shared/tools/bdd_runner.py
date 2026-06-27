@@ -17,7 +17,7 @@ class BDDRunnerInput(BaseModel):
         default="",
         description=(
             "Godog tag expression to filter scenarios. Examples: "
-            "'@LOOPLAT-72', '@dataset and not @wip', '@smoke'. "
+            "'@PROJ-NNN', '@dataset and not @wip', '@smoke'. "
             "Leave empty to run all scenarios."
         ),
     )

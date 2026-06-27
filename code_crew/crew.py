@@ -4,10 +4,15 @@ Code crew: virtual software development team for SDLC phases 13-19.
 All agent instructions and task descriptions are loaded from OKF markdown files
 in knowledge/agents/ and knowledge/tasks/. No prompts are hardcoded here.
 
-Knowledge bundle (ADDs, ADRs, SDLC role/function/stack docs) is loaded into memory
-at startup via KnowledgeReaderTool — no runtime dependency on designs/ or platform/ repos.
+Agent definitions are in code_crew/knowledge/agents/. See decisions/CREW-001-fullstack-engineer.md
+for the architectural rationale behind the role set.
+
+Knowledge bundle (ADDs, ADRs, role/function/stack docs) is loaded into memory
+at startup via KnowledgeReaderTool — no runtime dependency on designs/SDLC/ or platform/ repos.
 """
 
+import os
+import warnings
 from pathlib import Path
 
 from crewai import Agent, Crew, Process, Task
@@ -15,8 +20,11 @@ from crewai import Agent, Crew, Process, Task
 from shared.bedrock import get_llm_for_tier
 from shared.okf_loader import load_bundle_agents, load_bundle_tasks
 from shared.tools import (
+    ApiSpecTool,
+    AskHumanTool,
     BDDTestRunnerTool,
     DoDCheckerTool,
+    FigmaReaderTool,
     JiraSprintListTool,
     JiraViewTool,
     KnowledgeReaderTool,
@@ -29,7 +37,21 @@ from shared.tools import (
 _KNOWLEDGE = Path(__file__).parent / "knowledge"
 
 
-def _make_tools(code_path: str = "") -> dict:
+def _mcp_tools_for(agent_name: str) -> list:
+    """Return MCPClientTool instances from connected servers available to this agent."""
+    try:
+        from shared.mcp_registry import MCPRegistry
+        from shared.tools.mcp_tool import make_mcp_tools
+        registry = MCPRegistry.get()
+        result = []
+        for server_name, mcp_tool in registry.tools_for_agent(agent_name):
+            result.extend(make_mcp_tools(server_name, [mcp_tool]))
+        return result
+    except Exception:
+        return []
+
+
+def _make_tools(code_path: str = "", relay=None, jira_key: str = "") -> dict:
     """Create tool instances, optionally bound to a specific code_path (worktree)."""
     shell = PlatformShellTool()
     runner = BDDTestRunnerTool()
@@ -39,13 +61,16 @@ def _make_tools(code_path: str = "") -> dict:
     return {
         "knowledge_reader": KnowledgeReaderTool(),
         "workspace_reader": WorkspaceReaderTool(),
+        "api_spec": ApiSpecTool(),
         "dod_checker": DoDCheckerTool(),
+        "figma_reader": FigmaReaderTool(),
         "jira_view": JiraViewTool(),
         "jira_list": JiraSprintListTool(),
         "platform_shell": shell,
         "python_repl": PythonREPLTool(),
         "bdd_runner": runner,
         "memory_tool": MemoryTool(),
+        "ask_human": AskHumanTool(relay=relay, jira_key=jira_key),
     }
 
 
@@ -56,12 +81,15 @@ def build_agents(tools: dict) -> dict:
 
     kr = tools["knowledge_reader"]
     ws = tools["workspace_reader"]
+    ap = tools["api_spec"]
     jv = tools["jira_view"]
     sh = tools["platform_shell"]
     pr = tools["python_repl"]
     br = tools["bdd_runner"]
     mm = tools["memory_tool"]
     dc = tools["dod_checker"]
+    ah = tools["ask_human"]
+    fr = tools["figma_reader"]
 
     def _agent(name: str, agent_tools: list, max_iter: int = 15) -> Agent:
         c = ac[name]
@@ -69,19 +97,24 @@ def build_agents(tools: dict) -> dict:
             role=c.role,
             goal=c.goal,
             backstory=c.backstory,
-            tools=agent_tools,
+            tools=agent_tools + _mcp_tools_for(name),
             llm=get_llm_for_tier(c.model),
             verbose=True,
             max_iter=max_iter,
+            respect_context_window=True,
         )
 
     return {
         "scrum_master":      _agent("scrum_master",      [kr, dc, jv, mm]),
-        "tech_lead":         _agent("tech_lead",         [kr, ws, jv, sh]),
-        "backend_developer": _agent("backend_developer", [kr, ws, jv, sh, pr], max_iter=25),
-        "frontend_developer":_agent("frontend_developer",[kr, ws, jv, sh, pr]),
-        "qa_engineer":       _agent("qa_engineer",       [kr, ws, jv, sh, br, pr]),
-        "security_reviewer": _agent("security_reviewer", [kr, ws, sh, pr]),
+        "architect":         _agent("architect",         [kr, ws, jv, sh, ah]),
+        "engineer":          _agent("engineer",          [kr, ws, ap, jv, sh, pr, ah], max_iter=25),
+        "qa_lead":           _agent("qa_lead",           [kr, ws, jv, sh, br, pr, ah]),
+        "security_lead":      _agent("security_lead",      [kr, ws, sh, pr]),
+        "compliance_officer": _agent("compliance_officer", [kr, ws, jv]),
+        "product_owner":     _agent("product_owner",     [kr, jv]),
+        "devops_lead":       _agent("devops_lead",       [kr, ws, jv, sh, pr]),
+        "release_engineer":  _agent("release_engineer",  [kr, ws, jv, sh]),
+        "ux_lead":           _agent("ux_lead",           [fr, kr, ws, ah]),
     }
 
 
@@ -100,54 +133,115 @@ def build_tasks(agents: dict, sprint_input: dict, tasks_dir: Path | None = None)
             context=context_tasks or [],
         )
 
-    sprint_planning   = task("sprint_planning_check", "scrum_master")
-    arch_review       = task("architecture_review",   "tech_lead",   [sprint_planning])
-    scaffold_code     = task("scaffold_code",          "backend_developer", [arch_review])
-    scaffold_test     = task("scaffold_test",          "qa_engineer", [arch_review, scaffold_code])
-    bdd_authoring     = task("bdd_test_authoring",     "qa_engineer", [sprint_planning, arch_review, scaffold_test])
-    backend_impl      = task("backend_implementation", "backend_developer", [arch_review, scaffold_code, bdd_authoring])
-    frontend_impl     = task("frontend_implementation","frontend_developer",[arch_review, scaffold_code, bdd_authoring])
-    code_review       = task("code_review",            "tech_lead",   [backend_impl, frontend_impl])
-    sec_review        = task("security_review",        "security_reviewer", [backend_impl, frontend_impl, code_review])
-    dod_check         = task("dod_check",              "scrum_master",
-                             [sprint_planning, arch_review, scaffold_code, scaffold_test,
-                              bdd_authoring, backend_impl, frontend_impl, code_review, sec_review])
+    sprint_planning  = task("sprint_planning_check", "scrum_master")
+    arch_review      = task("architecture_review",   "architect",      [sprint_planning])
+    scaffold_code    = task("scaffold_code",          "engineer",       [arch_review])
+    scaffold_test    = task("scaffold_test",          "qa_lead",        [arch_review, scaffold_code])
+    bdd_authoring    = task("bdd_test_authoring",     "qa_lead",        [sprint_planning, arch_review, scaffold_test])
+    bdd_po_review    = task("bdd_po_review",          "product_owner",  [bdd_authoring])
+    bdd_arch_review  = task("bdd_arch_review",        "architect",      [bdd_authoring])
+    bdd_final        = task("bdd_finalization",       "qa_lead",        [bdd_po_review, bdd_arch_review])
+    implementation   = task("implementation",          "engineer",       [arch_review, scaffold_code, bdd_final])
+    devops_coord     = task("devops_coordination",    "devops_lead",    [arch_review, implementation])
+    code_review      = task("code_review",            "architect",          [implementation, devops_coord])
+    sec_review       = task("security_review",         "security_lead",      [implementation, devops_coord, code_review])
+    comp_review      = task("compliance_review",       "compliance_officer", [implementation, devops_coord, code_review, sec_review])
+    dod_check        = task("dod_check",               "scrum_master",
+                            [sprint_planning, arch_review, scaffold_code, scaffold_test,
+                             bdd_authoring, bdd_final, implementation, devops_coord,
+                             code_review, sec_review, comp_review])
+    release_notes     = task("release_notes",         "release_engineer",   [dod_check])
+    promote_staging   = task("promote_staging",       "devops_lead",        [release_notes])
+    staging_verif     = task("staging_verification",  "qa_lead",            [promote_staging])
+    launch_decision   = task("launch_decision",       "release_engineer",   [release_notes, staging_verif])
+    smoke_test        = task("smoke_test",             "qa_lead",            [staging_verif])
 
     return {
-        "sprint_planning": sprint_planning,
-        "architecture_review": arch_review,
-        "scaffold_code": scaffold_code,
-        "scaffold_test": scaffold_test,
-        "bdd_authoring": bdd_authoring,
-        "backend_implementation": backend_impl,
-        "frontend_implementation": frontend_impl,
-        "code_review": code_review,
-        "security_review": sec_review,
-        "dod_check": dod_check,
+        "sprint_planning":      sprint_planning,
+        "architecture_review":  arch_review,
+        "scaffold_code":        scaffold_code,
+        "scaffold_test":        scaffold_test,
+        "bdd_authoring":        bdd_authoring,
+        "bdd_po_review":        bdd_po_review,
+        "bdd_arch_review":      bdd_arch_review,
+        "bdd_finalization":     bdd_final,
+        "implementation":       implementation,
+        "devops_coordination":  devops_coord,
+        "code_review":          code_review,
+        "security_review":      sec_review,
+        "compliance_review":    comp_review,
+        "dod_check":            dod_check,
+        "release_notes":        release_notes,
+        "promote_staging":      promote_staging,
+        "staging_verification": staging_verif,
+        "launch_decision":      launch_decision,
+        "smoke_test":           smoke_test,
     }
 
 
-def build_single_task_crew(task_name: str, sprint_input: dict, code_path: str = "") -> Crew:
+# Tasks where agents tend to plan rather than execute — a fast manager LLM
+# drives the worker until work is actually done (files written, tests run, etc.)
+MANAGED_TASKS = frozenset({
+    "scaffold_code",
+    "scaffold_test",
+    "bdd_authoring",
+    "bdd_finalization",
+    "implementation",
+    "devops_coordination",
+    "release_notes",
+    "promote_staging",
+    "staging_verification",
+    "smoke_test",
+})
+
+
+def build_single_task_crew(
+    task_name: str,
+    sprint_input: dict,
+    code_path: str = "",
+    relay=None,
+) -> Crew:
     """
     Build a minimal crew for a single named task. Used by TicketFlow to run
     one task at a time so progress can be tracked and feedback injected between steps.
+
+    Tasks in MANAGED_TASKS use Process.hierarchical with a fast manager LLM that
+    drives the worker until the work is genuinely complete (not just planned).
+    Other tasks run sequentially — they are review/evaluation tasks that produce
+    text output and don't need execution verification.
     """
-    tools = _make_tools(code_path)
+    from shared.progress_guard import ProgressGuard
+
+    jira_key = sprint_input.get("jira_key", "")
+    tools = _make_tools(code_path, relay=relay, jira_key=jira_key)
     agents = build_agents(tools)
     tasks = build_tasks(agents, sprint_input)
 
     t = tasks[task_name]
-    return Crew(
-        agents=list(agents.values()),
-        tasks=[t],
-        process=Process.sequential,
-        verbose=True,
-    )
+    guard = ProgressGuard()
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        if task_name in MANAGED_TASKS:
+            return Crew(
+                agents=[t.agent],   # only the assigned worker; manager can't delegate elsewhere
+                tasks=[t],
+                process=Process.hierarchical,
+                manager_llm=get_llm_for_tier("fast"),
+                verbose=True,
+                step_callback=guard,
+            )
+        return Crew(
+            agents=list(agents.values()),
+            tasks=[t],
+            process=Process.sequential,
+            verbose=True,
+            step_callback=guard,
+        )
 
 
 def build_crew(sprint_input: dict, code_path: str = "") -> Crew:
     """
-    Build the full 10-task sequential crew for a single sprint story.
+    Build the full sequential crew for a single sprint story.
 
     Kept for backward compatibility with `code-crew run --jira`.
     New code should prefer TicketFlow + build_single_task_crew.
@@ -162,11 +256,19 @@ def build_crew(sprint_input: dict, code_path: str = "") -> Crew:
         tasks["scaffold_code"],
         tasks["scaffold_test"],
         tasks["bdd_authoring"],
-        tasks["backend_implementation"],
-        tasks["frontend_implementation"],
+        tasks["bdd_po_review"],
+        tasks["bdd_arch_review"],
+        tasks["bdd_finalization"],
+        tasks["implementation"],
+        tasks["devops_coordination"],
         tasks["code_review"],
         tasks["security_review"],
         tasks["dod_check"],
+        tasks["release_notes"],
+        tasks["promote_staging"],
+        tasks["staging_verification"],
+        tasks["launch_decision"],
+        tasks["smoke_test"],
     ]
     return Crew(
         agents=list(agents.values()),
@@ -176,23 +278,379 @@ def build_crew(sprint_input: dict, code_path: str = "") -> Crew:
     )
 
 
+_DESIGN_TASK_AGENTS: dict[str, str] = {
+    "design_requirements":     "architect",
+    "design_add_draft":        "architect",
+    "design_security_input":   "security_lead",
+    "design_compliance_input": "compliance_officer",
+    "design_chief_review":     "architect",
+    "design_finalize":         "architect",
+}
+
+
+def build_design_single_task(
+    task_name: str,
+    design_input: dict,
+    relay=None,
+    extra_context: str = "",
+) -> str:
+    """
+    Build and run a single design-flow task. Returns the output string.
+
+    Used by DesignFlow to run tasks one at a time so the Chief Architect
+    review loop can be managed at the Python level.
+    """
+    tools = _make_tools(relay=relay, jira_key=design_input.get("issue_key", ""))
+    agents = build_agents(tools)
+    td = _KNOWLEDGE / "tasks"
+    tc = load_bundle_tasks(td)
+    ctx = _format_design_context(design_input)
+    if extra_context:
+        ctx += extra_context
+
+    agent_key = _DESIGN_TASK_AGENTS[task_name]
+    t = Task(
+        name=task_name,
+        description=f"{ctx}\n\n{tc[task_name].description}",
+        expected_output=tc[task_name].expected_output,
+        agent=agents[agent_key],
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        crew = Crew(
+            agents=[agents[agent_key]],
+            tasks=[t],
+            process=Process.sequential,
+            verbose=True,
+        )
+        result = crew.kickoff(inputs=design_input)
+    return str(result)
+
+
+def _format_design_context(design_input: dict) -> str:
+    acs = "\n".join(f"- {ac}" for ac in design_input.get("acceptance_criteria", []))
+    structure = _load_project_structure()
+    sections: list[str] = []
+    skills = _load_active_skills()
+    if skills:
+        sections.append(skills)
+    sections.append(
+        f"## Requirement\n\n"
+        f"**Issue key**: {design_input.get('issue_key', 'UNKNOWN')}\n"
+        f"**Summary**: {design_input.get('issue_summary', '')}\n"
+        f"**Requirement**: {design_input.get('requirement', '')}\n\n"
+        f"**Acceptance criteria**:\n{acs}"
+    )
+    raw = design_input.get("raw_ticket", "")
+    if raw:
+        sections.append(f"## Full ticket content\n\n{raw[:3000]}")
+    if structure:
+        sections.append(f"## Project structure\n\n{structure}")
+    return "\n\n".join(sections)
+
+
 def _format_context(sprint_input: dict) -> str:
     acs = "\n".join(f"- {ac}" for ac in sprint_input.get("acceptance_criteria", []))
     add_refs = ", ".join(sprint_input.get("add_refs", [])) or "none specified"
     user_context = sprint_input.get("user_context", "")
     comment_context = sprint_input.get("comment_context", "")
-    sections = [
+    human_feedback = sprint_input.get("human_feedback", "")
+    sections: list[str] = []
+    skills = _load_active_skills()
+    if skills:
+        sections.append(skills)
+    arch_style = os.environ.get("ARCHITECTURE_STYLE", "").strip()
+    sections.append(
         f"## Sprint context\n\n"
         f"**Jira key**: {sprint_input.get('jira_key', 'UNKNOWN')}\n"
         f"**Sprint goal**: {sprint_input.get('sprint_goal', '')}\n"
         f"**Story**: {sprint_input.get('story', '')}\n"
         f"**Figma**: {sprint_input.get('figma_url', '') or 'not provided'}\n"
         f"**HTML design**: {sprint_input.get('html_design_ref', '') or 'not provided'}\n"
-        f"**Relevant ADDs**: {add_refs}\n\n"
-        f"**Acceptance criteria**:\n{acs}",
-    ]
+        f"**Relevant ADDs**: {add_refs}\n"
+        + (f"**Architecture pattern**: {arch_style} — load `stacks/arch-{arch_style}.md` via knowledge_reader for layer rules\n" if arch_style else "")
+        + f"\n**Acceptance criteria**:\n{acs}"
+    )
     if comment_context:
         sections.append(f"## Context from Jira comments\n\n{comment_context}")
     if user_context:
         sections.append(user_context)
+    if human_feedback:
+        sections.append(human_feedback)
+    structure = _load_project_structure()
+    if structure:
+        sections.append(f"## Project structure\n\n{structure}")
+    return "\n\n".join(sections)
+
+
+def _load_project_structure() -> str:
+    """Load .code-crew/structure.md from cwd if present."""
+    p = Path.cwd() / ".code-crew" / "structure.md"
+    if not p.exists():
+        return ""
+    try:
+        return p.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _skill_search_dirs() -> list[Path]:
+    """Ordered skill search path: project → user → bundled."""
+    return [
+        Path.cwd() / ".code-crew" / "skills",
+        Path.home() / ".code-crew" / "skills",
+        _KNOWLEDGE / "skills",
+    ]
+
+
+def _find_skill(name: str) -> Path | None:
+    for d in _skill_search_dirs():
+        p = d / f"{name}.md"
+        if p.exists():
+            return p
+    return None
+
+
+def _strip_frontmatter(text: str) -> str:
+    if text.startswith("---"):
+        end = text.find("---", 3)
+        if end >= 0:
+            return text[end + 3:].strip()
+    return text
+
+
+def _load_active_skills() -> str:
+    """Load skill content for names in CODE_CREW_SKILLS env var (comma-separated)."""
+    raw = os.environ.get("CODE_CREW_SKILLS", "").strip()
+    if not raw:
+        return ""
+    parts: list[str] = []
+    for name in raw.split(","):
+        name = name.strip()
+        if not name:
+            continue
+        path = _find_skill(name)
+        if not path:
+            continue
+        parts.append(_strip_frontmatter(path.read_text(encoding="utf-8").strip()))
+    if not parts:
+        return ""
+    return f"## Active skills (follow these rules throughout this task)\n\n" + "\n\n---\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# UX flow
+# ---------------------------------------------------------------------------
+
+_UX_TASK_AGENTS: dict[str, str] = {
+    "ux_spec":           "ux_lead",
+    "ux_implementation": "engineer",
+    "ux_review":         "ux_lead",
+}
+
+
+def build_ux_single_task(
+    task_name: str,
+    ux_input: dict,
+    relay=None,
+    extra_context: str = "",
+) -> str:
+    """Build and run a single UX-flow task. Returns the output string."""
+    tools = _make_tools(relay=relay, jira_key=ux_input.get("issue_key", ""))
+    agents = build_agents(tools)
+    td = _KNOWLEDGE / "tasks"
+    tc = load_bundle_tasks(td)
+    ctx = _format_ux_context(ux_input)
+    if extra_context:
+        ctx += extra_context
+
+    agent_key = _UX_TASK_AGENTS[task_name]
+    t = Task(
+        name=task_name,
+        description=f"{ctx}\n\n{tc[task_name].description}",
+        expected_output=tc[task_name].expected_output,
+        agent=agents[agent_key],
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        crew = Crew(
+            agents=[agents[agent_key]],
+            tasks=[t],
+            process=Process.sequential,
+            verbose=True,
+        )
+        result = crew.kickoff(inputs=ux_input)
+    return str(result)
+
+
+_VERIFY_TASK_AGENTS: dict[str, str] = {
+    "verify_arch_scan":       "architect",
+    "verify_security_scan":   "security_lead",
+    "verify_compliance_scan": "compliance_officer",
+    "verify_domain_scan":     "architect",
+    "verify_chief_review":    "architect",
+    "verify_report":          "scrum_master",
+}
+
+_DOMAIN_TASK_AGENTS: dict[str, str] = {
+    "domain_flow_discovery": "architect",
+    "domain_event_storming": "architect",
+    "domain_synthesis":      "architect",
+    "domain_extract":        "architect",
+}
+
+
+def build_verify_crew(project_root: str = "") -> Crew:
+    """Build and return a sequential 5-task verification crew."""
+    tools = _make_tools(code_path=project_root)
+    agents = build_agents(tools)
+    td = _KNOWLEDGE / "tasks"
+    tc = load_bundle_tasks(td)
+
+    structure = _load_project_structure()
+    stacks = os.environ.get("CODE_CREW_STACKS", "")
+    arch = os.environ.get("ARCHITECTURE_STYLE", "")
+    ctx = (
+        f"## Verification context\n\n"
+        f"**Project root**: {project_root or '.'}\n"
+        f"**Stacks**: {stacks or 'not set'}\n"
+        f"**Architecture**: {arch or 'not set'}\n"
+    )
+    if structure:
+        ctx += f"\n## Project structure\n\n{structure}"
+
+    skills = _load_active_skills()
+    if skills:
+        ctx = skills + "\n\n" + ctx
+
+    def _vtask(name: str, context_tasks: list | None = None) -> Task:
+        agent_key = _VERIFY_TASK_AGENTS[name]
+        return Task(
+            name=name,
+            description=f"{ctx}\n\n{tc[name].description}",
+            expected_output=tc[name].expected_output,
+            agent=agents[agent_key],
+            context=context_tasks or [],
+        )
+
+    arch_scan   = _vtask("verify_arch_scan")
+    sec_scan    = _vtask("verify_security_scan")
+    comp_scan   = _vtask("verify_compliance_scan")
+    domain_scan = _vtask("verify_domain_scan")
+    chief_rev   = _vtask("verify_chief_review",    [arch_scan, sec_scan, comp_scan, domain_scan])
+    report      = _vtask("verify_report",           [arch_scan, sec_scan, comp_scan, domain_scan, chief_rev])
+
+    all_agents = list({id(t.agent): t.agent for t in
+                       [arch_scan, sec_scan, comp_scan, domain_scan, chief_rev, report]}.values())
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        return Crew(
+            agents=all_agents,
+            tasks=[arch_scan, sec_scan, comp_scan, domain_scan, chief_rev, report],
+            process=Process.sequential,
+            verbose=True,
+        )
+
+
+def build_domain_single_task(
+    task_name: str,
+    domain_input: dict,
+    relay=None,
+    extra_context: str = "",
+) -> str:
+    """Build and run a single domain-flow task. Returns the output string."""
+    tools = _make_tools(relay=relay)
+    agents = build_agents(tools)
+    td = _KNOWLEDGE / "tasks"
+    tc = load_bundle_tasks(td)
+
+    methodology = os.environ.get("DOMAIN_METHODOLOGY", "event-storming")
+    diagram_fmt = os.environ.get("DOMAIN_DIAGRAM_FORMAT", "mermaid")
+    structure = _load_project_structure()
+    sections: list[str] = []
+    skills = _load_active_skills()
+    if skills:
+        sections.append(skills)
+    sections.append(
+        f"## Domain modeling context\n\n"
+        f"**System**: {domain_input.get('system_name', 'not set')}\n"
+        f"**Jira key**: {domain_input.get('issue_key', 'not set')}\n"
+        f"**Methodology**: {methodology}\n"
+        f"**Diagram format**: {diagram_fmt}\n"
+    )
+    if structure:
+        sections.append(f"## Project structure\n\n{structure}")
+    ctx = "\n\n".join(sections)
+    if extra_context:
+        ctx += extra_context
+
+    agent_key = _DOMAIN_TASK_AGENTS[task_name]
+    t = Task(
+        name=task_name,
+        description=f"{ctx}\n\n{tc[task_name].description}",
+        expected_output=tc[task_name].expected_output,
+        agent=agents[agent_key],
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        crew = Crew(
+            agents=[agents[agent_key]],
+            tasks=[t],
+            process=Process.sequential,
+            verbose=True,
+        )
+        result = crew.kickoff(inputs=domain_input)
+    return str(result)
+
+
+def build_domain_extract_crew(target_path: str = "") -> Crew:
+    """Build a single-task crew that extracts a domain model from existing code."""
+    tools = _make_tools(code_path=target_path)
+    agents = build_agents(tools)
+    td = _KNOWLEDGE / "tasks"
+    tc = load_bundle_tasks(td)
+
+    structure = _load_project_structure()
+    ctx = (
+        f"## Domain extract context\n\n"
+        f"**Target path**: {target_path or '.'}\n"
+        f"**Methodology**: {os.environ.get('DOMAIN_METHODOLOGY', 'event-storming')}\n"
+    )
+    if structure:
+        ctx += f"\n## Project structure\n\n{structure}"
+
+    t = Task(
+        name="domain_extract",
+        description=f"{ctx}\n\n{tc['domain_extract'].description}",
+        expected_output=tc["domain_extract"].expected_output,
+        agent=agents["architect"],
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        return Crew(
+            agents=[agents["architect"]],
+            tasks=[t],
+            process=Process.sequential,
+            verbose=True,
+        )
+
+
+def _format_ux_context(ux_input: dict) -> str:
+    acs = "\n".join(f"- {ac}" for ac in ux_input.get("acceptance_criteria", []))
+    structure = _load_project_structure()
+    sections: list[str] = []
+    skills = _load_active_skills()
+    if skills:
+        sections.append(skills)
+    sections.append(
+        f"## UX context\n\n"
+        f"**Issue key**: {ux_input.get('issue_key', 'UNKNOWN')}\n"
+        f"**Summary**: {ux_input.get('issue_summary', '')}\n"
+        f"**Figma URL**: {ux_input.get('figma_url', '') or 'not provided — ask human'}\n"
+        f"**Stack**: {ux_input.get('stack', 'not detected')}\n\n"
+        f"**Acceptance criteria**:\n{acs}"
+    )
+    if structure:
+        sections.append(f"## Project structure\n\n{structure}")
     return "\n\n".join(sections)

@@ -23,7 +23,7 @@ def build_crew(infra_input: dict) -> Crew:
     Build the ops crew for an infrastructure work item.
 
     infra_input keys:
-      jira_key        - e.g. "LOOPLAT-80"
+      jira_key        - e.g. "PROJ-NNN"
       description     - what infrastructure work is needed
       services        - list of service names affected (e.g. ["portal", "attestation"])
       environments    - list of target envs (e.g. ["dev", "staging"])

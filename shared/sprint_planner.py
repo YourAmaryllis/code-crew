@@ -168,7 +168,7 @@ def _parse_deps_json(content: str) -> dict[str, set[str]]:
         data = json.loads(content)
     except json.JSONDecodeError:
         return {}
-    # Expected: {"LOOPLAT-95": ["LOOPLAT-92"], "LOOPLAT-96": []}
+    # Expected: {"PROJ-NNN": ["PROJ-NNN"], "PROJ-NNN": []}
     return {k: set(v) for k, v in data.items() if isinstance(v, list)}
 
 

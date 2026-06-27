@@ -16,33 +16,45 @@ expected_output: >
 
 Write Gherkin BDD feature files for the user story in the sprint input.
 
-**Before writing**, use the `sop_reader` tool to load SOP-3-Dev-Process (Phase 14 section)
-and ADR-028 to confirm the API vs UI scope split for this feature.
+**Before writing**, use the `knowledge_reader` tool to load `bdd-authoring` to confirm
+file naming, tagging conventions, and the API vs UI scope split for this feature.
 
-**Coverage requirements** (ADR-010: 100% BDD requirement coverage):
-- Every acceptance criterion in the Jira story maps to at least one scenario
+**Check what already exists.** Use `workspace_reader` with `list_dir` on
+`integration/features/` to see existing feature files. If a feature file already covers
+this Jira key, read it and extend it rather than recreating it.
+
+**Coverage requirements** (100% AC coverage mandatory):
+- Every acceptance criterion maps to at least one scenario
 - Happy path covered
 - All significant alternative paths covered
 - Error and boundary cases covered
 - Security-relevant scenarios included (invalid input, unauthorized access, data boundary)
 
-**Annotation requirements** (DoD §2):
-- Each scenario tagged with the Jira key: `@looplat-72` or `@cto-XX`
-- Each scenario tagged with a domain category: `@dataset`, `@auth`, `@fhir`, `@upload`, etc.
+**Annotation requirements**:
+- Each scenario tagged with the Jira key (lowercase): `@looplat-92` or `@cto-XX`
+- Each scenario tagged with a domain category: `@dataset`, `@auth`, `@fhir`, `@registration`, etc.
 - API tests tagged `@api`; UI interaction tests tagged `@ui`
 
 **File naming**:
 - API BDD: `integration/features/<feature-slug>.feature`
 - UI BDD: `integration/features/<feature-slug>_ui.feature`
 
-**Do not duplicate** what the other test type already covers (ADR-028). If API tests
-cover all data matrix outcomes, the UI feature file tests one representative flow plus
-any shared UI controls.
+Do **not** duplicate coverage between API and UI files. If API tests cover all data matrix
+outcomes, the UI file tests one representative flow plus any shared UI controls.
 
-Produce the full `.feature` file content and a coverage matrix table:
+**Do NOT run the BDD test suite.** Implementation has not started — all scenarios will
+fail by design. Running tests here is incorrect and a waste of iterations. The `bdd_runner`
+is called during the DoD check *after* implementation is complete.
 
-| Acceptance Criterion | Scenario(s) | Status |
-|---------------------|-------------|--------|
-| AC-1 | Scenario: ... | ✓ |
+Produce the full `.feature` file content and a coverage matrix:
 
-**After writing**, use the `bdd_runner` tool to run the feature files for a syntax and compilation check. Scenarios will fail (implementation isn't done) — that is expected. Report the runner output in your summary so the backend developer can see what test IDs will need to pass.
+| Acceptance Criterion | Scenario(s) | File | Tag |
+|---|---|---|---|
+| AC-1 | Scenario: ... | feature-slug.feature | @looplat-92 |
+
+**Completion signal — required.**
+End your output with exactly one of:
+- `TASK COMPLETE` — you have produced the full output described above.
+- `INCOMPLETE: <reason>` — you could not finish (missing data, tool failure, ambiguity).
+
+Do NOT end with a planning statement or partial summary.

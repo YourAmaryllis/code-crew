@@ -1,0 +1,67 @@
+# code-crew MCP server configuration
+#
+# Copy to: ~/.code-crew/mcp.yaml
+#
+# Each server entry:
+#   command: executable (or "npx @package/name" shorthand)
+#   args:    additional CLI arguments (list)
+#   env:     environment variables; ${VAR} expands from current env
+#   agents:  list of agent names that can use this server's tools
+#            omit to make tools available to ALL agents
+#
+# Connect in the REPL:
+#   /mcp list               — show configured servers + connection status
+#   /mcp connect figma      — start server, list available tools
+#   /mcp disconnect figma   — stop server
+#   /mcp status             — show active connections
+
+servers:
+  # ─── Figma (design specs, component inspection) ──────────────────────
+  # Install: npm install -g @figma/mcp-server
+  # Token:   Figma → Settings → Account → Personal access tokens
+  figma:
+    command: npx @figma/mcp-server
+    env:
+      FIGMA_TOKEN: ${FIGMA_TOKEN}   # or set figma.token in config.yaml
+    agents:
+      - ux_lead
+
+  # ─── Linear (issue tracker) ───────────────────────────────────────────
+  # Install: npm install -g @linear/linear-mcp-server
+  # Auth:    linear-mcp-server auth  (opens browser for OAuth)
+  # linear:
+  #   command: npx @linear/linear-mcp-server
+  #   agents:
+  #     - architect
+  #     - scrum_master
+
+  # ─── GitHub (issues, PRs, code search) ───────────────────────────────
+  # Install: gh extension install github/gh-copilot  (or use the MCP server)
+  # Auth:    gh auth login
+  # github:
+  #   command: npx @github/mcp-server
+  #   env:
+  #     GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_TOKEN}
+  #   agents:
+  #     - architect
+  #     - devops_lead
+  #     - release_engineer
+
+  # ─── Browserbase (headless browser for visual testing) ────────────────
+  # browserbase:
+  #   command: npx @browserbasehq/mcp-browserbase
+  #   env:
+  #     BROWSERBASE_API_KEY: ${BROWSERBASE_API_KEY}
+  #     BROWSERBASE_PROJECT_ID: ${BROWSERBASE_PROJECT_ID}
+  #   agents:
+  #     - qa_lead
+  #     - ux_lead
+
+  # ─── Filesystem (read project files via MCP) ─────────────────────────
+  # filesystem:
+  #   command: npx @modelcontextprotocol/server-filesystem
+  #   args:
+  #     - /path/to/your/project
+  #   agents:
+  #     - engineer
+  #     - architect

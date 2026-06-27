@@ -2,7 +2,7 @@
 CrewAI tool: query user-managed memory during a crew run.
 
 Agents (primarily Scrum Master) can call this to retrieve user context
-on a topic mid-run — e.g. "are there any blockers for LOOPLAT-72?"
+on a topic mid-run — e.g. "are there any blockers for PROJ-NNN?"
 """
 
 from crewai.tools import BaseTool
@@ -13,7 +13,7 @@ class MemoryQueryInput(BaseModel):
     query: str = Field(
         description=(
             "Topic or keyword to search for in user memory. "
-            "Examples: 'LOOPLAT-72 blockers', 'staging environment', 'auth decisions'."
+            "Examples: 'PROJ-NNN blockers', 'staging environment', 'auth decisions'."
         )
     )
     category: str = Field(
@@ -36,7 +36,7 @@ class MemoryTool(BaseTool):
         from shared.user_memory import UserMemory
         mem = UserMemory()
         terms = query.split()
-        # Find Jira key in query (e.g. LOOPLAT-72)
+        # Find Jira key in query (e.g. PROJ-NNN)
         import re
         jira_match = re.search(r"[A-Z]+-\d+", query.upper())
         jira_key = jira_match.group(0) if jira_match else ""

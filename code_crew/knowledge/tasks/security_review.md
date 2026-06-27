@@ -1,68 +1,87 @@
 ---
 type: CrewAI Task
 title: Security Review
-description: OWASP Top 10 review, zero-custody check, SBOM generation, and approval gate
-tags: [security, owasp, sbom, iam, zero-custody, phase-19]
+description: Technical security review — OWASP (baseline or ASVS L2), FIPS 140-3 crypto, OTM threat model update, IAM, SBOM, and platform constraint check
+tags: [security, owasp, fips, otm, threat-model, sbom, iam, phase-19]
 timestamp: 2026-06-17T00:00:00Z
-agent: security_reviewer
+agent: security_lead
 context_agents:
-  - backend_developer
-  - frontend_developer
+  - engineer
 expected_output: >
-  A Security Review Report with: per-finding entries (severity, file/line, description,
-  fix), a zero-custody alignment statement, an SBOM listing new dependencies with
-  licenses, and a final gate decision (APPROVED / BLOCKED with blocker list).
+  A Security Review Report with: OWASP verdict per category (PASS/FAIL with evidence),
+  OWASP LLM Top 10 verdict if ai-ml stack is active, FIPS crypto verdict if active,
+  OTM threat model update summary (STRIDE threats always; PLOT4ai threats if AI/ML components
+  present; LINDDUN threats if personal data in scope), platform constraint check, SBOM of new
+  dependencies, IAM findings, and a final gate (APPROVED / BLOCKED with full blocker list).
+  Regulatory compliance is reported separately by the compliance officer.
 ---
 
-Review the implementation outputs from the backend and frontend developers against
-YourAmaryllis's security standards.
+Review the implementation for technical security vulnerabilities and update the threat model.
 
-Use the `sop_reader` tool to load SOP-9-Security and ADD-009 (zero-custody) before
-beginning. Do not rely on memory for policy details.
+**Step 1 — Load security context**
 
-**OWASP Top 10 — check each category:**
+Use `knowledge_reader` to load:
+- `threat-dragon` — OTM YAML format, framework selection guide, and maintenance steps
+- `owasp` if the `owasp` stack is active
+- `fips-140-3` if the `fips-140-3` stack is active
+- `ai-ml` if the `ai-ml` stack is active — adds OWASP LLM Top 10 checklist and PLOT4ai requirements
+- The feature ADD (from Jira ticket ADD references) — understand new data flows and their stacks
+- Any ADDs listed in the feature ADD's `references` frontmatter field that are relevant to the security surface
 
-1. **Injection**: Parameterized queries everywhere? No string concatenation in SQL/commands?
-   XSS prevention in all rendered output? If yes for each → PASS.
+Use `jira_view` to load the ticket and understand what changed.
 
-2. **Broken Authentication**: Tokens and sessions handled per existing platform patterns?
-   No custom auth logic (use platform middleware)? Credentials not stored client-side?
+**Step 2 — OWASP check**
 
-3. **Sensitive Data Exposure**: No PII, PHI, or health data in logs, error messages,
-   or API responses beyond what the feature requires? HTTPS enforced?
+If `owasp` stack is active: apply the full ASVS L2 checklist from the loaded `owasp` document.
 
-4. **XML/XXE and Injection variants**: External XML/JSON parsed safely? No DTD processing?
+Baseline (always): for each of the 10 categories, state PASS or FAIL with specific evidence
+(file, line, pattern found):
 
-5. **Broken Access Control**: Resource ownership checked on every write? No IDOR vectors?
-   Role checks present and consistent with portal IAM model (ADR-023)?
+1. **Injection** — parameterized queries; no string concat in SQL; XSS prevention in output
+2. **Broken Authentication** — per-platform patterns; no custom auth; no client-side credential storage
+3. **Sensitive Data Exposure** — no PII/PHI in logs, errors, or responses beyond requirement; HTTPS enforced
+4. **XML/XXE** — external data parsed safely; no DTD processing
+5. **Broken Access Control** — ownership checked on every write; no IDOR; role checks present
+6. **Security Misconfiguration** — no debug flags or permissive CORS in production; env vars documented
+7. **Vulnerable Components** — new dependencies checked for CVEs
+8. **Insecure Deserialization** — no `pickle`, `eval`, `exec` on untrusted input
+9. **Insufficient Logging** — auth failures, access denials, data writes logged
+10. **SSRF** — new HTTP client code restricts target URLs
 
-6. **Security Misconfiguration**: No debug flags, verbose errors, or permissive CORS
-   in production config? All new environment variables documented?
+**Step 3 — Cryptography check**
 
-7. **Vulnerable Components**: Any new dependency with a known CVE? Check PyPI / npm
-   advisory databases.
+If `fips-140-3` active: apply the full FIPS checklist from the loaded `fips-140-3` document.
 
-8. **Insecure Deserialization**: No `pickle`, `eval`, or `exec` on untrusted input?
+Always check: no MD5/SHA-1 for security-sensitive uses; no insecure RNG for tokens/keys;
+TLS 1.2+ only; secrets not hardcoded.
 
-9. **Insufficient Logging**: Are security-relevant events logged (auth failures,
-   access denials, data write operations)?
+**Step 4 — OTM threat model update**
 
-10. **SSRF**: Any new HTTP client code? Does it restrict target URLs to expected hosts?
+Follow the `threat-dragon` guide (see "Choosing a Framework" and "Security Lead Review Steps"):
+1. Check `designs/TMD/` for an existing OTM YAML model for the affected service
+2. Determine frameworks: always STRIDE; add PLOT4ai if `ai-ml` stack active or AI/ML components introduced; add LINDDUN if personal data in scope and GDPR/CCPA active
+3. Update or create: add threats for new surface area; update mitigation `status` for resolved items
+4. Write the updated/new file to `designs/TMD/<service>.yaml` via `platform_shell`
 
-**Zero-custody check (ADD-009):**
-Does any new code path write owner data to a YourAmaryllis-controlled bucket or service?
-If yes, is it going through the S3 proxy with seller storage only (ADD-024)?
-State explicitly: ZERO-CUSTODY PRESERVED or VIOLATION DETECTED.
+Output the threat model summary (file updated/created, frameworks used, open threats by severity).
 
-**IAM check:**
-List any new IAM policies or role modifications. Flag any `*` actions or resources
-without explicit justification.
+**Step 5 — Platform constraint check**
 
-**SBOM:**
-List every new dependency introduced by this change:
+For each ADD referenced by this story, check its `references` frontmatter field for constraint documents. Load them via `knowledge_reader` or `workspace_reader` and verify the implementation does not violate their constraints (data handling rules, custody boundaries, access policies, etc.).
+
+**Step 6 — IAM check**
+
+List new IAM policies or permission grants. Flag `*` actions/resources without justification.
+
+**Step 7 — SBOM**
+
+List every new dependency:
+
 | Package | Version | License | Risk |
 |---------|---------|---------|------|
 
-Flag any non-commercially-permissive license (GPL, AGPL, SSPL, Commons Clause).
+Flag non-commercially-permissive licenses. Flag any dependency with a known CVE.
 
-**Final gate**: APPROVED (no Critical/High findings) or BLOCKED (list blockers).
+**Final gate**: APPROVED (no Critical/High findings) or BLOCKED (list each: severity, file/line, finding, fix).
+
+If tools unavailable: `INCOMPLETE: <reason>`.

@@ -23,9 +23,10 @@ class WorkspaceReadInput(BaseModel):
     operation: str = Field(
         description=(
             "Operation to perform. One of:\n"
-            "  read_file  — return the contents of a file\n"
-            "  list_dir   — list files/dirs in a directory (depth-limited)\n"
-            "  search     — grep for a pattern across the workspace"
+            "  read_file   — return the contents of a file\n"
+            "  list_dir    — list files/dirs in a directory (depth-limited)\n"
+            "  find_files  — find files by name/glob pattern (e.g. '**/*_handler.go')\n"
+            "  search      — grep for a pattern across the workspace"
         )
     )
     path: str = Field(
@@ -52,9 +53,10 @@ class WorkspaceReadInput(BaseModel):
 class WorkspaceReaderTool(BaseTool):
     name: str = "workspace_reader"
     description: str = (
-        "Read files, list directories, or search the current project workspace. "
-        "Use read_file to inspect a specific file, list_dir to explore the layout, "
-        "and search to find where a pattern appears across source files."
+        "Read files, list directories, find files by name, or search the current project workspace. "
+        "Use find_files to locate files by name/glob (e.g. '**/*_handler.go') before reading them. "
+        "Use search to find where a pattern appears in file contents. "
+        "Use read_file to inspect a specific file. Use list_dir to see the top-level layout."
     )
     args_schema: type[BaseModel] = WorkspaceReadInput
 
@@ -71,9 +73,11 @@ class WorkspaceReaderTool(BaseTool):
             return self._read_file(root, path)
         if operation == "list_dir":
             return self._list_dir(root, path, depth)
+        if operation == "find_files":
+            return self._find_files(root, path, glob)
         if operation == "search":
             return self._search(root, pattern, glob)
-        return f"Unknown operation '{operation}'. Use: read_file, list_dir, search."
+        return f"Unknown operation '{operation}'. Use: read_file, list_dir, find_files, search."
 
     # ------------------------------------------------------------------
 
@@ -125,6 +129,26 @@ class WorkspaceReaderTool(BaseTool):
                 self._walk(base, entry, max_depth, cur_depth + 1, lines)
             else:
                 lines.append(f"{indent}{entry.name}")
+
+    def _find_files(self, root: Path, rel_path: str, glob: str) -> str:
+        base = (root / rel_path).resolve() if rel_path else root
+        if not str(base).startswith(str(root)):
+            return "ERROR: path escapes project root"
+        if not base.exists():
+            return f"ERROR: directory not found: {rel_path or '.'}"
+        g = glob if glob != "**/*" else "**/*"
+        matches = sorted(p for p in base.glob(g) if p.is_file())
+        # Exclude common noise dirs
+        matches = [
+            p for p in matches
+            if not any(part in {".git", "vendor", "node_modules", "__pycache__", ".terraform"}
+                       for part in p.parts)
+        ]
+        if not matches:
+            return f"No files matching '{glob}' in {rel_path or '.'}"
+        lines = [str(p.relative_to(root)) for p in matches[:100]]
+        suffix = f"\n… ({len(matches) - 100} more)" if len(matches) > 100 else ""
+        return "\n".join(lines) + suffix
 
     def _search(self, root: Path, pattern: str, glob: str) -> str:
         if not pattern:
