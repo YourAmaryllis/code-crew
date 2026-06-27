@@ -621,6 +621,12 @@ class TicketFlow:
                         f"↩ REJECTED (attempt {retries}/{self.state.max_retries}) — {reason}",
                     )
 
+                # Clear implementation + devops checkpoints so they re-run with the
+                # review feedback injected — replaying a stale "IMPLEMENTATION COMPLETE"
+                # that produced no files would just fail code review again.
+                for t in ("implementation", "devops_coordination"):
+                    self.state.task_outputs.pop(t, None)
+                _save_checkpoint(self.state)
                 self._run_implementation()
 
     def _staging_loop(self) -> None:
