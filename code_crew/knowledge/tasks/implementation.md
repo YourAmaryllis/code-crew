@@ -34,9 +34,9 @@ implied by each BDD scenario. Write test stubs before writing production code.
 Read comparable handlers, service functions, and React components. Match established patterns exactly.
 
 **Step 4 — Branch.**
-Check out the feature branch. If it already exists: `git checkout feature/<JIRA-KEY>-<slug>`.
-If it does not: `git checkout -b feature/<JIRA-KEY>-<slug>` from `main`.
-Never create a new branch if one already exists for this key — `git branch -a | grep <JIRA-KEY>` to check.
+Check whether a branch for this ticket already exists: `git branch -a | grep <JIRA-KEY>`.
+- **Exists** → `git checkout feature/<JIRA-KEY>-<slug>`, then run `git log --oneline -10` and `git diff origin/main --name-only` to understand what was already done. Do not redo completed work — continue from where it left off.
+- **Does not exist** → `git checkout -b feature/<JIRA-KEY>-<slug>` from `main`.
 
 **Step 5 — Backend implementation (if in scope).**
 - Write `*_test.go` stubs first, then implement
@@ -45,9 +45,11 @@ Never create a new branch if one already exists for this key — `git branch -a 
 - `go test ./... -count=1` — all tests pass before committing
 
 **Step 6 — Frontend implementation (if in scope).**
-- Check the Jira ticket for a Figma link. If there is no Figma link: **skip the frontend only** — do NOT block or stop the entire task. Complete backend first, then note "Frontend skipped: no Figma design link in ticket" and continue to Step 7.
-- If a Figma link is present: write `types.ts` first, then `<Component>.test.tsx`, then `index.tsx`
-- Handle all four states: loading, error, empty, loaded
+First decide whether a design artifact is needed:
+- **Purely behavioural change** (validation error, disabled state, existing component wired differently): no design needed — implement directly from BDD scenarios.
+- **New visual layout, new page, or new component**: look for a design artifact anywhere in the ticket or repository: Jira attachment, link to any tool (Figma, Sketch, Zeplin, HTML mockup, wireframe image, designs/ directory doc). The tool does not matter — use whatever is available.
+  - Found one → implement from it. Write `types.ts` first, then `<Component>.test.tsx`, then `index.tsx`.
+  - Not found → skip frontend only, note "Frontend skipped: no design artifact found", continue to Step 7. Do NOT stop the entire task.
 - `npx tsc --noEmit` — no type errors before committing
 - Verify ARIA labels, keyboard nav, WCAG 2.1 AA colour contrast
 
