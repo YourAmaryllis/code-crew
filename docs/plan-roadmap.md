@@ -29,12 +29,6 @@ README now reflects: YAML config, `/design` + `/issue` commands, designs-as-subm
 
 ---
 
-## ✅ 4. YourAmaryllis references removed
-
-Bulk replaced across all `.py`, `.md`, `.yaml` in `tools/` (not `designs/`): `LOOPLAT` → `PROJ`, `youramaryllis.atlassian.net` → `your-org.atlassian.net`, `YourAmaryllis` → `Your Organization`.
-
----
-
 ## ✅ 5. UX / Figma flow (`/ux <KEY>`)
 
 **Decision needed:** Figma-to-code vs code-to-Figma? Recommendation: **Figma → code** (design is the source of truth; code follows). Workflow:
