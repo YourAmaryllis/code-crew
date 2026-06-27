@@ -1245,11 +1245,78 @@ def _start_ticket_from_object(ticket, max_retries, code_path, state, ui, executo
 # /init scaffold
 # ---------------------------------------------------------------------------
 
-def _detect_project(root: Path) -> dict:
-    """Scan root for signals and return discovered config values."""
+def _scan_project(root: Path) -> dict:
+    """
+    Pure-Python signal scan. Returns discovered config values (dotted keys)
+    plus two special keys used only by /explore:
+      "_stacks"  — list[str] of detected stack names
+      "_svc_dirs" — list[str] of top-level dirs containing source files
+    Called by both /init (config keys only) and /explore Phase 1.
+    """
     import json as _json
 
+    _SKIP = {".git", "vendor", "node_modules", "__pycache__", ".terraform",
+             ".idea", ".vscode", "dist", "build", "coverage", ".next"}
+
     found: dict = {}
+
+    # --- stacks (file-extension / manifest signals) ---
+    stacks: list[str] = []
+    if any(root.rglob("go.mod")):
+        stacks.append("go-backend")
+    pkg_json = root / "package.json"
+    if pkg_json.exists():
+        try:
+            pkg = _json.loads(pkg_json.read_text())
+            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+            if any(k in deps for k in ("react", "next", "@types/react")):
+                stacks.append("typescript-react")
+        except Exception:
+            pass
+    elif any(root.rglob("*.tsx")):
+        stacks.append("typescript-react")
+    if list(root.glob("requirements*.txt")) or (root / "pyproject.toml").exists():
+        stacks.append("python")
+    if any(root.rglob("*.java")) or (root / "pom.xml").exists() or any(root.rglob("build.gradle")):
+        stacks.append("java")
+    if any(root.rglob("*.rb")) or (root / "Gemfile").exists():
+        stacks.append("ruby")
+    if any(root.rglob("*.rs")) or (root / "Cargo.toml").exists():
+        stacks.append("rust")
+    if any(root.rglob("*.tf")):
+        stacks.append("terraform")
+        for f in list(root.rglob("*.tf"))[:10]:
+            try:
+                if "aws" in f.read_text():
+                    stacks.append("terraform-aws")
+                    break
+            except Exception:
+                pass
+    if list(root.rglob("*task-definition*.json")) or list(root.rglob("*ecs*.tf")):
+        stacks.append("ecs-deployment")
+    if any(root.rglob("*.ipynb")):
+        stacks.append("ai-ml")
+    elif list(root.glob("requirements*.txt")):
+        for f in list(root.glob("requirements*.txt"))[:5]:
+            try:
+                if any(kw in f.read_text().lower() for kw in
+                       ("torch", "transformers", "openai", "anthropic", "langchain", "bedrock")):
+                    stacks.append("ai-ml")
+                    break
+            except Exception:
+                pass
+    if any(root.rglob("*.feature")):
+        stacks.append("bdd-testing")
+    found["_stacks"] = stacks
+
+    # --- service dirs (top-level dirs with source files) ---
+    ext_src = ("*.go", "*.py", "*.ts", "*.tsx", "*.java", "*.rb", "*.rs")
+    svc_dirs = [
+        d.name for d in sorted(root.iterdir())
+        if d.is_dir() and d.name not in _SKIP and not d.name.startswith(".")
+        and any(any(d.rglob(ext)) for ext in ext_src)
+    ][:8]
+    found["_svc_dirs"] = svc_dirs
 
     # --- migration tool ---
     if (root / "alembic.ini").exists():
@@ -1298,8 +1365,8 @@ def _detect_project(root: Path) -> dict:
             found["api.doc_standard"] = "openapi"
             break
 
-    # --- architecture style ---
-    all_dirs = {p.name for p in root.rglob("*") if p.is_dir()}
+    # --- architecture style (low-confidence heuristic; LLM phase overrides) ---
+    all_dirs = {p.name for p in root.rglob("*") if p.is_dir() and p.name not in _SKIP}
     if "ports" in all_dirs and ("driving" in all_dirs or "driven" in all_dirs):
         found["architecture.style"] = "hexagonal"
     elif "domain" in all_dirs and "application" in all_dirs and any(
@@ -1310,6 +1377,10 @@ def _detect_project(root: Path) -> dict:
         found["architecture.style"] = "clean"
 
     return found
+
+
+# Backward-compat alias (callers inside /init still use _detect_project name)
+_detect_project = _scan_project
 
 
 def _run_init(console: Console) -> None:
@@ -1356,7 +1427,7 @@ def _run_init(console: Console) -> None:
 
     # --- auto-detect and append discovered config ---
     console.print("\n[bold]Scanning project…[/bold]")
-    detected = _detect_project(root)
+    detected = {k: v for k, v in _scan_project(root).items() if not k.startswith("_")}
 
     if detected:
         # Group dotted keys into nested YAML sections
@@ -1714,85 +1785,23 @@ def _run_explore(target: str, console: Console) -> None:
     tree_text = "\n".join(tree_lines)
     console.print(tree_text)
 
-    # --- stack detection ---
-    stacks: list[str] = []
-    if any(root.rglob("go.mod")):
-        stacks.append("go-backend")
-    pkg_json = root / "package.json"
-    if pkg_json.exists():
-        try:
-            pkg = _json.loads(pkg_json.read_text())
-            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
-            if any(k in deps for k in ("react", "next", "@types/react")):
-                stacks.append("typescript-react")
-        except Exception:
-            pass
-    elif any(root.rglob("*.tsx")):
-        stacks.append("typescript-react")
-    if list(root.glob("requirements*.txt")) or list(root.glob("pyproject.toml")):
-        stacks.append("python")
-    if any(root.rglob("*.tf")):
-        stacks.append("terraform")
-        for f in list(root.rglob("*.tf"))[:10]:
-            try:
-                if "aws" in f.read_text():
-                    stacks.append("terraform-aws")
-                    break
-            except Exception:
-                pass
-    if list(root.rglob("*task-definition*.json")) or list(root.rglob("*ecs*.tf")):
-        stacks.append("ecs-deployment")
-    if any(root.rglob("*.ipynb")):
-        stacks.append("ai-ml")
-    elif list(root.rglob("requirements*.txt")):
-        for f in list(root.rglob("requirements*.txt"))[:5]:
-            try:
-                if any(kw in f.read_text().lower() for kw in
-                       ("torch", "transformers", "openai", "anthropic", "langchain", "bedrock")):
-                    stacks.append("ai-ml")
-                    break
-            except Exception:
-                pass
-    if any(root.rglob("*.feature")):
-        stacks.append("bdd-testing")
+    # --- Phase 1: pure-Python signal scan ---
+    scan = _scan_project(root)
+    stacks: list[str] = scan.pop("_stacks", [])
+    svc_dirs_scan: list[str] = scan.pop("_svc_dirs", [])
+    arch_style: str = scan.get("architecture.style", "")
+    migration_tool: str = scan.get("db.migration_tool", "")
 
     if stacks:
         console.print(f"\n[bold]Detected stacks:[/bold] {', '.join(stacks)}")
     else:
         console.print("\n[dim]No stacks detected — set stacks: in .code-crew/config.yaml if needed.[/dim]")
 
-    # --- architecture pattern detection ---
-    arch_style: str = ""
-    all_dirs = {p.name for p in root.rglob("*") if p.is_dir() and p.name not in _SKIP}
-    if "ports" in all_dirs and ("driving" in all_dirs or "driven" in all_dirs):
-        arch_style = "hexagonal"
-    elif "domain" in all_dirs and "application" in all_dirs and any(
-        (root / "domain" / sub).exists() for sub in ("model", "services", "repositories")
-    ):
-        arch_style = "onion"
-    elif "usecases" in all_dirs or ("domain" in all_dirs and "adapters" in all_dirs):
-        arch_style = "clean"
-
     if arch_style:
         console.print(f"[bold]Detected architecture:[/bold] {arch_style}")
         os.environ["ARCHITECTURE_STYLE"] = arch_style
     else:
-        console.print("[dim]Architecture pattern not detected — set architecture.style in config if needed.[/dim]")
-
-    # --- migration tool detection ---
-    migration_tool: str = ""
-    if (root / "alembic.ini").exists():
-        migration_tool = "alembic"
-    elif (root / "atlas.hcl").exists() or (root / "atlas.sum").exists():
-        migration_tool = "atlas"
-    else:
-        for mf in list(root.rglob("*.sql"))[:20]:
-            try:
-                if "-- +goose" in mf.read_text(encoding="utf-8", errors="ignore"):
-                    migration_tool = "goose"
-                    break
-            except OSError:
-                pass
+        console.print("[dim]Architecture pattern not detected — LLM phase will assess.[/dim]")
 
     if migration_tool:
         console.print(f"[bold]Detected migration tool:[/bold] {migration_tool}")
@@ -1817,6 +1826,48 @@ def _run_explore(target: str, console: Console) -> None:
     )
     console.print(f"\n[green]✓[/green] Saved to [dim]{out_dir / 'structure.md'}[/dim]")
 
+    # --- Phase 2: LLM architecture assessment ---
+    component_descriptions: dict[str, str] = {}
+    project_summary: str = ""
+    try:
+        from code_crew.crew import build_explore_single_task
+        console.print("\n[dim]Running LLM phase (Architect)…[/dim]")
+        llm_result = build_explore_single_task(
+            {
+                "root_name": root.name,
+                "stacks": stacks,
+                "arch_style": arch_style,
+                "migration_tool": migration_tool,
+                "svc_dirs": svc_dirs_scan,
+            },
+            extra_context=f"\n## Directory tree\n\n```\n{root.name}/\n{tree_text}\n```\n",
+        )
+        for line in llm_result.splitlines():
+            if line.startswith("ARCHITECTURE_STYLE:") and not arch_style:
+                arch_style = line.split(":", 1)[1].strip()
+                os.environ["ARCHITECTURE_STYLE"] = arch_style
+                console.print(f"[bold]LLM architecture assessment:[/bold] {arch_style}")
+            elif line.startswith("PROJECT_SUMMARY:"):
+                project_summary = line.split(":", 1)[1].strip()
+            elif line.startswith("COMPONENT:"):
+                rest = line.split(":", 1)[1].strip()
+                if ": " in rest:
+                    cdir, desc = rest.split(": ", 1)
+                    component_descriptions[cdir.strip()] = desc.strip()
+        # Augment structure.md with LLM findings
+        additions = ""
+        if project_summary:
+            additions += f"\n## Project summary\n\n{project_summary}\n"
+        if arch_style:
+            additions += f"\n## Architecture (LLM assessed)\n\n```yaml\narchitecture:\n  style: {arch_style}\n```\n"
+        if additions:
+            existing = (out_dir / "structure.md").read_text(encoding="utf-8")
+            (out_dir / "structure.md").write_text(existing.rstrip() + "\n" + additions, encoding="utf-8")
+    except Exception as exc:
+        console.print(f"[dim]LLM phase skipped: {exc}[/dim]")
+
+    svc_dirs = svc_dirs_scan
+
     # --- OTM threat model generation ---
     designs_dir = root / "designs"
     if not designs_dir.exists():
@@ -1835,14 +1886,6 @@ def _run_explore(target: str, console: Console) -> None:
         console.print(f"\n[dim]Threat model already exists: designs/TMD/{tmd_file.name} — skipping.[/dim]")
         return
 
-    # Candidate service directories: top-level dirs containing source files
-    svc_dirs = [
-        d.name for d in sorted(root.iterdir())
-        if d.is_dir() and d.name not in _SKIP and not d.name.startswith(".")
-        and (any(d.rglob("*.go")) or any(d.rglob("*.py"))
-             or any(d.rglob("*.ts")) or any(d.rglob("*.tsx")))
-    ][:8]
-
     today = datetime.date.today().isoformat()
     has_ai = "ai-ml" in stacks
 
@@ -1851,8 +1894,9 @@ def _run_explore(target: str, console: Console) -> None:
                   "    parent:\n      trustZone: internet\n    type: actor"]
     for svc in svc_dirs:
         svc_id = svc.lower().replace("_", "-")
+        desc = component_descriptions.get(svc, "")
         components.append(
-            f"  - name: {svc}\n    id: {svc_id}\n    description: ''\n"
+            f"  - name: {svc}\n    id: {svc_id}\n    description: '{desc}'\n"
             f"    parent:\n      trustZone: private\n    type: service\n"
             f"    assets:\n      processed: []\n      stored: []"
         )
@@ -1870,7 +1914,7 @@ def _run_explore(target: str, console: Console) -> None:
         f"# See designs/functions/threat-model for instructions.\n\n"
         f"otmVersion: 0.2.0\n\n"
         f"project:\n  name: {root.name}\n  id: {service_id}\n"
-        f"  description: ''\n  owner: Security Lead\n"
+        f"  description: '{project_summary}'\n  owner: Security Lead\n"
         f"  attributes:\n    stacks: {stacks}\n\n"
         f"representations:\n  - name: Architecture Diagram\n    id: arch-diagram\n    type: diagram\n\n"
         f"assets: []\n\n"

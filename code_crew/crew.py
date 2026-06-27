@@ -553,6 +553,41 @@ def build_verify_crew(project_root: str = "") -> Crew:
         )
 
 
+def build_explore_single_task(explore_input: dict, extra_context: str = "") -> str:
+    """Run the LLM phase of /explore. Returns the raw output string."""
+    tools = _make_tools()
+    agents = build_agents(tools)
+    td = _KNOWLEDGE / "tasks"
+    tc = load_bundle_tasks(td)
+
+    ctx = (
+        f"## Project: {explore_input.get('root_name', '.')}\n\n"
+        f"**Detected stacks**: {', '.join(explore_input.get('stacks', [])) or 'none'}\n"
+        f"**Phase 1 architecture**: {explore_input.get('arch_style', 'undetected')}\n"
+        f"**Phase 1 migration tool**: {explore_input.get('migration_tool', 'undetected')}\n"
+        f"**Service dirs**: {', '.join(explore_input.get('svc_dirs', []))}\n"
+    )
+    if extra_context:
+        ctx += extra_context
+
+    t = Task(
+        name="explore_scan",
+        description=f"{ctx}\n\n{tc['explore_scan'].description}",
+        expected_output=tc["explore_scan"].expected_output,
+        agent=agents["architect"],
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        crew = Crew(
+            agents=[agents["architect"]],
+            tasks=[t],
+            process=Process.sequential,
+            verbose=True,
+        )
+        result = crew.kickoff(inputs=explore_input)
+    return str(result)
+
+
 def build_domain_single_task(
     task_name: str,
     domain_input: dict,
