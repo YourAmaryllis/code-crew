@@ -191,7 +191,7 @@ REQUIRED findings are parsed from the chief review output. REPL prompts to open 
 |-----------|------|-----------|---------------|
 | `scrum_master` | Scrum Master | fast | sprint_planning, dod_check, verify_report |
 | `architect` | Senior Architect | powerful | architecture_review, code_review, domain_*, verify_arch_scan, verify_chief_review |
-| `chief_architect` | Chief Architect | powerful | design_chief_review (via ask_human) |
+| `chief_architect` | Chief Architect | N/A — human | design_chief_review (blocks via ask_human; no LLM call) |
 | `engineer` | Full-stack Engineer | standard | scaffold_code, implementation, ux_implementation, domain_extract |
 | `qa_lead` | QA Lead | standard | scaffold_test, bdd_authoring, bdd_finalization, staging_verification, smoke_test |
 | `product_owner` | Product Owner | standard | bdd_po_review |
@@ -213,15 +213,25 @@ All agents: `max_iter=15`, `verbose=True` (suppressed at display layer).
 
 | Tool | Class | What it does |
 |------|-------|-------------|
-| `knowledge_reader` | `KnowledgeReaderTool` | Reads OKF docs from the designs repo (ADR, ADD, SDLC functions, stacks). Pre-loaded at startup from `DESIGNS_PATH`. |
-| `workspace_reader` | `WorkspaceReaderTool` | Read/list/search the platform codebase. 200-line file cap, 50-match search cap. No writes. |
-| `platform_shell` | `PlatformShellTool` | Sandboxed shell in the platform repo. Runs git, go, npm, python. No network, no writes outside cwd. |
+| `knowledge_reader` | `KnowledgeReaderTool` | Reads OKF docs from the designs repo (ADR, ADD, SDLC functions, stacks) on demand at agent runtime — not pre-loaded. Agents call it with a relative path; it resolves against `DESIGNS_PATH`. |
+| `workspace_reader` | `WorkspaceReaderTool` | Read/list/search the project codebase. 200-line file cap, 50-match search cap. No writes. |
+| `platform_shell` | `PlatformShellTool` | Sandboxed shell in the project root. Runs git, go, npm, python. No network, no writes outside cwd. |
 | `api_spec` | `ApiSpecTool` | Reads OpenAPI 3.1 spec, lists routes, checks drift between spec and source file route annotations. |
 | `dod_checker` | `DoDCheckerTool` | Loads and parses the DoD document, returns structured checklist for Scrum Master to evaluate against. |
-| `jira_view` | `JiraViewTool` | Fetches a ticket by key (summary, description, ACs, comments, linked issues). |
-| `jira_list` | `JiraSprintListTool` | Lists tickets in the current sprint. |
+| `issue_view` | `IssueViewTool` | Fetches a ticket by key (summary, description, ACs, comments, linked issues). Backend determined by `ISSUE_TRACKER` env var — Jira, Linear, or GitHub Issues. |
+| `issue_list` | `IssueListTool` | Lists tickets in the current sprint/iteration. Same backend abstraction. |
 | `memory_tool` | `MemoryTool` | Read/write crew memory (`code-crew memory add/list`). Persists across runs. |
 | `ask_human` / `HumanRelay` | `HumanInputTool` | Thread-safe bridge for async SME input. Used by domain modeling and design chief review. Questions batched 3–5 per round; ends with `AWAITING SME RESPONSE`. |
+
+**Issue tracker backends** (`ISSUE_TRACKER` env var or `issue_tracker.type` in config):
+
+| Backend | Value | Auth |
+|---------|-------|------|
+| Jira | `jira` | `JIRA_URL`, `JIRA_USER`, `JIRA_TOKEN` |
+| Linear | `linear` | `LINEAR_API_KEY` |
+| GitHub Issues | `github` | `gh auth login` (GitHub CLI) |
+
+All three backends implement the same `IssueViewTool` / `IssueListTool` interface — agent task files reference `issue_view` / `issue_list` and are unaware of which backend is active.
 
 ---
 
@@ -241,7 +251,7 @@ No prompt text lives in Python. Changing agent behaviour is a markdown edit.
 
 ### Designs repo (`designs/`)
 
-Loaded at startup from `DESIGNS_PATH`:
+Agents load documents on demand via `knowledge_reader` at runtime — nothing is pre-loaded into context at startup. `DESIGNS_PATH` tells the tool where to resolve relative paths. If the repo is unavailable, agents continue with a warning and no loaded knowledge.
 
 ```
 designs/ADR/   Architecture Decision Records
