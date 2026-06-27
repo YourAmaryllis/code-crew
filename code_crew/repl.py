@@ -563,11 +563,10 @@ def main() -> None:
             from shared.telemetry import flush as _lf_flush
             _lf_flush()
             console.print("[dim]Bye.[/dim]")
-            # Force-kill after 10s if background flow threads don't finish.
-            # Langfuse flush() above is synchronous, so spans are already sent.
-            t = threading.Timer(10.0, os._exit, args=(0,))
-            t.daemon = True
-            t.start()
+            # os._exit bypasses atexit handlers (including concurrent.futures'
+            # _python_exit which blocks forever joining live flow threads).
+            # Telemetry is already flushed synchronously above.
+            os._exit(0)
 
 
 # ---------------------------------------------------------------------------
