@@ -691,17 +691,51 @@ class TicketFlow:
         self._feedback_event.wait()
 
     def _run_implementation(self) -> None:
-        impl_out = self._run_task("implementation")
-        if not _is_impl_done(impl_out):
-            reason = _extract_summary(impl_out)
-            self.state.task_outputs["implementation"] = (
-                f"INCOMPLETE: implementation did not confirm completion — {reason}"
-            )
-            self._on_task_complete(
-                self.state.jira_key, "implementation",
-                f"↩ no IMPLEMENTATION COMPLETE — treating as incomplete: {reason[:80]}",
-            )
-            return
+        # Inner loop: if the engineer says done but wrote no files, pass feedback
+        # back and re-run immediately — without burning a gate retry counter.
+        # Tickets that genuinely produce no code (docs-only) will have git changes
+        # too (docs files), so an empty diff is always a sign of incomplete work.
+        _MAX_IMPL_LOOPS = 3
+        for attempt in range(_MAX_IMPL_LOOPS):
+            if attempt > 0:
+                for t in ("implementation", "devops_coordination"):
+                    self.state.task_outputs.pop(t, None)
+                _save_checkpoint(self.state)
+
+            impl_out = self._run_task("implementation")
+
+            if not _is_impl_done(impl_out):
+                reason = _extract_summary(impl_out)
+                self.state.task_outputs["implementation"] = (
+                    f"INCOMPLETE: implementation did not confirm completion — {reason}"
+                )
+                self._on_task_complete(
+                    self.state.jira_key, "implementation",
+                    f"↩ no IMPLEMENTATION COMPLETE — treating as incomplete: {reason[:80]}",
+                )
+                return
+
+            if not _git_has_changes(self.state.code_path):
+                if attempt < _MAX_IMPL_LOOPS - 1:
+                    self._on_task_complete(
+                        self.state.jira_key, "implementation",
+                        f"↩ no git changes detected — looping engineer "
+                        f"(attempt {attempt + 1}/{_MAX_IMPL_LOOPS})",
+                    )
+                    self.state.review_feedback = (
+                        "git diff origin/main shows no changed files on this branch. "
+                        "You declared IMPLEMENTATION COMPLETE but wrote nothing. "
+                        "Run `git diff origin/main --name-only` to verify, then write "
+                        "and commit the required files before declaring complete."
+                    )
+                    continue
+                # Exhausted inner loops — fall through to code_review which will reject
+                self._on_task_complete(
+                    self.state.jira_key, "implementation",
+                    f"↩ no git changes after {_MAX_IMPL_LOOPS} attempts — proceeding to review",
+                )
+            break
+
         self._run_task("devops_coordination")
 
     # ------------------------------------------------------------------
@@ -896,6 +930,21 @@ def _is_impl_done(output: str) -> bool:
     if not output or output.startswith("INCOMPLETE:") or output.startswith("SKIPPED:"):
         return False
     return "IMPLEMENTATION COMPLETE" in output.upper()
+
+
+def _git_has_changes(code_path: str) -> bool:
+    """Return True if the branch has any committed changes vs origin/main.
+    Falls back to True (don't block) if git is unavailable or the check fails."""
+    import subprocess
+    cwd = code_path or None
+    try:
+        result = subprocess.run(
+            ["git", "diff", "origin/main", "--name-only"],
+            capture_output=True, text=True, timeout=15, cwd=cwd,
+        )
+        return bool(result.stdout.strip())
+    except Exception:
+        return True  # can't check — don't block the flow
 
 
 def _fmt_k(tokens: int) -> str:
