@@ -1,5 +1,8 @@
 # code-crew — Virtual AI Development Team
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![Commercial license](https://img.shields.io/badge/License-Commercial-green.svg)](COMMERCIAL.md)
+
 CrewAI-based multi-agent crew for the full software development lifecycle. Agents cover sprint planning, architecture, BDD, backend/frontend engineering, code review, security (OWASP + OTM threat modeling), compliance, and Definition of Done — driven by Jira, Linear, or GitHub Issues tickets and your own knowledge base (ADRs, ADDs, SOPs in OKF format).
 
 ## Slash commands (REPL)
@@ -381,3 +384,13 @@ scripts/            OKF conversion utilities
 | [CLAUDE.md](CLAUDE.md) | Setup, config format, key principles, task sequence |
 | [docs/code-crew.md](docs/code-crew.md) | Full design: concepts, agents, tasks, tools |
 | [.config.example.yaml](.config.example.yaml) | Annotated config template |
+
+## License and contributing
+
+code-crew is open source under **AGPL-3.0**. See [LICENSE](LICENSE).
+
+For commercial use (proprietary products, hosted services) a separate license is
+available — see [COMMERCIAL.md](COMMERCIAL.md).
+
+Contributions are welcome. All contributors must sign the [CLA](CLA.md) before their
+first PR is merged (automated via CLA Assistant). See [CONTRIBUTORS](CONTRIBUTORS).
