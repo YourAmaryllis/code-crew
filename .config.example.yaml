@@ -50,9 +50,42 @@ bedrock:
 #       provider: ollama                       # local model for lightweight tasks
 #       model: llama3
 #
+# Option C — NVIDIA Build (80+ free models, no credit card required)
+#   Sign up at build.nvidia.com → generate API key → store as NVIDIA_API_KEY
+#   Install: pip install -e ".[openai]"  (reuses the OpenAI package)
+# llm:
+#   default:
+#     provider: nvidia
+#     model: meta/llama-3.3-70b-instruct     # free tier model
+#   tiers:
+#     fast:
+#       provider: nvidia
+#       model: meta/llama-3.1-8b-instruct
+#     standard:
+#       provider: nvidia
+#       model: meta/llama-3.3-70b-instruct
+#     powerful:
+#       provider: nvidia
+#       model: nvidia/llama-3.1-nemotron-70b-instruct
+#
+# Popular free NVIDIA Build models:
+#   meta/llama-3.3-70b-instruct           — best general-purpose free model
+#   meta/llama-3.1-8b-instruct            — fast, lightweight
+#   nvidia/llama-3.1-nemotron-70b-instruct — NVIDIA-tuned 70B
+#   microsoft/phi-3.5-mini-instruct        — small, fast
+#   mistralai/mistral-7b-instruct-v0.3    — efficient 7B
+#   moonshotai/kimi-k2.6                   — strong reasoning
+#   Browse full catalog: https://build.nvidia.com/explore/discover
+#
 # Provider API keys (set in environment, not in this file):
-#   ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY
+#   ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, NVIDIA_API_KEY
 #   Ollama: no key needed; Ollama must be running locally (ollama serve)
+
+# ─────────────────────────────────────────────
+# NVIDIA Build API key (if using provider: nvidia)
+# ─────────────────────────────────────────────
+# nvidia:
+#   api_key: nvapi-xxxxxxxxxxxxxxxxxxxx
 
 # ─────────────────────────────────────────────
 # AWS credentials

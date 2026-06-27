@@ -15,6 +15,8 @@ Provider → LiteLLM model string format:
   openai     → "openai/<model>"         requires: OPENAI_API_KEY
   groq       → "groq/<model>"           requires: GROQ_API_KEY
   ollama     → "ollama/<model>"         requires: Ollama running locally
+  nvidia     → OpenAI-compat at https://integrate.api.nvidia.com/v1
+                                        requires: NVIDIA_API_KEY (nvapi-...)
 """
 
 from __future__ import annotations
@@ -80,6 +82,18 @@ def _make_llm(provider: str, model: str) -> LLM:
             aws_region_name=os.environ.get("BEDROCK_REGION", "us-east-1"),
             temperature=float(os.environ.get("BEDROCK_TEMPERATURE", "0.2")),
             **_bedrock_guardrail_kwargs(),
+        )
+
+    if provider == "nvidia":
+        # NVIDIA Build — OpenAI-compatible; provider="openai" bypasses CrewAI's
+        # model whitelist check so custom model names (meta/llama-...) are accepted.
+        api_key = os.environ.get("NVIDIA_API_KEY", "")
+        return LLM(
+            model=model,
+            provider="openai",
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=api_key,
+            temperature=0.2,
         )
 
     # All other providers: just prefix and pass temperature

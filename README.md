@@ -296,10 +296,33 @@ By default code-crew uses Amazon Bedrock (IAM auth, no API keys). Add an `llm:` 
 | Provider | Model string prefix | Install extra | Auth |
 |----------|-------------------|---------------|------|
 | Amazon Bedrock | `bedrock/` | *(included)* | AWS credentials |
+| **NVIDIA Build** | `nvidia/` | `pip install -e ".[openai]"` | `NVIDIA_API_KEY` (`nvapi-…`) |
 | Anthropic direct | `anthropic/` | `pip install -e ".[anthropic]"` | `ANTHROPIC_API_KEY` |
 | OpenAI | `openai/` | `pip install -e ".[openai]"` | `OPENAI_API_KEY` |
 | Groq | `groq/` | `pip install -e ".[groq]"` | `GROQ_API_KEY` |
 | Ollama (local) | `ollama/` | `pip install -e ".[ollama]"` | none (`ollama serve`) |
+
+**NVIDIA Build — 80+ free models, no credit card required.** Sign up at [build.nvidia.com](https://build.nvidia.com), generate an API key, then:
+
+```yaml
+# ~/.code-crew/config.yaml
+nvidia:
+  api_key: nvapi-xxxxxxxxxxxxxxxxxxxx   # or set NVIDIA_API_KEY env var
+
+llm:
+  default:
+    provider: nvidia
+    model: meta/llama-3.3-70b-instruct
+  tiers:
+    fast:
+      provider: nvidia
+      model: meta/llama-3.1-8b-instruct
+    powerful:
+      provider: nvidia
+      model: nvidia/llama-3.1-nemotron-70b-instruct
+```
+
+Free models to try: `meta/llama-3.3-70b-instruct` · `meta/llama-3.1-8b-instruct` · `nvidia/llama-3.1-nemotron-70b-instruct` · `microsoft/phi-3.5-mini-instruct` · `moonshotai/kimi-k2.6`
 
 **Config example — mixed providers:**
 

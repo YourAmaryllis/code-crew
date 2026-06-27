@@ -102,6 +102,9 @@ _ENV_MAP: dict[str, object] = {
         "langfuse_secret_key": "LANGFUSE_SECRET_KEY",
         "langfuse_host": "LANGFUSE_HOST",
     },
+    "nvidia": {
+        "api_key": "NVIDIA_API_KEY",
+    },
 }
 
 

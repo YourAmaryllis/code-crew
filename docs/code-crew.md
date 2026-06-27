@@ -349,7 +349,40 @@ Switch at runtime: `/profile <name>` in the REPL. Profiles live in `~/.code-crew
 
 ### Multi-LLM backends
 
-The `llm:` config section (or `LLM_CONFIG` env var) overrides the default Bedrock resolution. Supports any LiteLLM-compatible provider:
+The `llm:` config section (or `LLM_CONFIG` env var) overrides the default Bedrock resolution. Supports:
+
+| Provider key | Endpoint | Auth env var | Install extra |
+|---|---|---|---|
+| `bedrock` | AWS Bedrock | AWS credentials (IAM) | *(included)* |
+| `nvidia` | `https://integrate.api.nvidia.com/v1` | `NVIDIA_API_KEY` | `[openai]` |
+| `anthropic` | Anthropic API | `ANTHROPIC_API_KEY` | `[anthropic]` |
+| `openai` | OpenAI API | `OPENAI_API_KEY` | `[openai]` |
+| `groq` | Groq API | `GROQ_API_KEY` | `[groq]` |
+| `ollama` | `localhost:11434` | none | `[ollama]` |
+
+**NVIDIA Build** provides 80+ free models (no credit card) via an OpenAI-compatible API. Sign up at [build.nvidia.com](https://build.nvidia.com) and generate an `nvapi-…` key.
+
+```yaml
+# Full NVIDIA free-tier setup
+nvidia:
+  api_key: nvapi-xxxxxxxxxxxxxxxxxxxx
+
+llm:
+  default:
+    provider: nvidia
+    model: meta/llama-3.3-70b-instruct
+  tiers:
+    fast:
+      provider: nvidia
+      model: meta/llama-3.1-8b-instruct
+    powerful:
+      provider: nvidia
+      model: nvidia/llama-3.1-nemotron-70b-instruct
+```
+
+Free NVIDIA models: `meta/llama-3.3-70b-instruct` · `meta/llama-3.1-8b-instruct` · `nvidia/llama-3.1-nemotron-70b-instruct` · `microsoft/phi-3.5-mini-instruct` · `mistralai/mistral-7b-instruct-v0.3` · `moonshotai/kimi-k2.6`
+
+**Mixed-provider example:**
 
 ```yaml
 llm:
@@ -358,19 +391,18 @@ llm:
     model: us.anthropic.claude-sonnet-4-6
   tiers:
     fast:
-      provider: bedrock
-      model: us.anthropic.claude-haiku-4-5-20251001-v1:0
+      provider: nvidia                         # free fast tier
+      model: meta/llama-3.1-8b-instruct
     powerful:
-      provider: bedrock
-      model: us.anthropic.claude-opus-4-8-20260101-v1:0
-  # Agent-level overrides:
-  agents:
-    security_lead:
       provider: anthropic
       model: claude-opus-4-8-20260101
+  agents:
+    security_lead:
+      provider: nvidia
+      model: nvidia/llama-3.1-nemotron-70b-instruct
 ```
 
-Providers other than Bedrock require their API key in the environment (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). Install extras as needed: `pip install "code-crew[anthropic]"`.
+Resolution order: **agent override → tier override → default → legacy `bedrock:` env vars**.
 
 ### Environment variables
 
@@ -384,6 +416,7 @@ Providers other than Bedrock require their API key in the environment (e.g. `ANT
 | `BEDROCK_GUARDRAIL_ID` | No | Bedrock Guardrails ID |
 | `BEDROCK_GUARDRAIL_VERSION` | No | Guardrails version (default: `1`) |
 | `LLM_CONFIG` | No | JSON-serialised `llm:` section — set automatically from config |
+| `NVIDIA_API_KEY` | No | NVIDIA Build API key (`nvapi-…`) — required when `provider: nvidia` |
 | `ISSUE_TRACKER` | No | `jira` (default) \| `linear` \| `github` |
 | `PROJECT_KEY` | Yes | Issue tracker project key |
 | `JIRA_URL` | Yes | Jira base URL |
