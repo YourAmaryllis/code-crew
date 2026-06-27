@@ -14,6 +14,15 @@ The crew is not a chat assistant. It is a structured pipeline where each agent h
 
 Five distinct flows are supported:
 
+**Setup commands** (pure Python, no LLM — run these first):
+
+| Command | What it does |
+|---------|-------------|
+| `/init` | Scaffold `.code-crew/config.yaml`, prompt for issue tracker and project key, then auto-detect migration tool, test framework, API doc standard, and architecture style from file signals |
+| `/explore [path]` | Walk the directory tree; detect stacks, architecture pattern, and DB migration tool; write `.code-crew/structure.md` (agents read this as project context); generate OTM threat model skeleton at `designs/TMD/` |
+
+**Agent-backed flows** (LLM calls, managed by `flow.py` / `crew.py`):
+
 | Flow | Command | What it does |
 |------|---------|-------------|
 | **Ticket** | `/issue <KEY>` or `/sprint <name>` | Full SDLC pipeline: sprint planning → DoD → staging → release decision |
@@ -21,6 +30,8 @@ Five distinct flows are supported:
 | **UX** | `/ux <KEY>` | Figma → component spec → implementation → UX review loop |
 | **Domain** | `/domain design <KEY>` | Async event storming (3-phase): flow discovery → per-flow storming → synthesis → `designs/DMD/` |
 | **Verify** | `/verify` | Full codebase audit: arch · security · compliance · domain drift |
+
+Typical first-run order: `/init` → `/explore` → `/design <KEY>` → `/issue <KEY>`.
 
 ---
 
@@ -58,6 +69,7 @@ Skills are OKF `.md` files that modify agent output style for the current sessio
 ┌────────────────────────────────────────────────────────────────┐
 │  code-crew CLI  (code_crew/repl.py)                            │
 │                                                                │
+│  /init    → pure Python setup   /explore → pure Python scan    │
 │  /issue → TicketFlow      /design → DesignFlow                 │
 │  /ux    → UxFlow          /domain → DomainFlow                 │
 │                           /verify → build_verify_crew()        │
@@ -96,6 +108,49 @@ Skills are OKF `.md` files that modify agent output style for the current sessio
 ---
 
 ## Flows
+
+### Setup: `/init`
+
+Pure Python — no agents. Run once per project before using any agent-backed flow.
+
+1. `git init` if the directory isn't already a git repo
+2. Prompt for project name, issue tracker (`jira` / `linear` / `github`), and project key → write `.code-crew/config.yaml`
+3. Write a minimal `.gitignore`
+4. Run `_detect_project()` — scans for 12 file signals and appends discovered config under a `# Auto-detected` block:
+
+| Signal | Config key set |
+|--------|---------------|
+| `alembic.ini` | `db.migration_tool: alembic` |
+| `-- +goose` in `.sql` files | `db.migration_tool: goose` |
+| `atlas.hcl` / `atlas.sum` | `db.migration_tool: atlas` |
+| `pytest.ini` / `conftest.py` | `testing.framework: pytest` |
+| `jest.config.*` | `testing.framework: jest` |
+| `*_test.go` files | `testing.framework: go-test` |
+| `*.feature` files | `testing.bdd: <tool>` |
+| `docs/swagger.json` / `openapi.yaml` | `api.doc_standard: openapi` |
+| `ports/` + `driving/` or `driven/` dirs | `architecture.style: hexagonal` |
+| `domain/model/` + `application/` dirs | `architecture.style: onion` |
+| `usecases/` or `domain/` + `adapters/` | `architecture.style: clean` |
+
+`/init` is idempotent — re-running appends the auto-detected block only once and never overwrites manual edits.
+
+### Setup: `/explore [path]`
+
+Pure Python — no agents. Run after `/init` and again after significant codebase changes.
+
+1. **Directory tree** — walks up to 4 levels deep, skips `.git`, `vendor`, `node_modules`, etc.; renders tree to console
+2. **Stack detection** — file-pattern heuristics → sets `CODE_CREW_STACKS` for the session:
+   - `go.mod` → `go-backend`
+   - `package.json` with React deps, or `*.tsx` → `typescript-react`
+   - `requirements*.txt` or `pyproject.toml` → `python`
+   - `*.tf` → `terraform`; contains `"aws"` → also `terraform-aws`
+   - `*task-definition*.json` or `*ecs*.tf` → `ecs-deployment`
+   - `*.ipynb` or AI/ML packages in requirements → `ai-ml`
+   - `*.feature` files → `bdd-testing`
+3. **Architecture pattern** — dir name sniffing → sets `ARCHITECTURE_STYLE` for the session
+4. **DB migration tool** — file signal sniffing → sets `DB_MIGRATION_TOOL` for the session
+5. **Writes `.code-crew/structure.md`** — tree + detected config in YAML; agents read this via `knowledge_reader` to understand project layout without running their own scan
+6. **OTM skeleton** — if `designs/` exists, generates `designs/TMD/<project>.yaml` (OTM v0.2.0) with detected service directories as components; skips if the file already exists
 
 ### Ticket flow (`/issue <KEY>`, `/sprint <name>`)
 
