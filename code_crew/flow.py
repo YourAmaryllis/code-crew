@@ -787,12 +787,27 @@ class TicketFlow:
                     f"Recent calls:\n  {recent}\n"
                     f"Please provide context or a different approach."
                 )
-            # pydantic: model returned a tool-call object instead of text (some NVIDIA models)
+            # pydantic: model returned a tool-call object as its "final" output instead of text.
+            # The proper fix is to complete the tool round-trip, but the conversation history
+            # lives inside CrewAI's agent loop so we can't inject a result externally.
+            # Rebuilding and retrying is equivalent — CrewAI will call the tool and continue.
             if "Input should be a valid string" in str(exc) and "ChatCompletion" in str(exc):
-                output = (
-                    f"INCOMPLETE: {task_name} — model returned a function-call object instead of text. "
-                    "Try switching to a different model or running again."
-                )
+                try:
+                    crew2 = build_single_task_crew(
+                        task_name, sprint_input,
+                        code_path=self.state.code_path,
+                        relay=self.relay,
+                    )
+                    result2 = crew2.kickoff(inputs=sprint_input)
+                    output = str(result2)
+                    tokens2 = getattr(crew2.usage_metrics, "total_tokens", 0) or 0
+                    self.state.last_task_tokens = tokens2
+                    self.state.session_tokens += tokens2
+                except Exception as retry_exc:
+                    output = (
+                        f"INCOMPLETE: {task_name} — model returned a tool-call instead of text "
+                        f"(retry also failed: {str(retry_exc)[:200]})"
+                    )
             else:
                 output = f"INCOMPLETE: agent failed during {task_name} — {str(exc)[:300]}"
             return output
