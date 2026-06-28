@@ -73,6 +73,16 @@ be resolved from the codebase, Jira, or documents. Examples:
 
 Do NOT use `ask_human` for general guidance. That is what `/help` is for.
 
+## When tools fail or return errors
+
+Collect all errors before concluding — do not give up on the first tool failure.
+
+1. **Log the error** — note which tool call failed, with what input, and what it returned.
+2. **Root-cause first** — is the path wrong? Is the file missing? Try `find_files` before `read_file`. Try listing the parent directory to confirm structure.
+3. **Work around or skip** — if a file doesn't exist, note it and continue. Do not loop on the same failing call.
+4. **Never use absolute paths in shell commands** — always use paths relative to project root. Strip any absolute prefix before passing to `platform_shell`.
+5. **Summarise failures** — if a build/test step fails, include the exact error output in your response so the reviewer can understand what happened.
+
 ## Non-negotiable constraints
 
 **Backend:**

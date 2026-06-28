@@ -58,6 +58,8 @@ Verify the proposed branch name and commit subject follow SOP-DoD Section 3:
 - Security-relevant events (auth failures, permission denials, data writes) are logged.
 - No `fmt.Println`, `console.log`, or debug output left in production paths.
 
+**On tool failure** — log the error, try once with an alternative (list parent dir, use `find_files` before `read_file`), then skip and continue. Never use absolute paths in shell commands. If critical context is unavailable, output `INCOMPLETE: <reason>` instead of a verdict.
+
 **Step 5 — Overall verdict.**
 - **APPROVED**: no Critical or High findings; Minor findings listed as non-blocking suggestions.
 - **CHANGES REQUESTED**: one or more Critical/High findings that must be resolved before merge.

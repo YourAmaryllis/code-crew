@@ -61,4 +61,6 @@ COMPONENT: <dir_name>: <description>
 
 If a directory is a shared library or utility (not a deployable service), note that: `COMPONENT: pkg: shared utility library — not a deployable service`.
 
+**On tool failure** — log the error, try once with an alternative (e.g. list parent dir if read fails), then skip and continue. Never use absolute paths in shell commands. Note any skipped components in the output.
+
 **Step 5 — Output EXPLORE SCAN COMPLETE.**

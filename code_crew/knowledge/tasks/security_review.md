@@ -82,6 +82,8 @@ List every new dependency:
 
 Flag non-commercially-permissive licenses. Flag any dependency with a known CVE.
 
+**On tool failure** — log the error, try once with an alternative, then skip and continue. Never use absolute paths in shell commands. If a scan step cannot run, note it as `INFO: <step> skipped — <reason>` and proceed.
+
 **Final gate**: APPROVED (no Critical/High findings) or BLOCKED (list each: severity, file/line, finding, fix).
 
 If tools unavailable: `INCOMPLETE: <reason>`.

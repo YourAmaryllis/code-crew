@@ -1,32 +1,30 @@
 ---
 type: CrewAI Task
 title: Verify Report
-description: Scrum master compiles all scan findings and chief review decisions into a markdown report and saves it to .code-crew/
+description: Scrum master compiles all scan findings and chief review decisions into a markdown report
 tags: [verify, report, scrum-master]
 agent: scrum_master
 expected_output: >
-  Confirmation that the report was written to .code-crew/verify-report-YYYYMMDD.md,
-  followed by the full report content. Ends with REPORT SAVED: <path>.
+  Full markdown report content compiled from all scan outputs and chief review decisions.
+  Ends with REPORT SAVED: .code-crew/verify-report-YYYYMMDD.md.
 ---
 
-Compile the verification audit into a structured markdown report and save it to `.code-crew/`.
+Compile the verification audit into a structured markdown report and output it. The Python runner will write the file.
 
 **Step 1 — Collect inputs.**
-Your context contains the outputs of `verify_arch_scan`, `verify_security_scan`, `verify_compliance_scan`, and `verify_chief_review`. Extract:
+Your context contains the outputs of `verify_arch_scan`, `verify_security_scan`, `verify_compliance_scan`, `verify_domain_scan`, and `verify_chief_review`. Extract:
 - All `REQUIRED:` lines from the chief review
 - All `EXEMPT:` lines from the chief review
-- All `PASS:` lines from the chief review (optional — include in appendix)
+- All `PASS:` lines from the chief review
 
-**Step 2 — Write the report.**
-
-Use `platform_shell` to write the file. Report format:
+**Step 2 — Output the full report in this format.**
 
 ```markdown
 # Verification Report
 
 **Date:** YYYY-MM-DD  
-**Project:** <project name from .code-crew/config.yaml or cwd name>  
-**Scans run:** Architecture · Security · Compliance  
+**Project:** <cwd name>  
+**Scans run:** Architecture · Security · Compliance · Domain  
 
 ---
 
@@ -60,14 +58,10 @@ Use `platform_shell` to write the file. Report format:
 
 ## Appendix — All Pass Items
 
-<collapsible or plain list of PASS lines>
+<plain list of PASS lines>
 ```
 
-Save to: `.code-crew/verify-report-<YYYYMMDD>.md` (use today's date).
-
-**Step 3 — Output.**
-
-Print the full report content, then end with exactly:
+End your output with exactly:
 ```
 REPORT SAVED: .code-crew/verify-report-<YYYYMMDD>.md
 ```

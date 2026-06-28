@@ -28,6 +28,8 @@ Using the acceptance criteria from the sprint context:
 
 Output the paths of the created files and confirm how many scenario stubs were created (one per AC + negatives). Include a reminder that QA fills in the Gherkin steps before the engineer implements the step definitions.
 
+**On tool failure** — log the error, try once with an alternative, then skip and continue. Never use absolute paths in shell commands. Include any unresolved failures in your output.
+
 **Completion signal — required.**
 End your output with exactly one of:
 - `TASK COMPLETE` — you have produced the full output described above.

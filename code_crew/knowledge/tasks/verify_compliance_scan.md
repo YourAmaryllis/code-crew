@@ -11,6 +11,8 @@ expected_output: >
 
 Scan the codebase and designs for compliance issues. Use `workspace_reader` to inspect source files and `knowledge_reader` to load active compliance stack guides (gdpr, hipaa, soc2, ccpa, fips-140-3, etc. from `CODE_CREW_STACKS`).
 
+**CRITICAL: All paths must be relative to the project root (`.`). Never use absolute paths. Never navigate above the current working directory.**
+
 **Step 1 — Identify active compliance stacks.**
 Check `CODE_CREW_STACKS` env. Load each active compliance stack guide from `knowledge/stacks/`. If no compliance stacks are active, note this and perform a baseline check only.
 
@@ -42,7 +44,10 @@ For each active compliance stack:
 - **soc2**: access control reviews, change management logs, incident response runbook in designs/
 - **fips-140-3**: approved cipher suites only (AES-256-GCM, RSA-4096, ECDSA P-384); no MD5/SHA1/DES
 
-**Step 6 — Format findings.**
+**Step 6 — Handle tool failures.**
+If any tool call fails: log `ERROR: <tool>(<args>) → <error>`, try once with an alternative, then skip. Never use absolute paths in shell commands. Include a `TOOL FAILURES:` block before the final line if any step was skipped.
+
+**Step 7 — Format findings.**
 
 ```
 FINDING [COMP]: <one-sentence description> — <file, endpoint, or data field>

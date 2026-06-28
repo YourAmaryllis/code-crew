@@ -1,18 +1,15 @@
 """
 CrewAI tool: read architecture documents (SOPs, ADDs, ADRs) from a knowledge repo.
 
-Documents are loaded into memory at construction time. Supports any project's
-knowledge repo — point DESIGNS_PATH to a local checkout, or set DESIGNS_REPO
-for auto-clone on first use.
+Documents are loaded into memory at construction time. Point DESIGNS_PATH to
+your designs directory, or place a designs/ submodule in your project root
+(auto-detected).
 
 Environment variables:
-  DESIGNS_PATH    Local path to the knowledge repo (required, or auto-cloned here)
-  DESIGNS_REPO    Git URL to clone if DESIGNS_PATH does not exist (optional)
-  DESIGNS_BRANCH  Branch to checkout when cloning (default: main)
+  DESIGNS_PATH    Local path to the designs directory (auto-detected from ./designs/)
 """
 
 import os
-import subprocess
 from pathlib import Path
 
 from crewai.tools import BaseTool
@@ -25,32 +22,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _designs_root() -> Path:
     explicit = os.environ.get("DESIGNS_PATH", "")
-    return Path(explicit) if explicit else default_designs_path()
+    if explicit:
+        return Path(explicit)
+    local = Path.cwd() / "designs"
+    if local.exists():
+        return local
+    return default_designs_path()
 
-
-def _ensure_designs(root: Path) -> Path:
-    """Clone or pull the knowledge repo."""
-    repo_url = os.environ.get("DESIGNS_REPO", "")
-    branch = os.environ.get("DESIGNS_BRANCH", "main")
-
-    if not root.exists():
-        if not repo_url:
-            return root  # missing and no repo configured — warn in model_post_init
-        print(f"[sop_reader] Cloning {repo_url} → {root}")
-        subprocess.run(
-            ["git", "clone", "--depth=1", "--branch", branch, repo_url, str(root)],
-            check=True,
-            capture_output=True,
-        )
-    elif (root / ".git").exists() and repo_url:
-        print(f"[sop_reader] Pulling latest from {repo_url}")
-        subprocess.run(
-            ["git", "-C", str(root), "pull", "--ff-only"],
-            check=False,          # don't crash if offline or dirty
-            capture_output=True,
-        )
-
-    return root
 
 
 def _load_bundle(designs_root: Path) -> dict[str, str]:
@@ -101,12 +79,12 @@ class SOPReaderTool(BaseTool):
     _docs: dict[str, str] = {}
 
     def model_post_init(self, __context) -> None:
-        root = _ensure_designs(_designs_root())
+        root = _designs_root()
         self._docs = _load_bundle(root) if root.exists() else {}
         if not self._docs:
             print(
-                "[sop_reader] Warning: no documents loaded. "
-                "Set DESIGNS_PATH or DESIGNS_REPO in your .env."
+                "[sop_reader] No documents loaded — "
+                "run /init to create a designs directory or set DESIGNS_PATH."
             )
 
     def _run(self, document_name: str) -> str:

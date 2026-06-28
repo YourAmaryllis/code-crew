@@ -37,6 +37,23 @@ from shared.tools import (
 _KNOWLEDGE = Path(__file__).parent / "knowledge"
 
 
+def _kickoff(crew: "Crew", inputs: dict) -> str:
+    """Call crew.kickoff() with one automatic retry on the tool-call-as-final-output error.
+
+    Some LLMs (NVIDIA Llama, others) occasionally return a ChatCompletionMessageFunctionCall
+    object as the task's final output instead of a text string. CrewAI then fails to construct
+    TaskOutput.raw (expects str). Rebuilding the crew resets the agent's conversation history
+    and the retry almost always completes cleanly.
+    ponytail: one retry is enough — two failures in a row means a real problem.
+    """
+    try:
+        return str(crew.kickoff(inputs=inputs))
+    except Exception as exc:
+        if "Input should be a valid string" in str(exc) and "ChatCompletion" in str(exc):
+            return str(crew.kickoff(inputs=inputs))
+        raise
+
+
 def _mcp_tools_for(agent_name: str) -> list:
     """Return MCPClientTool instances from connected servers available to this agent."""
     try:
@@ -327,8 +344,22 @@ def build_design_single_task(
             process=Process.sequential,
             verbose=True,
         )
-        result = crew.kickoff(inputs=design_input)
-    return str(result)
+        return _kickoff(crew, design_input)
+
+
+def _resolved_designs_path() -> str:
+    """Return the absolute designs directory path, or 'designs' as a default hint."""
+    explicit = os.environ.get("DESIGNS_PATH", "").strip()
+    if explicit:
+        return explicit
+    local = Path.cwd() / "designs"
+    if local.exists():
+        return str(local)
+    return "designs"
+
+
+def _designs_context_line() -> str:
+    return f"**Designs directory**: `{_resolved_designs_path()}` — use this path for all file operations involving ADRs, ADDs, TMDs, DMDs, SOPs."
 
 
 def _format_design_context(design_input: dict) -> str:
@@ -342,7 +373,8 @@ def _format_design_context(design_input: dict) -> str:
         f"## Requirement\n\n"
         f"**Issue key**: {design_input.get('issue_key', 'UNKNOWN')}\n"
         f"**Summary**: {design_input.get('issue_summary', '')}\n"
-        f"**Requirement**: {design_input.get('requirement', '')}\n\n"
+        f"**Requirement**: {design_input.get('requirement', '')}\n"
+        f"{_designs_context_line()}\n\n"
         f"**Acceptance criteria**:\n{acs}"
     )
     raw = design_input.get("raw_ticket", "")
@@ -372,6 +404,7 @@ def _format_context(sprint_input: dict) -> str:
         f"**Figma**: {sprint_input.get('figma_url', '') or 'not provided'}\n"
         f"**HTML design**: {sprint_input.get('html_design_ref', '') or 'not provided'}\n"
         f"**Relevant ADDs**: {add_refs}\n"
+        f"{_designs_context_line()}\n"
         + (f"**Architecture pattern**: {arch_style} — load `stacks/arch-{arch_style}.md` via knowledge_reader for layer rules\n" if arch_style else "")
         + f"\n**Acceptance criteria**:\n{acs}"
     )
@@ -483,8 +516,7 @@ def build_ux_single_task(
             process=Process.sequential,
             verbose=True,
         )
-        result = crew.kickoff(inputs=ux_input)
-    return str(result)
+        return _kickoff(crew, ux_input)
 
 
 _VERIFY_TASK_AGENTS: dict[str, str] = {
@@ -519,6 +551,7 @@ def build_verify_crew(project_root: str = "") -> Crew:
         f"**Project root**: {project_root or '.'}\n"
         f"**Stacks**: {stacks or 'not set'}\n"
         f"**Architecture**: {arch or 'not set'}\n"
+        f"{_designs_context_line()}\n"
     )
     if structure:
         ctx += f"\n## Project structure\n\n{structure}"
@@ -617,6 +650,7 @@ def build_domain_single_task(
         f"**Jira key**: {domain_input.get('issue_key', 'not set')}\n"
         f"**Methodology**: {methodology}\n"
         f"**Diagram format**: {diagram_fmt}\n"
+        f"{_designs_context_line()}\n"
     )
     if structure:
         sections.append(f"## Project structure\n\n{structure}")
@@ -639,8 +673,7 @@ def build_domain_single_task(
             process=Process.sequential,
             verbose=True,
         )
-        result = crew.kickoff(inputs=domain_input)
-    return str(result)
+        return _kickoff(crew, domain_input)
 
 
 def build_domain_extract_crew(target_path: str = "") -> Crew:

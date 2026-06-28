@@ -32,16 +32,14 @@ pip install -e .
 
 # 2. Configure
 cp .config.example.yaml ~/.code-crew/config.yaml
-# Edit: set bedrock.model_id, bedrock.region, issue_tracker, designs.repo
+# Edit: set bedrock.model_id, bedrock.region, issue_tracker
 
 # 3. Add designs/ as a submodule in your platform repo (preferred)
 cd /path/to/your-platform-repo
 git submodule add git@github.com:your-org/designs.git designs
 code-crew run --jira YOUR-123     # auto-detects ./designs/
 
-# Or auto-clone (set designs.repo in config.yaml — clones to ~/.code-crew/repos/designs/)
-cd /path/to/your-platform-repo
-code-crew run --jira YOUR-123
+# Or run /init to create a blank designs directory for a new project
 
 # Memory
 code-crew memory add "staging DB migrated to RDS" --category env
@@ -88,7 +86,7 @@ Key settings:
 |---------|-----|---------|
 | `bedrock` | `model_id`, `region` | Bedrock model and region |
 | `aws` | `profile` | AWS profile (if not using instance profile or ECS role) |
-| `designs` | `repo`, `branch`, `path` | Knowledge repo — auto-detected from `./designs/` if absent |
+| `designs` | `path`, `dod_path` | Designs directory — auto-detected from `./designs/` if absent |
 | `issue_tracker` | `type`, `project_key`, `jira.*` | Jira or Linear |
 | `flow` | `max_retries` | Gate retry limit |
 

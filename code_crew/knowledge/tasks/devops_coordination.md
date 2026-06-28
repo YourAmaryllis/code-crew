@@ -80,4 +80,6 @@ GitHub Actions:
 The engineer can now run BDD integration tests with TEST_RESET_ENABLED=true against dev.
 ```
 
+**On tool failure** — log the error, try once with an alternative, then skip and continue. Never use absolute paths in shell commands. Document any skipped steps in the report.
+
 Do NOT end with a planning statement. Output NO CHANGES NEEDED or DEVOPS COMPLETE.

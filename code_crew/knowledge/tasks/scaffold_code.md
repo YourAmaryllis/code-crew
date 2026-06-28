@@ -33,6 +33,8 @@ Using the acceptance criteria and story context:
 
 Output a manifest listing each path and its status: "created", "existing — no change", or "build error: <message>". Include a note on which parts the backend engineer should implement first.
 
+**On tool failure** — log the error, try once with an alternative (list parent dir, use `find_files` before `read_file`), then skip and continue. Never use absolute paths in shell commands. Include unresolved failures in the output manifest.
+
 **Completion signal — required.**
 End your output with exactly one of:
 - `TASK COMPLETE` — you have produced the full output described above.

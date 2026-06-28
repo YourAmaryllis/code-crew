@@ -58,9 +58,9 @@ def run_checks(code_path: Path | None = None) -> StartupSummary:
     stacks = detect_stacks(root)
     required_clis = _required_clis_for_stacks(stacks)
 
-    # Always require gh and aws (Bedrock + SSO login)
     required_clis.setdefault("gh", "brew install gh  # then: gh auth login")
-    required_clis.setdefault("aws", "brew install awscli")
+    if _uses_bedrock():
+        required_clis.setdefault("aws", "brew install awscli")
 
     for cli, install_hint in sorted(required_clis.items()):
         found = shutil.which(cli) is not None
@@ -72,11 +72,12 @@ def run_checks(code_path: Path | None = None) -> StartupSummary:
         ))
 
     checks.append(_check_langfuse())
+    checks.append(_check_designs_dir(root))
 
-    # langfuse "not configured" is optional — don't count as warning
+    # langfuse and designs are optional — don't count as errors/warnings
     warnings = sum(
         1 for c in checks
-        if not c.ok and c.name not in ("git repo", "langfuse")
+        if not c.ok and c.name not in ("git repo", "langfuse", "designs")
     )
     errors = sum(1 for c in checks if not c.ok and c.name == "git repo")
 
@@ -255,3 +256,47 @@ def _cli_install_hints() -> dict[str, str]:
         "linear": "npm i -g @linear/linear && linear auth login",
         "jira": "brew install jira-cli",
     }
+
+
+def _check_designs_dir(root: Path) -> CheckResult:
+    """Check that a designs directory is configured and exists."""
+    explicit = os.environ.get("DESIGNS_PATH", "").strip()
+    if explicit:
+        p = Path(explicit)
+        if p.exists():
+            return CheckResult("designs", True, str(p), "")
+        return CheckResult(
+            "designs", False, "",
+            f"DESIGNS_PATH={explicit} does not exist — run /fix to create it",
+        )
+    local = root / "designs"
+    if local.exists():
+        return CheckResult("designs", True, str(local), "")
+    return CheckResult(
+        "designs", False, "",
+        "no designs directory — run /fix to configure one",
+    )
+
+
+def _uses_bedrock() -> bool:
+    """Return True if any configured LLM tier resolves to the bedrock provider."""
+    import json
+    raw = os.environ.get("LLM_CONFIG", "").strip()
+    if raw:
+        try:
+            cfg = json.loads(raw)
+        except json.JSONDecodeError:
+            return True  # malformed config — assume bedrock to be safe
+        providers = set()
+        default = cfg.get("default", {})
+        if default.get("provider"):
+            providers.add(default["provider"])
+        for tier in cfg.get("tiers", {}).values():
+            if tier.get("provider"):
+                providers.add(tier["provider"])
+        for agent in cfg.get("agents", {}).values():
+            if agent.get("provider"):
+                providers.add(agent["provider"])
+        return "bedrock" in providers
+    # No LLM_CONFIG → legacy Bedrock env vars path
+    return bool(os.environ.get("BEDROCK_MODEL_ID", "").strip())

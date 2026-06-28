@@ -74,6 +74,110 @@ def flush() -> None:
             pass
 
 
+def wire_crewai_events(crewai_event_bus) -> None:
+    """Subscribe to crewai event bus and create Langfuse OTel spans for each LLM call.
+
+    Must be called AFTER setup_langfuse() and AFTER crewai is imported.
+    No-op if Langfuse is not configured.
+    """
+    if _client is None:
+        return
+
+    import json as _json
+    from opentelemetry import trace as otel_trace
+    from langfuse import LangfuseOtelSpanAttributes as A
+    from crewai.events.types.llm_events import (
+        LLMCallStartedEvent,
+        LLMCallCompletedEvent,
+        LLMCallFailedEvent,
+    )
+    from crewai.events.types.crew_events import (
+        CrewKickoffStartedEvent,
+        CrewKickoffCompletedEvent,
+        CrewKickoffFailedEvent,
+    )
+
+    tracer = otel_trace.get_tracer("code-crew")
+    _crew_spans: dict[str, object] = {}   # crew_name → root OTel Span
+    _gen_spans: dict[str, object] = {}    # call_id   → generation OTel Span
+
+    @crewai_event_bus.on(CrewKickoffStartedEvent)
+    def _crew_start(source, event):
+        span = tracer.start_span(
+            name=event.crew_name or "crew-run",
+            attributes={A.TRACE_NAME: event.crew_name or "crew-run"},
+        )
+        _crew_spans[event.crew_name or "_"] = span
+
+    @crewai_event_bus.on(CrewKickoffCompletedEvent)
+    def _crew_done(source, event):
+        span = _crew_spans.pop(event.crew_name or "_", None)
+        if span:
+            try:
+                span.set_attribute(A.TRACE_OUTPUT, str(event.output or "")[:2000])
+            except Exception:
+                pass
+            span.end()
+
+    @crewai_event_bus.on(CrewKickoffFailedEvent)
+    def _crew_failed(source, event):
+        span = _crew_spans.pop(event.crew_name or "_", None)
+        if span:
+            try:
+                span.set_attribute(A.OBSERVATION_LEVEL, "ERROR")
+                span.set_attribute(A.OBSERVATION_STATUS_MESSAGE, str(event.error or "")[:500])
+            except Exception:
+                pass
+            span.end()
+
+    @crewai_event_bus.on(LLMCallStartedEvent)
+    def _llm_start(source, event):
+        parent = next(iter(_crew_spans.values()), None)
+        ctx = otel_trace.set_span_in_context(parent) if parent else None
+        try:
+            inp = (
+                _json.dumps(event.messages, default=str)
+                if not isinstance(event.messages, str)
+                else event.messages
+            )
+        except Exception:
+            inp = str(event.messages)
+        span = tracer.start_span(
+            name=f"llm/{event.model or 'call'}",
+            context=ctx,
+            attributes={
+                A.OBSERVATION_TYPE: "GENERATION",
+                A.OBSERVATION_MODEL: event.model or "",
+                A.OBSERVATION_INPUT: inp[:4000],
+            },
+        )
+        _gen_spans[event.call_id] = span
+
+    @crewai_event_bus.on(LLMCallCompletedEvent)
+    def _llm_done(source, event):
+        span = _gen_spans.pop(event.call_id, None)
+        if not span:
+            return
+        try:
+            span.set_attribute(A.OBSERVATION_OUTPUT, str(event.response or "")[:4000])
+            if event.usage:
+                span.set_attribute(A.OBSERVATION_USAGE_DETAILS, _json.dumps(event.usage))
+        except Exception:
+            pass
+        span.end()
+
+    @crewai_event_bus.on(LLMCallFailedEvent)
+    def _llm_failed(source, event):
+        span = _gen_spans.pop(event.call_id, None)
+        if span:
+            try:
+                span.set_attribute(A.OBSERVATION_LEVEL, "ERROR")
+                span.set_attribute(A.OBSERVATION_STATUS_MESSAGE, str(event.error or "")[:500])
+            except Exception:
+                pass
+            span.end()
+
+
 def _probe_credentials(host: str, auth: str) -> str:
     """
     Quick credential check against the Langfuse REST API.

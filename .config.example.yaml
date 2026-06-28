@@ -96,19 +96,17 @@ bedrock:
 # ─────────────────────────────────────────────
 # Knowledge / designs repository
 #
-# Option A — designs/ is a submodule inside your platform repo (preferred):
-#   No config needed — code-crew checks ./designs/ relative to cwd.
+# Preferred — add designs/ as a submodule inside your platform repo:
+#   git submodule add git@github.com:your-org/designs.git designs
+#   code-crew auto-detects ./designs/ relative to cwd — no config needed.
 #
-# Option B — separate git repo, auto-cloned on first run:
-designs:
-  repo: git@github.com:your-org/designs.git
-  branch: main
+# Or run /init to create a blank designs directory for new projects.
 #
-# Option C — explicit local path override:
+# Explicit path override (if designs/ lives elsewhere):
 # designs:
 #   path: /path/to/designs
 #
-# Definition of Done override (relative to designs/ or absolute):
+# Definition of Done override:
 # designs:
 #   dod_path: SOP/SOP-DoD-Definition-of-Done.md
 # ─────────────────────────────────────────────

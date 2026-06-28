@@ -11,6 +11,8 @@ expected_output: >
 
 Scan the codebase for security issues. Use `workspace_reader` to inspect source files and `knowledge_reader` to load `functions/security-privacy.md` and the active stack guides.
 
+**CRITICAL: All paths must be relative to the project root (`.`). Never use absolute paths. Never navigate above the current working directory.**
+
 **Step 1 — Hardcoded secrets scan.**
 Search for patterns that indicate hardcoded credentials in source files (not in `.env` or `.env.example`):
 - Regex patterns: `(secret|password|token|api_key|apikey|private_key)\s*=\s*["'][^"']{8,}["']`
@@ -36,7 +38,10 @@ For each category, do a targeted scan:
 **Step 4 — SBOM / dependency audit.**
 Check if a lockfile (`requirements.txt`, `go.sum`, `package-lock.json`) is present and committed. Flag if absent.
 
-**Step 5 — Format findings.**
+**Step 5 — Handle tool failures.**
+If any tool call fails: log `ERROR: <tool>(<args>) → <error>`, try once with an alternative approach, then skip. Never use absolute paths in shell commands — always relative to project root. Include a `TOOL FAILURES:` block before the final line if any step was skipped.
+
+**Step 6 — Format findings.**
 
 ```
 FINDING [SEC]: <one-sentence description> — <file:line or component name>
@@ -49,3 +54,4 @@ End your output with exactly:
 ```
 SECURITY SCAN COMPLETE
 ```
+

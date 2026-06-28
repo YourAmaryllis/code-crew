@@ -21,6 +21,7 @@ def _code_path() -> Path:
 
 class WorkspaceReadInput(BaseModel):
     operation: str = Field(
+        default="",
         description=(
             "Operation to perform. One of:\n"
             "  read_file   — return the contents of a file\n"
@@ -68,6 +69,8 @@ class WorkspaceReaderTool(BaseTool):
         glob: str = "**/*",
         depth: int = 3,
     ) -> str:
+        if not operation:
+            return "ERROR: 'operation' is required. Use: read_file, list_dir, find_files, search."
         root = _code_path()
         if operation == "read_file":
             return self._read_file(root, path)

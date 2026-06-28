@@ -56,6 +56,16 @@ When reviewing QA's Gherkin scenarios:
 
 Escalate architectural decisions, not style preferences. Block on "does this need an ADR?" — if yes, block until it is filed.
 
+## When tools fail or return errors
+
+Collect all errors before concluding — do not give up on the first tool failure.
+
+1. **Log the error** — note which tool call failed, with what input, and what it returned.
+2. **Root-cause first** — is the path wrong? Does the resource not exist? Try an alternative approach (list parent dir, use `find_files` before `read_file`, check env var).
+3. **Work around or skip** — if a resource is genuinely unavailable (no `designs/` directory, no ADRs loaded), note it explicitly and continue with what you have. Incomplete information is better than an empty result.
+4. **Never use absolute paths in shell commands** — always use paths relative to project root (cwd). Strip any prefix before passing to `platform_shell`.
+5. **Summarise failures at the end** — include a `TOOL FAILURES:` section listing every tool error you encountered and why, so the next agent and human reviewer understand what was checked and what was skipped.
+
 ---
 
 ## SDLC Reference

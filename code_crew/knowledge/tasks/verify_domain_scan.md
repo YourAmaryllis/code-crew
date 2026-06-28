@@ -38,7 +38,10 @@ For each bounded context in DMD:
 **Step 4 — Check for undocumented entities.**
 For each significant code entity (aggregate-shaped struct) NOT in DMD → `FINDING [DOMAIN]: <Entity> exists in code but not in domain model`
 
-**Step 5 — Output.**
+**Step 5 — Handle tool failures.**
+If any tool call fails: log `ERROR: <tool>(<args>) → <error>`, try once with an alternative, then skip. Never use absolute paths in shell commands. Include a `TOOL FAILURES:` block before the final line if any step was skipped.
+
+**Step 6 — Output.**
 
 For each finding:
 ```

@@ -2,18 +2,15 @@
 CrewAI tool: read knowledge documents (ADDs, ADRs, role/function/stack docs)
 from the project's knowledge repo.
 
-Documents are loaded into memory at construction time. Supports any project's
-knowledge repo — point DESIGNS_PATH to a local checkout, or set DESIGNS_REPO
-for auto-clone on first use.
+Documents are loaded into memory at construction time. Point DESIGNS_PATH to
+your designs directory, or place a designs/ submodule in your project root
+(auto-detected).
 
 Environment variables:
-  DESIGNS_PATH    Local path to the knowledge repo (required, or auto-cloned here)
-  DESIGNS_REPO    Git URL to clone if DESIGNS_PATH does not exist (optional)
-  DESIGNS_BRANCH  Branch to checkout when cloning (default: main)
+  DESIGNS_PATH    Local path to the designs directory (auto-detected from ./designs/)
 """
 
 import os
-import subprocess
 from pathlib import Path
 
 from crewai.tools import BaseTool
@@ -34,37 +31,6 @@ def _designs_root() -> Path:
         return local
     return default_designs_path()
 
-
-def _ensure_designs(root: Path) -> Path:
-    """Clone or pull the knowledge repo. Returns root whether or not it succeeds."""
-    repo_url = os.environ.get("DESIGNS_REPO", "")
-    branch = os.environ.get("DESIGNS_BRANCH", "main")
-
-    if not root.exists():
-        if not repo_url:
-            return root  # missing and no repo configured — warn in model_post_init
-        print(f"[knowledge_reader] Cloning {repo_url} → {root}")
-        try:
-            subprocess.run(
-                ["git", "clone", "--depth=1", "--branch", branch, repo_url, str(root)],
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as exc:
-            stderr = exc.stderr.decode(errors="replace").strip() if exc.stderr else ""
-            print(
-                f"[knowledge_reader] Clone failed — project knowledge unavailable.\n"
-                f"  Set DESIGNS_REPO/DESIGNS_PATH in your .env to enable it.\n"
-                + (f"  git: {stderr}" if stderr else "")
-            )
-    elif (root / ".git").exists() and repo_url:
-        subprocess.run(
-            ["git", "-C", str(root), "pull", "--ff-only"],
-            check=False,
-            capture_output=True,
-        )
-
-    return root
 
 
 def _load_bundle(designs_root: Path) -> dict[str, str]:
@@ -150,13 +116,13 @@ class KnowledgeReaderTool(BaseTool):
     _docs: dict[str, str] = {}
 
     def model_post_init(self, __context) -> None:
-        root = _ensure_designs(_designs_root())
+        root = _designs_root()
         self._docs = _load_bundle(root)  # always loads built-ins; designs root optional
         add_count = sum(1 for k in self._docs if k.startswith("ADD-") or k.startswith("ADR-"))
         if add_count == 0:
             print(
                 "[knowledge_reader] No project ADDs/ADRs loaded — "
-                "set DESIGNS_PATH or DESIGNS_REPO to enable architecture lookup."
+                "run /init to create a designs directory or set DESIGNS_PATH."
             )
 
     def _run(self, document_name: str) -> str:

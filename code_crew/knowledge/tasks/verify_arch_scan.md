@@ -24,9 +24,18 @@ For each source directory in the project:
 Look for exported functions, types, or constants that have zero references in the codebase. Flag those in core/domain layers especially (dead domain code is a design signal).
 
 **Step 4 — ADR coverage.**
-Use `knowledge_reader` to load `designs/ADR/` index. Check if any major architectural decisions visible in the code (choice of HTTP framework, DB driver, auth mechanism, external API client) are undocumented. Flag decisions with no matching ADR.
+Use `knowledge_reader` to load available ADR documents (e.g. `knowledge_reader("ADR")` to list, then fetch individual ones by stem). Check if any major architectural decisions visible in the code (choice of HTTP framework, DB driver, auth mechanism, external API client) are undocumented. The designs directory path is provided in the task context — use it for any direct file operations.
 
-**Step 5 — Format findings.**
+**Step 5 — Handle tool failures.**
+
+If any tool call fails (directory not found, file missing, shell command errors):
+- Log it: `ERROR: <tool>(<args>) → <error>` — do not retry the same call more than once.
+- Try an alternative: `list_dir` on the parent, `find_files` before `read_file`, or drop the step.
+- **Never use absolute paths** in shell commands — use paths relative to the project root (cwd).
+- If `designs/` is unavailable, emit `INFO [ARCH]: designs directory not found — ADR coverage check skipped` and continue.
+- Collect all failures and include them in a `TOOL FAILURES:` block before the final line.
+
+**Step 6 — Format findings.**
 
 Use this exact format for each finding:
 ```

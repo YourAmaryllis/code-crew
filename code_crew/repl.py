@@ -12,13 +12,18 @@ Slash commands:
   /help <message>               — inject guidance into a stuck flow
   /retry                        — force retry the stuck flow
   /abort [KEY]                  — abort a run
-  /verify                       — full codebase audit: arch + security + compliance → report + optional issue creation
+  /audit                        — full codebase audit: arch + security + compliance → report + optional issue creation
   /explore [path]               — scan platform dir tree, save as agent context
   /mcp list|connect|disconnect|status  — manage MCP server connections
   /skills                       — list available/active skills
   /skill install <url|user/repo> — install skill(s) from GitHub repo or raw URL
   /skill <name>                 — activate a skill
   /skill off [name]             — deactivate one or all skills
+  /ask <agent> <question>       — ask a specific agent directly (architect, security, engineer, qa, …)
+  /session                      — show current session (name, path, recent exchanges)
+  /session new [name]           — start a new session (default name: today's date)
+  /session use <name>           — resume an existing session
+  /session list                 — list all sessions for this project
   /fix                          — install all missing tools
   /history                      — show past runs this session
   /context [KEY]                — show agent Q&A log; export to .code-crew/decisions/
@@ -182,6 +187,15 @@ def _tool_label(tool_name: str, args) -> str | None:
             args = json.loads(args)
         except Exception:
             args = {}
+    elif not isinstance(args, dict):
+        # Pydantic model or other object — coerce to dict
+        try:
+            args = args.model_dump()
+        except Exception:
+            try:
+                args = dict(args)
+            except Exception:
+                args = {}
 
     if tool_name == "workspace_reader":
         op   = args.get("operation", "read_file") if isinstance(args, dict) else "read"
@@ -193,6 +207,10 @@ def _tool_label(tool_name: str, args) -> str | None:
             return f"  [dim]searching '{pat[:40]}' in {path or 'workspace'}[/dim]"
         if op == "list_dir":
             return f"  [dim]listing {path or '/'}[/dim]"
+        if op == "find_files":
+            glob = args.get("glob", "**/*") if isinstance(args, dict) else "**/*"
+            loc = path or "."
+            return f"  [dim]find_files {glob} in {loc}[/dim]"
         return f"  [dim]{op} {path}[/dim]"
 
     if tool_name == "platform_shell":
@@ -311,14 +329,86 @@ def _quieten_crewai_verbosity() -> None:
     try:
         listener = EventListener()
         original_console = listener.formatter.console
-        listener.formatter = _QuietFormatter(original_console)
+        quiet = _QuietFormatter(original_console)
+        listener.formatter = quiet
         # TraceCollectionListener shares the same formatter ref; update it too.
         from crewai.events.listeners.tracing.trace_listener import TraceCollectionListener
         tc = TraceCollectionListener()
         if tc.formatter is not None:
-            tc.formatter = listener.formatter
+            tc.formatter = quiet
     except Exception:
         pass  # non-fatal; user will just see more output than expected
+
+    # Register our own TaskFailedEvent handler to surface the error message.
+    # CrewAI's built-in handler calls formatter.handle_task_status("failed")
+    # but doesn't pass event.error, so the reason is otherwise invisible.
+    crewai_event_bus = None
+    try:
+        from crewai.events import TaskFailedEvent
+        from crewai.events.event_bus import crewai_event_bus
+
+        @crewai_event_bus.on(TaskFailedEvent)
+        def _on_task_failed(source, event: TaskFailedEvent) -> None:
+            if event.error:
+                quiet.console.print(f"  [red dim]{str(event.error)[:200]}[/red dim]")
+    except Exception:
+        pass
+
+    # Wire crewai event bus → Langfuse OTel spans (no-op if Langfuse not configured).
+    try:
+        if crewai_event_bus is not None:
+            from shared.telemetry import wire_crewai_events
+            wire_crewai_events(crewai_event_bus)
+    except Exception:
+        pass
+
+    # Silence crewai.flow.runtime ERROR logs — they surface internal exceptions
+    # (including our format_answer patch TypeError) directly to the console.
+    import logging
+    logging.getLogger("crewai.flow.runtime").setLevel(logging.CRITICAL)
+
+    # Patch format_answer so a list of tool calls raises instead of silently
+    # becoming AgentFinish. CrewAI's bare except in format_answer converts any
+    # parse failure into a final answer — when the LLM returns tool calls and
+    # available_functions is None, the list reaches format_answer, parse() throws,
+    # and the except wraps the list as AgentFinish(output=<list>), which then
+    # causes TaskOutput(raw=<list>) to fail Pydantic. Raising here instead lets
+    # the agent loop's exception handler deal with it (or our retry fires).
+    try:
+        import crewai.utilities.agent_utils as _agent_utils
+
+        _orig_format_answer = _agent_utils.format_answer
+
+        def _patched_format_answer(answer):
+            if isinstance(answer, list):
+                # Debug: show which tool calls the LLM tried to use as a final answer
+                try:
+                    parts = []
+                    for item in answer[:3]:
+                        if hasattr(item, "function"):
+                            fn = item.function
+                            args = (fn.arguments or "")[:80]
+                            parts.append(f"{fn.name}({args})")
+                        elif isinstance(item, dict) and "function" in item:
+                            fn = item["function"]
+                            args = str(fn.get("arguments", ""))[:80]
+                            parts.append(f"{fn.get('name', '?')}({args})")
+                    if parts:
+                        quiet.console.print(
+                            f"  [dim yellow]agent returned tool call(s) as final answer: "
+                            f"{', '.join(parts)}[/dim yellow]"
+                        )
+                except Exception:
+                    pass
+                raise TypeError(
+                    "format_answer received a list (tool calls) instead of str — "
+                    "LLM hit max_iterations mid tool-call"
+                )
+            return _orig_format_answer(answer)
+
+        _agent_utils.format_answer = _patched_format_answer
+    except Exception:
+        pass
 
     # Suppress crewai_core.PRINTER.print() calls — these print tool results,
     # agent reasoning, and task descriptions directly, bypassing the formatter.
@@ -342,6 +432,8 @@ class ReplState:
         self.active: dict[str, tuple] = {}
         self.history: list[str] = []
         self.lock = threading.Lock()
+        from shared.session import Session
+        self.session: Session = Session.load_or_create(Session.default_name())
 
     def add(self, key: str, flow, future: Future) -> None:
         with self.lock:
@@ -646,7 +738,7 @@ def _handle_slash(line: str, state: ReplState, ui: SprintUI, executor: ThreadPoo
     elif cmd == "/fix":
         _run_fix(console)
 
-    elif cmd == "/verify":
+    elif cmd == "/audit":
         _start_verify(console)
 
     elif cmd == "/domain":
@@ -668,6 +760,20 @@ def _handle_slash(line: str, state: ReplState, ui: SprintUI, executor: ThreadPoo
 
     elif cmd == "/stack":
         _handle_stack(parts[1:], console)
+
+    elif cmd == "/session":
+        _handle_session(parts[1:], state, console)
+
+    elif cmd == "/ask":
+        if len(parts) < 3:
+            from code_crew.chat_agent import AGENT_ALIASES
+            known = ", ".join(sorted(set(AGENT_ALIASES.values())))
+            console.print(f"[red]Usage: /ask <agent> <question>[/red]")
+            console.print(f"[dim]Agents: {known}[/dim]")
+            return
+        agent_name = parts[1].lower()
+        question = " ".join(parts[2:])
+        _ask_agent(agent_name, question, state, console)
 
     elif cmd == "/profiles":
         _show_profiles(console)
@@ -1458,7 +1564,50 @@ def _run_init(console: Console) -> None:
     else:
         console.print("  [dim]No signals detected — edit .code-crew/config.yaml manually.[/dim]")
 
-    console.print("\n[bold green]Done.[/bold green] Run [bold]/jira KEY[/bold] to start.")
+    # --- designs directory ---
+    _init_designs_dir(root, console)
+
+    console.print("\n[bold green]Done.[/bold green] Run [bold]/explore[/bold] then [bold]/design KEY[/bold] to start.")
+
+
+def _init_designs_dir(root: Path, console: Console) -> None:
+    """Prompt for and create a designs directory if one isn't already configured."""
+    import yaml as _yaml
+
+    # Already configured via env or exists at default location
+    if os.environ.get("DESIGNS_PATH", "").strip():
+        console.print(f"  [dim]designs directory: {os.environ['DESIGNS_PATH']}[/dim]")
+        return
+    if (root / "designs").exists():
+        console.print(f"  [dim]designs directory: {root / 'designs'}[/dim]")
+        return
+
+    console.print(
+        "\n[yellow]No designs directory found.[/yellow] "
+        "This is where ADRs, ADDs, SOPs, and threat models live."
+    )
+    console.print("Designs directory path [designs/]: ", end="")
+    try:
+        answer = input().strip()
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    designs_path = root / (answer or "designs")
+
+    designs_path.mkdir(parents=True, exist_ok=True)
+    for subdir in ("ADR", "ADD", "SOP", "TMD", "DMD"):
+        (designs_path / subdir).mkdir(exist_ok=True)
+    console.print(f"  [green]✓[/green] created {designs_path}")
+
+    # Write to config if non-default path
+    rel = str(designs_path.relative_to(root)) if designs_path.is_relative_to(root) else str(designs_path)
+    if rel != "designs":
+        cfg_file = root / ".code-crew" / "config.yaml"
+        existing = _yaml.safe_load(cfg_file.read_text(encoding="utf-8")) or {} if cfg_file.exists() else {}
+        existing.setdefault("designs", {})["path"] = rel
+        cfg_file.write_text(_yaml.dump(existing, default_flow_style=False), encoding="utf-8")
+        console.print(f"  [green]✓[/green] designs.path: {rel} written to config")
+
+    os.environ["DESIGNS_PATH"] = str(designs_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1568,59 +1717,152 @@ def _is_in_consultation(stuck: list[str], state: ReplState) -> bool:
 # ---------------------------------------------------------------------------
 
 def _start_verify(console: Console) -> None:
-    """Run the full verification audit and prompt to open issues for REQUIRED findings."""
+    """Run the full verification audit, show summary, gate on human approval, open issues."""
     import re
     import urllib.request
     import urllib.error
     import json as _json
+    from datetime import date
 
     from code_crew.crew import build_verify_crew
 
     console.print("\n[bold]Starting verification audit…[/bold]")
     console.print("[dim]Scans: architecture · security · compliance → chief review → report[/dim]\n")
 
-    crew = build_verify_crew(project_root=str(Path.cwd()))
-    result = crew.kickoff()
-    output = str(result)
+    def _kickoff_verify():
+        crew = build_verify_crew(project_root=str(Path.cwd()))
+        return crew.kickoff()  # returns CrewOutput
 
-    # --- parse REQUIRED findings from chief review output ---
-    required = re.findall(r"^REQUIRED:\s+(.+)$", output, re.MULTILINE)
+    def _is_tool_call_exc(exc) -> bool:
+        s = str(exc)
+        return (
+            ("Input should be a valid string" in s and "ChatCompletion" in s)
+            or "format_answer received a list" in s
+            or "LLM hit max_iterations mid tool-call" in s
+        )
 
-    # --- find report path ---
-    report_match = re.search(r"REPORT SAVED:\s+(\S+)", output)
-    report_path = report_match.group(1) if report_match else ".code-crew/verify-report.md"
+    try:
+        crew_output = _kickoff_verify()
+    except Exception as exc:
+        if _is_tool_call_exc(exc):
+            console.print("[yellow]Model returned tool-call as final output — retrying…[/yellow]")
+            try:
+                crew_output = _kickoff_verify()
+            except Exception as exc2:
+                console.print(f"\n[bold red]Verify failed:[/bold red] {exc2}")
+                return
+        else:
+            console.print(f"\n[bold red]Verify failed:[/bold red] {exc}")
+            return
 
-    console.print(f"\n[green]✓[/green] Report saved: [bold]{report_path}[/bold]")
+    # --- map task name → raw output ---
+    task_map: dict[str, str] = {}
+    for t in getattr(crew_output, "tasks_output", []) or []:
+        if getattr(t, "name", None):
+            task_map[t.name] = getattr(t, "raw", "") or ""
 
-    if not required:
-        console.print("[green]No REQUIRED findings — codebase is clean.[/green]")
-        return
+    chief_out = task_map.get("verify_chief_review", str(crew_output))
+    report_out = task_map.get("verify_report", "")
 
-    console.print(f"\n[red bold]{len(required)} REQUIRED finding(s):[/red bold]")
-    for i, r in enumerate(required, 1):
-        console.print(f"  [red]{i}.[/red] {r}")
+    # --- parse findings from chief review ---
+    # Must contain [TAG] to exclude the summary count lines (REQUIRED: N / EXEMPT: N / PASS: N)
+    _tag = r"\[(?:ARCH|SEC|COMP|DOMAIN)\]"
+    required = re.findall(rf"^REQUIRED:\s+({_tag}.+)$", chief_out, re.MULTILINE)
+    exempt   = re.findall(rf"^EXEMPT:\s+({_tag}.+)$",   chief_out, re.MULTILINE)
+    passed   = re.findall(rf"^PASS:\s+({_tag}.+)$",     chief_out, re.MULTILINE)
 
-    # --- prompt to open issues ---
-    console.print(f"\nOpen {len(required)} Jira issue(s) for REQUIRED findings? [y/N] ", end="")
+    # --- per-scan finding counts ---
+    scan_defs = [
+        ("verify_arch_scan",        "Architecture", "ARCH"),
+        ("verify_security_scan",    "Security",     "SEC"),
+        ("verify_compliance_scan",  "Compliance",   "COMP"),
+        ("verify_domain_scan",      "Domain",       "DOMAIN"),
+    ]
+    scan_counts: dict[str, int] = {}
+    for task_name, _, tag in scan_defs:
+        raw = task_map.get(task_name, "")
+        scan_counts[task_name] = len(re.findall(rf"^FINDING \[{tag}\]", raw, re.MULTILINE))
+
+    # --- write report file ---
+    today = date.today().strftime("%Y%m%d")
+    report_path = Path(".code-crew") / f"verify-report-{today}.md"
+    report_path.parent.mkdir(exist_ok=True)
+
+    # Always build the report from parsed data — agent content has template text (YYYY-MM-DD etc.)
+    today_fmt = f"{today[:4]}-{today[4:6]}-{today[6:]}"
+    proj = Path.cwd().name
+    rows_required = "\n".join(f"- {r}" for r in required) or "_None_"
+    rows_exempt   = "\n".join(f"- {e}" for e in exempt)   or "_None_"
+    rows_passed   = "\n".join(f"- {p}" for p in passed)   or "_None_"
+    content = (
+        f"# Audit Report\n\n"
+        f"**Date:** {today_fmt}  \n**Project:** {proj}  \n"
+        f"**Scans run:** Architecture · Security · Compliance · Domain\n\n---\n\n"
+        f"## Summary\n\n"
+        f"| Status | Count |\n|--------|-------|\n"
+        f"| REQUIRED (must fix) | {len(required)} |\n"
+        f"| EXEMPT (accepted risk) | {len(exempt)} |\n"
+        f"| PASS (clean or false positive) | {len(passed)} |\n\n---\n\n"
+        f"## Required Fixes\n\n{rows_required}\n\n---\n\n"
+        f"## Exemptions\n\n{rows_exempt}\n\n---\n\n"
+        f"## Appendix — Pass Items\n\n{rows_passed}\n"
+    )
+    report_path.write_text(content + "\n", encoding="utf-8")
+
+    # ── Summary display ──────────────────────────────────────────────────
+    console.print(f"\n[bold]Verification Summary[/bold]  [dim]{report_path}[/dim]\n")
+
+    for task_name, label, _ in scan_defs:
+        n = scan_counts.get(task_name, 0)
+        icon = "[green]✓[/green]" if n == 0 else "[red]✗[/red]"
+        console.print(f"  {icon} {label:<18} {n} finding(s)")
+
+    console.print()
+    console.print(f"  [red bold]REQUIRED:[/red bold]  {len(required)}")
+    console.print(f"  [yellow]EXEMPT:[/yellow]    {len(exempt)}")
+    console.print(f"  [green]PASS:[/green]      {len(passed)}")
+
+    if required:
+        console.print(f"\n[red bold]Required fixes — must resolve before next release:[/red bold]")
+        for i, r in enumerate(required, 1):
+            console.print(f"  [red]{i}.[/red] {r}")
+
+    # ── Human gate ──────────────────────────────────────────────────────
+    console.print()
+    if required:
+        console.print(
+            f"[bold]Chief Architect: approve report and open {len(required)} issue(s)?[/bold] [y/N] ",
+            end="",
+        )
+    else:
+        console.print("[bold]Chief Architect: approve report?[/bold] [y/N] ", end="")
+
     try:
         answer = input().strip().lower()
     except (EOFError, KeyboardInterrupt):
         answer = "n"
 
     if answer != "y":
-        console.print("[dim]Issues not created. Fix findings manually.[/dim]")
+        console.print(f"[dim]Report saved to {report_path}. No issues created.[/dim]")
         return
 
-    jira_url = os.environ.get("JIRA_URL", "").rstrip("/")
-    jira_user = os.environ.get("JIRA_USER", "")
+    if not required:
+        console.print(f"[green]✓ Report approved. {report_path}[/green]")
+        return
+
+    # ── Create issue tickets ─────────────────────────────────────────────
+    jira_url   = os.environ.get("JIRA_URL", "").rstrip("/")
+    jira_user  = os.environ.get("JIRA_USER", "")
     jira_token = os.environ.get("JIRA_TOKEN", "")
     project_key = os.environ.get("PROJECT_KEY", "PROJ")
 
     if not all([jira_url, jira_user, jira_token]):
-        console.print("[yellow]JIRA_URL / JIRA_USER / JIRA_TOKEN not set — printing issues instead:[/yellow]")
-        for r in required:
-            console.print(f"  [bold]Title:[/bold] {r[:100]}")
-            console.print(f"  [bold]Labels:[/bold] verify, security\n")
+        console.print("[yellow]Jira not configured — issues to create:[/yellow]\n")
+        for i, r in enumerate(required, 1):
+            tag = re.match(r"\[(ARCH|SEC|COMP|DOMAIN)\]", r)
+            label = tag.group(1).lower() if tag else "verify"
+            console.print(f"  {i}. [bold][verify] {r[:100]}[/bold]")
+            console.print(f"     Labels: verify, {label}-audit\n")
         return
 
     import base64
@@ -1628,8 +1870,9 @@ def _start_verify(console: Console) -> None:
     created: list[str] = []
 
     for finding in required:
-        # Strip tag prefix like [SEC] or [ARCH] for the summary
-        summary = re.sub(r"^\[(ARCH|SEC|COMP)\]\s*", "", finding)[:200]
+        summary = re.sub(r"^\[(ARCH|SEC|COMP|DOMAIN)\]\s*", "", finding)[:200]
+        tag_match = re.match(r"\[(\w+)\]", finding)
+        label = tag_match.group(1).lower() + "-audit" if tag_match else "verify"
         payload = _json.dumps({
             "fields": {
                 "project": {"key": project_key},
@@ -1641,7 +1884,7 @@ def _start_verify(console: Console) -> None:
                     ]}]
                 },
                 "issuetype": {"name": "Bug"},
-                "labels": ["verify", "security-audit"],
+                "labels": ["verify", label],
             }
         }).encode()
         req = urllib.request.Request(
@@ -1731,9 +1974,30 @@ def _start_domain_extract(path: str, console: Console) -> None:
     console.print(f"\n[bold]Domain extract — {target}[/bold]")
     console.print("[dim]Scanning code for aggregates, events, value objects…[/dim]\n")
 
-    crew = build_domain_extract_crew(target_path=target)
-    result = crew.kickoff()
-    output = str(result)
+    def _kickoff() -> str:
+        return str(build_domain_extract_crew(target_path=target).kickoff())
+
+    def _is_tool_call_exc(exc) -> bool:
+        s = str(exc)
+        return (
+            ("Input should be a valid string" in s and "ChatCompletion" in s)
+            or "format_answer received a list" in s
+            or "LLM hit max_iterations mid tool-call" in s
+        )
+
+    try:
+        output = _kickoff()
+    except Exception as exc:
+        if _is_tool_call_exc(exc):
+            console.print("[yellow]Model returned tool-call as final output — retrying…[/yellow]")
+            try:
+                output = _kickoff()
+            except Exception as exc2:
+                console.print(f"\n[bold red]Domain extract failed:[/bold red] {exc2}")
+                return
+        else:
+            console.print(f"\n[bold red]Domain extract failed:[/bold red] {exc}")
+            return
 
     import re
     match = re.search(r"DOMAIN EXTRACT COMPLETE", output, re.IGNORECASE)
@@ -1865,6 +2129,26 @@ def _run_explore(target: str, console: Console) -> None:
     except Exception as exc:
         console.print(f"[dim]LLM phase skipped: {exc}[/dim]")
 
+    # --- persist detected stacks + arch to .code-crew/config.yaml ---
+    if stacks or arch_style:
+        import yaml as _yaml
+        cfg_path = out_dir / "config.yaml"
+        cfg_data: dict = {}
+        if cfg_path.exists():
+            try:
+                cfg_data = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                cfg_data = {}
+        if stacks:
+            cfg_data["stacks"] = stacks
+        if arch_style:
+            cfg_data.setdefault("architecture", {})["style"] = arch_style
+        cfg_path.write_text(_yaml.safe_dump(cfg_data, default_flow_style=False, sort_keys=False), encoding="utf-8")
+        # Also activate stacks in current process so they're available immediately
+        if stacks:
+            os.environ["_CODE_CREW_STACKS_PROFILE"] = ",".join(stacks)
+        console.print(f"[green]✓[/green] Updated [dim]{cfg_path}[/dim] with detected stacks and architecture")
+
     svc_dirs = svc_dirs_scan
 
     # --- OTM threat model generation ---
@@ -1939,12 +2223,19 @@ def _run_fix(console: Console) -> None:
     summary = run_checks()
     failed = [c for c in summary.checks if not c.ok and c.fix]
 
+    # Handle designs dir separately — interactive, not a brew/pip command
+    designs_check = next((c for c in failed if c.name == "designs"), None)
+    if designs_check:
+        _init_designs_dir(Path.cwd(), console)
+        failed = [c for c in failed if c.name != "designs"]
+
     _RUNNABLE = ("brew install", "pip install", "go install", "npm install", "npm i")
     to_run = [(c.name, c.fix.split("#")[0].strip()) for c in failed
               if any(c.fix.startswith(p) for p in _RUNNABLE)]
 
     if not to_run:
-        console.print("[dim]Nothing to fix — all tools present.[/dim]")
+        if not designs_check:
+            console.print("[dim]Nothing to fix — all tools present.[/dim]")
         return
 
     console.print(f"[bold]Installing {len(to_run)} missing tool(s)...[/bold]")
@@ -2074,15 +2365,86 @@ def _abort(key: str, state: ReplState, console: Console) -> None:
 # Chat passthrough
 # ---------------------------------------------------------------------------
 
+def _handle_session(args: list[str], state: ReplState, console: Console) -> None:
+    """Handle /session [new [name] | use <name> | list]."""
+    from shared.session import Session
+
+    sub = args[0].lower() if args else "show"
+
+    if sub == "list":
+        sessions = Session.list_all()
+        if not sessions:
+            console.print("[dim]No sessions yet.[/dim]")
+            return
+        for name in sessions:
+            marker = "[bold cyan]→[/bold cyan] " if name == state.session.name else "  "
+            console.print(f"{marker}{name}")
+
+    elif sub == "new":
+        name = args[1] if len(args) > 1 else Session.default_name()
+        state.session = Session.load_or_create(name)
+        console.print(f"[green]New session:[/green] [bold]{name}[/bold]")
+
+    elif sub == "use":
+        if len(args) < 2:
+            console.print("[red]Usage: /session use <name>[/red]")
+            return
+        name = args[1]
+        state.session = Session.load_or_create(name)
+        exchanges = len(state.session._exchanges)
+        console.print(
+            f"[green]Resumed session:[/green] [bold]{name}[/bold]"
+            f"  [dim]({exchanges} exchange(s))[/dim]"
+        )
+        if exchanges:
+            console.print(state.session.summary())
+
+    else:  # /session or /session show
+        s = state.session
+        exchanges = len(s._exchanges)
+        console.print(
+            f"[bold]Session:[/bold] {s.name}  "
+            f"[dim]{s._path}  ({exchanges} exchange(s))[/dim]"
+        )
+        if exchanges:
+            console.print(s.summary())
+        console.print(
+            "[dim]  /session new [name] · /session use <name> · /session list[/dim]"
+        )
+
+
+def _ask_agent(agent_name: str, question: str, state: ReplState, console: Console) -> None:
+    from code_crew.chat_agent import ask_agent, AGENT_ALIASES
+    canonical = AGENT_ALIASES.get(agent_name)
+    if not canonical:
+        known = ", ".join(sorted(set(AGENT_ALIASES.values())))
+        console.print(f"[red]Unknown agent '{agent_name}'.[/red] Known: {known}")
+        return
+    console.print(f"[dim][session: {state.session.name}] Asking {canonical}…[/dim]")
+    sprint_ctx = _sprint_context_str(state)
+    session_ctx = state.session.context_block()
+    ctx = "\n\n".join(filter(None, [session_ctx, sprint_ctx]))
+    state.session.add("user", f"[to {canonical}] {question}")
+    try:
+        answer = ask_agent(agent_name, question, sprint_context=ctx)
+        console.print(answer)
+        state.session.add(canonical, answer)
+    except Exception as exc:
+        console.print(f"[red]Error from {canonical}: {exc}[/red]")
+
+
 def _handle_chat(line: str, state: ReplState, console: Console) -> None:
     from code_crew.chat_agent import ask
 
-    # Build sprint context from active flows
     sprint_ctx = _sprint_context_str(state)
-    console.print("[dim]Thinking...[/dim]")
+    session_ctx = state.session.context_block()
+    ctx = "\n\n".join(filter(None, [session_ctx, sprint_ctx]))
+    console.print(f"[dim][session: {state.session.name}] Thinking…[/dim]")
+    state.session.add("user", line)
     try:
-        answer = ask(line, sprint_context=sprint_ctx)
+        answer = ask(line, sprint_context=ctx)
         console.print(answer)
+        state.session.add("assistant", answer)
     except Exception as exc:
         console.print(f"[red]Chat error: {exc}[/red]")
 

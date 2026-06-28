@@ -11,8 +11,8 @@ Config files use structured YAML — each section maps to a set of env vars:
     profile: myprofile
 
   designs:
-    repo: git@github.com:org/designs.git
-    branch: main
+    path: /path/to/designs      # optional override (auto-detected from ./designs/)
+    dod_path: SOP/SOP-DoD.md   # optional override
 
   issue_tracker:
     type: jira
@@ -59,8 +59,6 @@ _ENV_MAP: dict[str, object] = {
         "profile": "AWS_PROFILE",
     },
     "designs": {
-        "repo": "DESIGNS_REPO",
-        "branch": "DESIGNS_BRANCH",
         "path": "DESIGNS_PATH",
         "dod_path": "DOD_PATH",
     },

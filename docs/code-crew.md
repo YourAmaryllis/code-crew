@@ -29,7 +29,7 @@ Five distinct flows are supported:
 | **Design** | `/design <KEY>` | Pre-implementation: ADD/ADR/TMD stub before any code is written |
 | **UX** | `/ux <KEY>` | Figma → component spec → implementation → UX review loop |
 | **Domain** | `/domain design <KEY>` | Async event storming (3-phase): flow discovery → per-flow storming → synthesis → `designs/DMD/` |
-| **Verify** | `/verify` | Full codebase audit: arch · security · compliance · domain drift |
+| **Audit** | `/audit` | Full codebase audit: arch · security · compliance · domain drift |
 
 Typical first-run order: `/init` → `/explore` → `/design <KEY>` → `/issue <KEY>`.
 
@@ -72,7 +72,7 @@ Skills are OKF `.md` files that modify agent output style for the current sessio
 │  /init    → pure Python setup   /explore → pure Python scan    │
 │  /issue → TicketFlow      /design → DesignFlow                 │
 │  /ux    → UxFlow          /domain → DomainFlow                 │
-│                           /verify → build_verify_crew()        │
+│                           /audit  → build_verify_crew()        │
 └───────────────────────────┬────────────────────────────────────┘
                             │
           ┌─────────────────▼─────────────────┐
@@ -223,7 +223,7 @@ Phase 3 — domain_synthesis  (once)
 
 `/domain extract [path]` runs `domain_extract` as a standalone task — scans existing code and produces the same DMD output format by reverse-engineering.
 
-### Verify (`/verify`)
+### Audit (`/audit`)
 
 Six-task sequential audit. No retry loops — produces a report with FINDING / PASS / REQUIRED lines.
 
@@ -487,9 +487,7 @@ Resolution order: **agent override → tier override → default → legacy `bed
 | `JIRA_URL` | Yes | Jira base URL |
 | `JIRA_USER` | Yes | Jira user email |
 | `JIRA_TOKEN` | Yes | Jira API token |
-| `DESIGNS_PATH` | No | Path to designs repo checkout (auto-detected from `./designs/`) |
-| `DESIGNS_REPO` | No | Git URL — auto-cloned if `DESIGNS_PATH` missing |
-| `DESIGNS_BRANCH` | No | Branch to clone (default: `main`) |
+| `DESIGNS_PATH` | No | Path to designs directory (auto-detected from `./designs/`) |
 | `DOD_PATH` | No | Override path to DoD document |
 | `CODE_CREW_STACKS` | No | Comma-separated active stacks |
 | `CODE_CREW_SKILLS` | No | Comma-separated active skills |
@@ -506,6 +504,33 @@ Resolution order: **agent override → tier override → default → legacy `bed
 | `LANGFUSE_PUBLIC_KEY` | No | Langfuse tracing (OTLP) |
 | `LANGFUSE_SECRET_KEY` | No | Langfuse tracing (OTLP) |
 | `LANGFUSE_HOST` | No | Langfuse host (default: `https://cloud.langfuse.com`) |
+
+---
+
+## MCP servers
+
+Agents can use tools from any MCP-compatible server. Config: `~/.code-crew/mcp.yaml` (see `.mcp.example.yaml`).
+
+```yaml
+servers:
+  figma:
+    command: npx @figma/mcp-server
+    env:
+      FIGMA_TOKEN: ${FIGMA_TOKEN}
+    agents: [ux_lead]          # omit to make available to all agents
+  linear:
+    command: npx @linear/linear-mcp-server
+    agents: [architect, scrum_master]
+```
+
+Tools from connected servers are injected into the agents listed under `agents:` (or all agents if omitted) for any crew run started after `/mcp connect`.
+
+```
+/mcp list                 — show configured servers
+/mcp connect figma        — start server, inject its tools into agents
+/mcp disconnect figma     — stop server
+/mcp status               — show active connections
+```
 
 ---
 
@@ -558,7 +583,7 @@ Output files in `designs/DMD/`:
 
 `/domain extract [path]` runs `domain_extract` as a standalone task — reverse-engineers the model from existing code.
 
-`/verify` includes `verify_domain_scan` — compares `designs/DMD/` against actual code entities and flags `FINDING [DOMAIN]` for drift.
+`/audit` includes `verify_domain_scan` — compares `designs/DMD/` against actual code entities and flags `FINDING [DOMAIN]` for drift.
 
 Methodology is configurable (`domain.methodology` in config or `DOMAIN_METHODOLOGY` env var):
 - `event-storming` — three-phase collaborative; best for complex or poorly-understood domains
@@ -625,7 +650,7 @@ Achieved via a `_QuietFormatter` replacing CrewAI's `EventListener.formatter` an
 When `/issue <KEY>` is run and a checkpoint exists, the REPL shows:
 
 ```
-Checkpoint found for LOOPLAT-92 (5 task(s) complete: sprint_planning, architecture_review, scaffold_code, scaffold_test, bdd_authoring).
+Checkpoint found for PROJ-92 (5 task(s) complete: sprint_planning, architecture_review, scaffold_code, scaffold_test, bdd_authoring).
 Resume? [Y/n]
 ```
 

@@ -91,6 +91,8 @@ If none: state "No new infrastructure requirements."
 **Step 11 — Verify API spec** (if Step 7 ran).
 Run `api_spec` tool with `operation: check_drift`. If it reports drift, fix before declaring IMPLEMENTATION COMPLETE.
 
+**On tool failure** — log the error, try once with an alternative (list parent dir, use `find_files` before `read_file`), then skip and continue. Never use absolute paths in shell commands. Include any unresolved failures in your completion output.
+
 **Completion signal — mandatory.**
 Your final line MUST be exactly one of:
 - `IMPLEMENTATION COMPLETE` — you wrote and verified all required code and unit tests

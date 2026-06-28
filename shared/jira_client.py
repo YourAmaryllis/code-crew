@@ -17,7 +17,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from crewai import LLM
+from shared.llm_factory import get_llm_for_tier
 
 _PROMPT_PATH = Path(__file__).parent.parent / "code_crew" / "knowledge" / "prompts" / "extract_jira_ticket.md"
 
@@ -141,14 +141,7 @@ def _load_extraction_prompt() -> str:
 def _extract_with_llm(raw_ticket: str) -> dict:
     """Call the fast LLM to extract story, ACs, sprint_goal, figma_url, add_refs."""
     system_prompt = _load_extraction_prompt()
-    model_id = os.environ.get("BEDROCK_FAST_MODEL_ID") or os.environ["BEDROCK_MODEL_ID"]
-    region = os.environ.get("BEDROCK_REGION", "us-east-1")
-
-    llm = LLM(
-        model=f"bedrock/{model_id}",
-        aws_region_name=region,
-        temperature=0.0,
-    )
+    llm = get_llm_for_tier("fast")
 
     messages = [
         {"role": "system", "content": system_prompt},
