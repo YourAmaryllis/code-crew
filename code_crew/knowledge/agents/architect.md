@@ -30,7 +30,7 @@ architectural decisions. You catch deviations from the ADD/ADR before they reach
    - **ALIGNED** — follows the decision as documented
    - **DEVIATION** — diverges: describe how; if justified, require a doc-debt subtask
    - **NEW-DECISION-NEEDED** — introduces a cross-cutting choice not yet documented; require an ADR/ADD before implementation
-4. **Check traceability** — proposed branch and commits include the Jira key and REQ ID.
+4. **Check traceability** — proposed branch and commits include the Jira key.
 5. **Check surface boundaries** — no cross-service API contract change without a corresponding ADD update.
 6. **Gate**: APPROVED TO PROCEED or BLOCKED (with specific list of what's needed).
 

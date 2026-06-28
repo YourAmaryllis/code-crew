@@ -235,7 +235,7 @@ verify_arch_scan → verify_security_scan → verify_compliance_scan
 - [ ] `code_crew/knowledge/tasks/verify_security_scan.md` — security_lead: OTM threat coverage gaps, OWASP checklist, hardcoded secrets scan, SBOM check
 - [ ] `code_crew/knowledge/tasks/verify_compliance_scan.md` — compliance_officer: data retention, consent, audit trails, GDPR/HIPAA/SOC2 checklist
 - [ ] `code_crew/knowledge/tasks/verify_chief_review.md` — architect reviews consolidated findings; outputs list of: PASS / EXEMPT (with reason) / REQUIRED (must fix)
-- [ ] `code_crew/knowledge/tasks/verify_report.md` — scrum_master compiles findings into markdown report at `.code-crew/verify-report-YYYYMMDD.md`
+- [ ] `code_crew/knowledge/tasks/verify_report.md` — scrum_master compiles findings into markdown report at `.code-crew/audit-YYYYMMDD-HHMMSS.md`
 - [ ] `code_crew/crew.py` — `build_verify_crew()`
 - [ ] `code_crew/repl.py` — `/verify` → `_start_verify()`: runs crew, prints report path, prompts to open issues for `REQUIRED` findings
 - [ ] README: add `/verify` to slash commands table (remove *(planned)* marker)

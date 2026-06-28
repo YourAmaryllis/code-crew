@@ -11,8 +11,8 @@ context_agents:
 expected_output: >
   Concrete evidence that code was written and verified — NOT a plan. Required:
   1. FILES CHANGED block listing every file path created or modified (see format below).
-  2. `go build ./...` (or `npx tsc --noEmit`) output confirming 0 errors.
-  3. `go test ./... -count=1` output (or equivalent) confirming tests pass.
+  2. Build/typecheck output confirming 0 errors (use the project's `commands.build` or `commands.typecheck` from structure.md).
+  3. Test output confirming tests pass (use the project's `commands.test` from structure.md).
   4. Final line: IMPLEMENTATION COMPLETE
   If frontend is skipped due to no Figma link, state that explicitly and still provide (1)-(4) for backend.
 
@@ -34,6 +34,7 @@ surfaces as required by the story and ADD.
 **Step 1 — Load context.** Use `knowledge_reader` to load:
 - The ADD identified by the architect in the architecture review
 - For each ADD: read its `stacks` frontmatter field, then load each named stack document via `knowledge_reader`. The `stacks` field is authoritative — it tells you exactly which conventions to follow for this component (e.g. `stacks: [go-backend, ecs-deployment]` means follow Go and ECS conventions; `stacks: [typescript-react]` means follow React/TS conventions). Do not assume stack from the Jira title alone.
+- Use `workspace_reader` to read `.code-crew/structure.md`. The `## Project commands` section lists the exact commands for this project's build, test, lint, typecheck, and audit steps. Use those commands — do not assume `go test`, `npm test`, or any other tool unless the structure.md says to use it.
 
 Do not begin implementation without understanding the ADD. No ADD = flag as blocker.
 
@@ -50,10 +51,15 @@ Check whether a branch for this ticket already exists: `git branch -a | grep <JI
 - **Does not exist** → `git checkout -b feature/<JIRA-KEY>-<slug>` from `main`.
 
 **Step 5 — Backend implementation (if in scope).**
-- Write `*_test.go` stubs first, then implement
-- HTTP parsing → `internal/api/`; business logic → `internal/ard/`
-- `go build ./...` after every new file — fix errors before continuing
-- `go test ./... -count=1` — all tests pass before committing
+- Write test stubs first (naming convention from the stack guide), then implement
+- Follow the directory conventions from the architecture guide and stack guide loaded in Step 1
+- Run the `commands.build` command after every new file — fix errors before continuing
+- Run the `commands.test` command — all tests must pass before committing
+- **Wiring check (mandatory):** For every new production function (validation gate, helper, middleware), run
+  `grep -rn "<FunctionName>" .` and confirm at least one call site exists outside the test file.
+  A function defined but never called from production code is dead code — the feature is not actually
+  active. If any new function is unwired, add the call in the appropriate entry point (handler,
+  validation chain, middleware) before proceeding.
 
 **Step 6 — Frontend implementation (if in scope).**
 First decide whether a design artifact is needed:
@@ -61,25 +67,22 @@ First decide whether a design artifact is needed:
 - **New visual layout, new page, or new component**: look for a design artifact anywhere in the ticket or repository: Jira attachment, link to any tool (Figma, Sketch, Zeplin, HTML mockup, wireframe image, designs/ directory doc). The tool does not matter — use whatever is available.
   - Found one → implement from it. Write `types.ts` first, then `<Component>.test.tsx`, then `index.tsx`.
   - Not found → skip frontend only, note "Frontend skipped: no design artifact found", continue to Step 7. Do NOT stop the entire task.
-- `npx tsc --noEmit` — no type errors before committing
+- Run `commands.typecheck` from structure.md — no type errors before committing
 - Verify ARIA labels, keyboard nav, WCAG 2.1 AA colour contrast
 
 **Step 7 — Update API spec (if the feature adds or changes HTTP routes).**
 - Load `functions/api-standards.md` via `knowledge_reader` for the spec conventions
-- **Go:** run `swag init -g cmd/server/main.go -o docs/` and commit `docs/swagger.json` + `docs/swagger.yaml`
-- **Python:** run `python -m scripts.export_openapi` and commit `docs/openapi.json`
-- **TypeScript client:** if the frontend consumes the updated spec, run `npm run gen:api` and commit `src/api/schema.d.ts`
+- Run `commands.api_spec` from structure.md to regenerate the spec and commit the output files
+- If `commands.api_spec` is not set, check the stack guide for the correct generation command
 - Use `api_spec` tool to verify no spec drift before committing
 - If no HTTP routes changed: skip this step and state "No API spec changes."
 
 **Step 8 — DB migration (if the feature adds, alters, or drops schema objects).**
 - Load `functions/db-schema.md` via `knowledge_reader` for naming conventions and rules
-- Detect the migration tool from `DB_MIGRATION_TOOL` env, or from files (`alembic.ini` → alembic; `migrations/*.sql` with goose header → goose; `atlas.hcl` → atlas)
-- **alembic:** `alembic revision --autogenerate -m "<description>"` — review the generated file before committing
-- **goose:** `goose -dir migrations create <description> sql` — fill both Up and Down sections
-- **atlas:** `atlas migrate diff <name> --dir file://migrations --to "postgres://$DB_URL" --dev-url "docker://postgres/15"`
+- The migration tool is in `DB_MIGRATION_TOOL` env (set by /explore from `alembic.ini`, goose headers, or `atlas.hcl`). If unset, inspect the migrations directory to identify the tool in use.
+- Use `commands.db_migrate` from structure.md (or the tool's standard command) to create the migration stub — review the generated file before committing
 - Commit the migration file in the same branch as the model/handler change
-- **Do NOT run `upgrade head` / `goose up` / `atlas migrate apply`** — applying migrations is a human + CI step
+- **Do NOT apply the migration** (`upgrade head`, `goose up`, `atlas migrate apply`, etc.) — applying is a human + CI step
 - If no schema changes: state "No DB schema changes."
 
 **Step 9 — Rebase.**

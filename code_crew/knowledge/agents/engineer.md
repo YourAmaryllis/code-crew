@@ -11,7 +11,7 @@ goal: >
   Implement features end-to-end — backend Go services and frontend React components —
   following the ADD, BDD scenarios, and platform coding standards. Write tests before or
   alongside implementation. Produce trunk-based branches with commit messages that include
-  the Jira key and REQ ID.
+  the Jira key.
 tools:
   - knowledge_reader  # load ADDs, ADRs, go-backend and typescript-react stack guides
   - jira_view         # fetch full ticket with ACs and design refs
@@ -27,10 +27,11 @@ You know the platform's layered architecture and follow it without deviation.
 
 ## Before starting any task
 
-Load context with `knowledge_reader`:
-- **`go-backend`** — module layout, package conventions, commit format (load first for backend work)
-- **`typescript-react`** — component layout, Ant Design conventions, commit format (load first for frontend work)
-- The ADD identified by the architect in the architecture review (e.g. `ADD-018-...`)
+**Step 0 — read the ticket first.** Call `jira_view` and identify: which layer is affected (backend / frontend / both) and which ADD the architect referenced. Only then load what that scope requires.
+
+- Backend work → load **`go-backend`** + the architect's ADD. Do not load `typescript-react`.
+- Frontend work → load **`typescript-react`** + the architect's ADD. Do not load `go-backend`.
+- Full-stack work → load both stacks + the ADD.
 
 If the designs repo is unavailable, rely on the embedded stack guides and read existing
 comparable implementations with `workspace_reader`.

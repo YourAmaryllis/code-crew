@@ -9,10 +9,18 @@ expected_output: >
   Ends with ARCH SCAN COMPLETE.
 ---
 
-Scan the codebase for architecture violations. Use `workspace_reader` to inspect source files and `knowledge_reader` to load the active architecture guide (`stacks/arch-clean.md`, `stacks/arch-hexagonal.md`, or `stacks/arch-onion.md` — determined by `ARCHITECTURE_STYLE` env or detected from project structure).
+Scan the codebase for architecture violations. Use `workspace_reader` to inspect source files and `knowledge_reader` to load the active architecture guide (`stacks/arch-clean.md`, `stacks/arch-hexagonal.md`, `stacks/arch-onion.md`, or `stacks/arch-layered.md` — determined by `ARCHITECTURE_STYLE` env or detected from project structure).
+
+**Scope:** This is a static code scan only. Do not call `jira_view`, do not check Jira tickets, and do not validate branch or commit traceability — those are handled by the DoD check in the code crew flow.
 
 **Step 1 — Identify active architecture pattern.**
-Check `ARCHITECTURE_STYLE` env. If unset, infer from directory names (`ports/` → hexagonal, `domain/model/` + `application/` → onion, `usecases/` or `domain/` + `adapters/` → clean). Load the matching `stacks/arch-*.md` guide.
+Check `ARCHITECTURE_STYLE` env. If unset, infer from directory names:
+- `ports/` with `driving/` or `driven/` → hexagonal
+- `domain/model/` + `application/` → onion
+- `usecases/` or (`domain/` + `adapters/`) → clean
+- `handlers/` or `controllers/` + `services/` + `repository/` or `storage/` → layered
+
+Load the matching `stacks/arch-<style>.md` guide (clean, hexagonal, onion, or layered). If the style is unrecognised or the guide is missing, emit one `FINDING [ARCH]: No active architecture pattern detected` and skip Steps 2–3.
 
 **Step 2 — Dependency rule check.**
 For each source directory in the project:

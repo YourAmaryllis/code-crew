@@ -30,11 +30,9 @@ curl -X POST https://<staging-url>/internal/test/reset \
 stop and flag `INCOMPLETE: staging test reset failed`.
 
 **Step 4 — Run the smoke suite.**
-Run only scenarios tagged `@smoke` (fast, critical-path only):
-```bash
-BASE_URL=https://<staging-url> go test ./... -v -tags smoke 2>&1 | tail -50
-```
-Or using the bdd_runner tool with the `@smoke` tag filter.
+Run only scenarios tagged `@smoke` (fast, critical-path only). Use whichever approach is configured for this project:
+- If `commands.staging_smoke` is set in `.code-crew/structure.md`: run it with `BASE_URL=<staging-url>` prepended
+- Otherwise use the `bdd_runner` tool with the `@smoke` tag filter and the staging URL
 
 **Step 5 — Evaluate results.**
 - All `@smoke` scenarios pass → `STAGING VERIFIED`

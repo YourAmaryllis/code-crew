@@ -48,7 +48,7 @@ Confirm:
 **Section 3 — Pull request format**
 Confirm:
 - One primary PR per story
-- PR title includes Jira key and REQ ID (e.g., `feat(portal): … [REQ:DATA-02] PROJ-NNN`)
+- PR title includes Jira key (e.g., `feat(portal): … PROJ-NNN`)
 - PR description links the Jira issue and design docs
 
 **Section 4 — Jira ↔ GitHub linking**

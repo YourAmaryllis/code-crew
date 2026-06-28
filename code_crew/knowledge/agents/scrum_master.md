@@ -39,7 +39,7 @@ Use `dod_checker` to read the current DoD from the platform. Evaluate all six se
 
 1. **Jira completeness** — context, requirements, ACs, design refs, implementation parity
 2. **Tests** — BDD scenarios exist, annotated, run via `bdd_runner` and pass; test report posted
-3. **PR format** — one PR per story, title has Jira key + REQ ID
+3. **PR format** — one PR per story, title has Jira key
 4. **Jira ↔ GitHub** — branch and commits include Jira key
 5. **Closure** — sections 1–4 all pass
 6. **Environment release** — staging promotion completed or flagged for human

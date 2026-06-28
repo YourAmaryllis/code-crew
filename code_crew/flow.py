@@ -409,6 +409,12 @@ class TicketState:
     # Token usage (accumulated across all tasks in this flow)
     session_tokens: int = 0
     last_task_tokens: int = 0
+    # 0 = no limit; set from MAX_SESSION_TOKENS env at flow start
+    budget_tokens: int = 0
+
+    # No-progress detection: track diff hash across implementation retries
+    last_diff_hash: str = ""
+    consecutive_no_progress: int = 0
 
     # Current position
     current_task: str = ""
@@ -465,12 +471,17 @@ class TicketFlow:
     ) -> None:
         from shared.human_relay import HumanRelay
 
+        import os as _os
         self.state = state
         self._on_status = on_status or (lambda _: None)
         self._on_task_complete = on_task_complete or (lambda *_: None)
         self._feedback_event = threading.Event()
         self._task_start: float = 0.0
         self.relay: HumanRelay = HumanRelay()
+        # Budget ceiling: honour MAX_SESSION_TOKENS env if caller didn't pre-set it
+        if not self.state.budget_tokens:
+            _budget_env = _os.environ.get("MAX_SESSION_TOKENS", "0")
+            self.state.budget_tokens = int(_budget_env) if _budget_env.isdigit() else 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -595,11 +606,16 @@ class TicketFlow:
         ]
 
         self._run_implementation()
+        self.state.last_diff_hash = _git_diff_hash(self.state.code_path)
 
         for gate_task, retry_attr in gates:
             while True:
                 result = self._run_review_gate(gate_task)
                 if result.passed:
+                    # Context reset: clear stale feedback so it doesn't bleed into
+                    # the next gate's implementation context.
+                    self.state.review_feedback = ""
+                    self.state.consecutive_no_progress = 0
                     break
 
                 retries: int = getattr(self.state, retry_attr)
@@ -629,6 +645,23 @@ class TicketFlow:
                     self.state.task_outputs.pop(t, None)
                 _save_checkpoint(self.state)
                 self._run_implementation()
+
+                # No-progress detection: if diff hash is unchanged after a full
+                # implementation retry, the engineer is stuck in a loop.
+                new_hash = _git_diff_hash(self.state.code_path)
+                if new_hash and new_hash == self.state.last_diff_hash:
+                    self.state.consecutive_no_progress += 1
+                    if self.state.consecutive_no_progress >= 2:
+                        self._on_task_complete(
+                            self.state.jira_key, gate_task,
+                            f"↩ no-progress detected ({self.state.consecutive_no_progress} "
+                            f"retries, diff unchanged) — escalating to human",
+                        )
+                        self._escalate(gate_task)
+                        self.state.consecutive_no_progress = 0
+                else:
+                    self.state.consecutive_no_progress = 0
+                self.state.last_diff_hash = new_hash or self.state.last_diff_hash
 
     def _staging_loop(self) -> None:
         """
@@ -737,6 +770,28 @@ class TicketFlow:
                 )
             break
 
+        # External verification: run tests independently before hitting review gates.
+        # The judge (code_review/dod_check) reads only the transcript — so we inject
+        # real test output rather than relying on what the engineer claimed.
+        test_failure = _external_test_check(self.state.code_path)
+        if test_failure:
+            self._on_task_complete(
+                self.state.jira_key, "implementation",
+                f"↩ external test check failed — re-running engineer with test output",
+            )
+            self.state.review_feedback = (
+                "External test run (independent of your report) detected failures:\n\n"
+                f"{test_failure}\n\n"
+                "Fix the failing tests before proceeding. Do not declare IMPLEMENTATION COMPLETE "
+                "until the project's test command (from .code-crew/structure.md) exits 0."
+            )
+            for t in ("implementation", "devops_coordination"):
+                self.state.task_outputs.pop(t, None)
+            _save_checkpoint(self.state)
+            self._run_task("implementation")
+            self._run_task("devops_coordination")
+            return
+
         self._run_task("devops_coordination")
 
     # ------------------------------------------------------------------
@@ -803,6 +858,15 @@ class TicketFlow:
             self.state.human_feedback = ""  # consume once
 
         sprint_input = _build_sprint_input(self.state, extra_context)
+
+        from shared.log import SessionLogger as _SL
+        _SL.get().log_task_start(
+            task_name=task_name,
+            agent=_TASK_AGENTS.get(task_name, "unknown"),
+            jira_key=self.state.jira_key,
+            context=extra_context,
+        )
+
         crew = build_single_task_crew(
             task_name, sprint_input,
             code_path=self.state.code_path,
@@ -814,22 +878,39 @@ class TicketFlow:
             tokens = getattr(crew.usage_metrics, "total_tokens", 0) or 0
             self.state.last_task_tokens = tokens
             self.state.session_tokens += tokens
+            _SL.get().log_task_output(
+                task_name=task_name,
+                output=output,
+                jira_key=self.state.jira_key,
+                tokens=tokens,
+            )
+            if (
+                self.state.budget_tokens
+                and self.state.session_tokens >= self.state.budget_tokens
+            ):
+                raise _FlowFailed(
+                    f"Budget ceiling reached: {_fmt_k(self.state.session_tokens)} tokens used "
+                    f"(limit: {_fmt_k(self.state.budget_tokens)}). "
+                    f"Raise flow.max_session_tokens in config or resume with /feedback."
+                )
         except Exception as exc:
             if is_aws_auth_error(exc):
                 aws_profile = __import__("os").environ.get("AWS_PROFILE", "")
                 hint = f"aws sso login{' --profile ' + aws_profile if aws_profile else ''}"
                 raise _FlowFailed(
                     f"AWS credentials expired during {task_name}. "
-                    f"Run `{hint}` then re-run /jira {self.state.jira_key}."
+                    f"Run `{hint}` then re-run /issue {self.state.jira_key}."
                 ) from exc
             from shared.progress_guard import NoProgressError
             if isinstance(exc, NoProgressError):
                 recent = "\n  ".join(exc.recent_calls[-5:])
-                return (
+                stuck_output = (
                     f"STUCK: {exc.reason}\n"
                     f"Recent calls:\n  {recent}\n"
                     f"Please provide context or a different approach."
                 )
+                _SL.get().log_task_output(task_name=task_name, output=stuck_output, jira_key=self.state.jira_key)
+                return stuck_output
             # pydantic: model returned a tool-call object as its "final" output instead of text.
             # The proper fix is to complete the tool round-trip, but the conversation history
             # lives inside CrewAI's agent loop so we can't inject a result externally.
@@ -846,13 +927,16 @@ class TicketFlow:
                     tokens2 = getattr(crew2.usage_metrics, "total_tokens", 0) or 0
                     self.state.last_task_tokens = tokens2
                     self.state.session_tokens += tokens2
+                    _SL.get().log_task_output(task_name=task_name, output=output, jira_key=self.state.jira_key, tokens=tokens2)
                 except Exception as retry_exc:
                     output = (
                         f"INCOMPLETE: {task_name} — model returned a tool-call instead of text "
                         f"(retry also failed: {str(retry_exc)[:200]})"
                     )
+                    _SL.get().log_task_output(task_name=task_name, output=output, jira_key=self.state.jira_key)
             else:
                 output = f"INCOMPLETE: agent failed during {task_name} — {str(exc)[:300]}"
+                _SL.get().log_task_output(task_name=task_name, output=output, jira_key=self.state.jira_key)
             return output
 
         if "Failed to parse LLM response" in output:
@@ -948,6 +1032,53 @@ def _git_has_changes(code_path: str) -> bool:
         return bool(result.stdout.strip())
     except Exception:
         return True  # can't check — don't block the flow
+
+
+def _git_diff_hash(code_path: str) -> str:
+    """Return an MD5 of the full diff vs origin/main for no-progress detection.
+    Returns empty string if git is unavailable."""
+    import hashlib
+    import subprocess
+    cwd = code_path or None
+    try:
+        result = subprocess.run(
+            ["git", "diff", "origin/main"],
+            capture_output=True, text=True, timeout=15, cwd=cwd,
+        )
+        return hashlib.md5(result.stdout.encode()).hexdigest()
+    except Exception:
+        return ""
+
+
+def _external_test_check(code_path: str) -> str | None:
+    """Run the project's configured test command and return failure output, or None.
+
+    Reads COMMANDS_TEST env var (set from commands.test in .code-crew/config.yaml by /explore).
+    Returns None when no command is configured or tests pass — flow continues unblocked.
+    """
+    import os as _os
+    import subprocess
+    from pathlib import Path as _Path
+
+    test_cmd = _os.environ.get("COMMANDS_TEST", "").strip()
+    if not test_cmd:
+        return None  # not configured — skip external check
+
+    root = _Path(code_path or ".").resolve()
+    try:
+        r = subprocess.run(
+            test_cmd, shell=True, capture_output=True, text=True,
+            timeout=180, cwd=str(root),
+            env={**_os.environ, "CI": "true"},
+        )
+        if r.returncode != 0:
+            out = (r.stdout + r.stderr).strip()
+            return f"Tests failed (`{test_cmd}`):\n{out[:2000]}"
+        return None
+    except subprocess.TimeoutExpired:
+        return f"Test command timed out after 180s: {test_cmd}"
+    except Exception as exc:
+        return f"Test check error ({test_cmd}): {exc}"
 
 
 def _fmt_k(tokens: int) -> str:

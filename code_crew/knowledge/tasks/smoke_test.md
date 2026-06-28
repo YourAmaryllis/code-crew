@@ -20,10 +20,9 @@ Terraform outputs, or ask via `knowledge_reader("environment-management")`.
 
 **Step 2 — Run smoke tests (read-only only).**
 Production smoke tests MUST be read-only — no test resets, no data writes.
-Run only scenarios tagged `@smoke` and `@readonly`:
-```bash
-BASE_URL=https://<production-url> go test ./... -v -tags "smoke readonly" 2>&1 | tail -50
-```
+Run only scenarios tagged `@smoke` and `@readonly`. Use whichever approach is configured:
+- If `commands.production_smoke` is set in `.code-crew/structure.md`: run it with `BASE_URL=<production-url>` prepended
+- Otherwise use the `bdd_runner` tool with `@smoke` tag filter and the production URL
 
 `TEST_RESET_ENABLED` must be false/unset on production. If the test suite attempts a
 reset, fail immediately and report it.

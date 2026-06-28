@@ -6,7 +6,7 @@ tags: [verify, report, scrum-master]
 agent: scrum_master
 expected_output: >
   Full markdown report content compiled from all scan outputs and chief review decisions.
-  Ends with REPORT SAVED: .code-crew/verify-report-YYYYMMDD.md.
+  Ends with REPORT SAVED: .code-crew/audit-YYYYMMDD-HHMMSS.md.
 ---
 
 Compile the verification audit into a structured markdown report and output it. The Python runner will write the file.
@@ -63,5 +63,5 @@ Your context contains the outputs of `verify_arch_scan`, `verify_security_scan`,
 
 End your output with exactly:
 ```
-REPORT SAVED: .code-crew/verify-report-<YYYYMMDD>.md
+REPORT SAVED: .code-crew/audit-<YYYYMMDD-HHMMSS>.md
 ```

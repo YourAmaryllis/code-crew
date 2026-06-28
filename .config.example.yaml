@@ -178,7 +178,31 @@ issue_tracker:
 #   diagram_format: mermaid       # mermaid (default; only supported value today)
 
 # ─────────────────────────────────────────────
+# Verbose session logging
+# When enabled, all user input and agent I/O are appended to a log file.
+# Useful for debugging stuck flows or auditing agent decisions.
+# ─────────────────────────────────────────────
+# logging:
+#   verbose: true
+#   log_file: ~/.code-crew/session.log   # optional; defaults to ~/.code-crew/session-YYYY-MM-DD.log
+
+# ─────────────────────────────────────────────
 # Flow behaviour
 # ─────────────────────────────────────────────
 flow:
   max_retries: 3
+  max_session_tokens: 500000   # ~$5-8 at Sonnet pricing; 0 = no limit
+
+# Build / test / lint commands — auto-detected by /explore, override here if needed.
+# These are injected as COMMANDS_* env vars and written to .code-crew/structure.md
+# so agents always use the right commands for this project.
+commands:
+  test:             ""   # e.g. "go test ./... -count=1 -timeout 120s" or "pytest" or "make test"
+  build:            ""   # e.g. "go build ./..." or "npm run build" or "make build"
+  typecheck:        ""   # e.g. "npx tsc --noEmit" or "mypy src/" — leave blank if N/A
+  lint:             ""   # e.g. "golangci-lint run ./..." or "ruff check ." or "make lint"
+  audit:            ""   # e.g. "go mod verify" or "pip-audit" or "npm audit"
+  staging_smoke:    ""   # e.g. "go test ./integration/... -v -tags smoke" (BASE_URL prepended at runtime)
+  production_smoke: ""   # e.g. "go test ./integration/... -v -tags 'smoke readonly'"
+  api_spec:         ""   # e.g. "swag init -g cmd/server/main.go -o docs/"
+  db_migrate:       ""   # e.g. "goose -dir migrations create" or "alembic revision --autogenerate"

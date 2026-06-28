@@ -12,26 +12,34 @@ code-crew is a virtual AI development team. It takes a Jira, Linear, or GitHub I
 
 The crew is not a chat assistant. It is a structured pipeline where each agent has a specific role, reads the organisation's own SOPs and ADRs as its operating procedures, and hands off typed output to the next agent. The human initiates a run and reviews the output; agents never push code, apply Terraform, or promote to production.
 
-Five distinct flows are supported:
+Five distinct flows are supported.
+
+All commands can be run directly from the shell or as slash commands in the interactive REPL:
+
+```bash
+code-crew issue PROJ-123    # direct
+# or start the REPL and type:
+/issue PROJ-123
+```
 
 **Setup commands** (pure Python, no LLM — run these first):
 
 | Command | What it does |
 |---------|-------------|
-| `/init` | Scaffold `.code-crew/config.yaml`, prompt for issue tracker and project key, then auto-detect migration tool, test framework, API doc standard, and architecture style from file signals |
-| `/explore [path]` | Walk the directory tree; detect stacks, architecture pattern, and DB migration tool; write `.code-crew/structure.md` (agents read this as project context); generate OTM threat model skeleton at `designs/TMD/` |
+| `init` | Scaffold `.code-crew/config.yaml`, prompt for issue tracker and project key, then auto-detect migration tool, test framework, API doc standard, and architecture style from file signals |
+| `explore [path]` | Walk the directory tree; detect stacks, architecture pattern, and DB migration tool; write `.code-crew/structure.md` (agents read this as project context); generate OTM threat model skeleton at `designs/TMD/` |
 
 **Agent-backed flows** (LLM calls, managed by `flow.py` / `crew.py`):
 
 | Flow | Command | What it does |
 |------|---------|-------------|
-| **Ticket** | `/issue <KEY>` or `/sprint <name>` | Full SDLC pipeline: sprint planning → DoD → staging → release decision |
-| **Design** | `/design <KEY>` | Pre-implementation: ADD/ADR/TMD stub before any code is written |
+| **Ticket** | `issue <KEY>` or `sprint <name>` | Full SDLC pipeline: sprint planning → DoD → staging → release decision |
+| **Design** | `design <KEY>` | Pre-implementation: ADD/ADR/TMD stub before any code is written |
+| **Audit** | `audit` | Full codebase audit: arch · security · compliance · domain drift |
 | **UX** | `/ux <KEY>` | Figma → component spec → implementation → UX review loop |
 | **Domain** | `/domain design <KEY>` | Async event storming (3-phase): flow discovery → per-flow storming → synthesis → `designs/DMD/` |
-| **Audit** | `/audit` | Full codebase audit: arch · security · compliance · domain drift |
 
-Typical first-run order: `/init` → `/explore` → `/design <KEY>` → `/issue <KEY>`.
+Typical first-run order: `code-crew init` → `code-crew explore` → `code-crew design <KEY>` → `code-crew issue <KEY>`.
 
 ---
 
@@ -94,7 +102,7 @@ Skills are OKF `.md` files that modify agent output style for the current sessio
 
 | Component | Path | Purpose |
 |-----------|------|---------|
-| REPL | `code_crew/repl.py` | Interactive terminal UI (prompt_toolkit + Rich). Dispatches all slash commands, manages profile loading, streams flow status. |
+| REPL | `code_crew/repl.py` | Interactive terminal UI (prompt_toolkit + Rich). Dispatches slash commands; also accepts commands as CLI args (`code-crew issue PROJ-123`). Manages profile loading and streams flow status. |
 | Flows | `code_crew/flow.py` | `TicketFlow`, `DesignFlow`, `UxFlow`, `DomainFlow` — manage multi-task loops with retry gates, human escalation, and checkpointing. |
 | Crew builder | `code_crew/crew.py` | Builds agents and tasks from OKF files. `build_single_task_crew()`, `build_design_single_task()`, `build_domain_single_task()`, `build_verify_crew()`, `build_domain_extract_crew()`. |
 | OKF loader | `shared/okf_loader.py` | Parses OKF markdown into `AgentConcept` / `TaskConcept` structs. |
@@ -233,7 +241,7 @@ verify_security_scan    security_lead         OWASP + STRIDE + compliance stacks
 verify_compliance_scan  compliance_officer    Regulatory evidence gaps
 verify_domain_scan      architect             DMD drift — code entities vs designs/DMD/
 verify_chief_review     architect             Aggregates findings; marks REQUIRED / EXEMPT / PASS
-verify_report           scrum_master          Writes .code-crew/verify-report-YYYYMMDD.md
+verify_report           scrum_master          Writes .code-crew/audit-YYYYMMDD-HHMMSS.md
 ```
 
 REQUIRED findings are parsed from the chief review output. REPL prompts to open Jira issues for each.

@@ -36,6 +36,12 @@ Check that the implementation follows the platform's layered structure:
 - No duplicated logic that should be a shared utility — but do not introduce premature
   abstractions for one-off cases. Three similar lines beat a premature helper.
 - Functions and methods have a single clear responsibility.
+- **Dead production code (Critical):** For each new production function in the `FILES CHANGED`
+  list, run `grep -rn "<FunctionName>" .` and verify at least one call site exists outside
+  that function's own file and test file. A new validation gate, helper, or integration
+  function that is only referenced by its tests is dead code — the feature is not active at
+  runtime. This is a Critical finding: list every unwired function and the entry point where
+  the call must be added.
 
 **Step 2 — No hardcoding.**
 Check that the implementation contains no:

@@ -32,7 +32,7 @@ For each category, do a targeted scan:
 - **A03 Injection**: find raw string concatenation into SQL queries; unsanitised shell commands
 - **A04 Insecure Design**: find `TODO: add auth`, `# FIXME security`, placeholder validation
 - **A05 Security Misconfiguration**: find `DEBUG=True` or `debug: true` outside test files; open CORS (`*`)
-- **A06 Vulnerable Components**: note if `pip-audit`, `go mod audit`, or `npm audit` output is available in workspace; flag if not
+- **A06 Vulnerable Components**: check `commands.audit` in `.code-crew/structure.md`; if set, note whether audit output is available in workspace; if not set, emit a FINDING that dependency auditing is not configured
 - **A09 Logging Failures**: check that auth events (login, logout, token issue) have log statements
 
 **Step 4 — SBOM / dependency audit.**

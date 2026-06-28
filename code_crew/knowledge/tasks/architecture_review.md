@@ -19,10 +19,11 @@ architectural alignment, update the relevant documents, and produce a gate decis
 
 **Step 1 — Load relevant knowledge**
 
-Use the `knowledge_reader` tool to load:
-- The `ADR` and `ADD` index documents to identify all relevant records
-- Specific ADR/ADD documents that apply to the technical surface area of this story
-- For each ADD: check its `stacks` frontmatter field, then load each named stack document via `knowledge_reader` (e.g. if `stacks: [go-backend, terraform-aws]`, load both). This tells you which conventions govern that component.
+First, read the Jira ticket (`jira_view`) and identify the technical surface area (e.g. "backend validation", "frontend form", "DB schema", "IAM policy"). Then:
+
+- Load the `ADR` and `ADD` **index** documents — read titles only to find which records apply. Do not load every document.
+- Load only the specific ADR/ADD documents that govern the component(s) this story touches.
+- For each loaded ADD: check its `stacks` frontmatter field and load only the named stack document(s) that are relevant to this story's surface area. A backend-only change does not need frontend stack docs; a validation-only change does not need Terraform or ECS stack docs.
 
 **Step 2 — Assess alignment**
 

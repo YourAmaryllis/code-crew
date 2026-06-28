@@ -4,11 +4,11 @@ description: Create the directory structure and code stubs for the user story
 expected_output: Manifest of created files and directories with their purpose
 ---
 
-Load the scaffolding guide and stack conventions with `knowledge_reader`:
-- **`scaffold-code`** — scaffolding process and stub format
-- **`go-backend`** and/or **`typescript-react`** — exact directory layout and stub format for the relevant stack(s)
+Read the Jira ticket (`jira_view`) first and identify which stack(s) this story touches. Then load only what that requires with `knowledge_reader`:
+- **`scaffold-code`** — scaffolding process and stub format (always load)
+- The relevant stack guide(s) for this story — identified from the ticket, the ADD, or the `stacks:` list in `.code-crew/structure.md`
 
-If the project has a `.code-crew/stacks/` directory, those files override the built-in stack guides.
+Also use `workspace_reader` to read `.code-crew/structure.md`. The `## Project commands` section has the exact build command for this project — use it to verify scaffolded code compiles, rather than assuming any particular tool.
 
 **FIRST — check what already exists.**
 Before creating any file, use workspace_reader (list_dir or read_file) to check if the target path already exists.
@@ -29,7 +29,7 @@ Using the acceptance criteria and story context:
    - No implemented logic — stubs only
    - Import statements for the interfaces/types they will depend on (as TODOs if not yet defined)
 
-4. **After writing any Go files**, run `go build ./...` in the module directory (e.g. `portal/backend`). If the build fails, report the error in the manifest and do NOT continue.
+4. **After writing any source files**, run the project's build command (`commands.build` from `.code-crew/structure.md`) in the appropriate module directory. If the build fails, report the error in the manifest and do NOT continue.
 
 Output a manifest listing each path and its status: "created", "existing — no change", or "build error: <message>". Include a note on which parts the backend engineer should implement first.
 

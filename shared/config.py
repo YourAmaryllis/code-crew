@@ -73,6 +73,22 @@ _ENV_MAP: dict[str, object] = {
     },
     "flow": {
         "max_retries": "MAX_RETRIES",
+        "max_session_tokens": "MAX_SESSION_TOKENS",
+    },
+    "logging": {
+        "verbose":  "LOG_VERBOSE",
+        "log_file": "LOG_FILE",
+    },
+    "commands": {
+        "test":             "COMMANDS_TEST",
+        "build":            "COMMANDS_BUILD",
+        "typecheck":        "COMMANDS_TYPECHECK",
+        "lint":             "COMMANDS_LINT",
+        "audit":            "COMMANDS_AUDIT",
+        "staging_smoke":    "COMMANDS_STAGING_SMOKE",
+        "production_smoke": "COMMANDS_PRODUCTION_SMOKE",
+        "api_spec":         "COMMANDS_API_SPEC",
+        "db_migrate":       "COMMANDS_DB_MIGRATE",
     },
     "figma": {
         "token": "FIGMA_TOKEN",

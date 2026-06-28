@@ -5,16 +5,26 @@
 
 CrewAI-based multi-agent crew for the full software development lifecycle. Agents cover sprint planning, architecture, BDD, backend/frontend engineering, code review, security (OWASP + OTM threat modeling), compliance, and Definition of Done — driven by Jira, Linear, or GitHub Issues tickets and your own knowledge base (ADRs, ADDs, SOPs in OKF format).
 
-## Slash commands (REPL)
+## Commands
+
+All commands work two ways — as a direct CLI invocation or as a slash command inside the interactive REPL:
+
+```bash
+code-crew issue PROJ-123      # direct
+# or start the REPL and type:
+/issue PROJ-123
+```
 
 | Command | What it does |
 |---------|-------------|
-| `/design <KEY>` | **Pre-implementation**: architect + security + compliance → creates ADD/ADR in designs/ |
+| `init` / `/init` | Scaffold `.code-crew/config.yaml` and auto-detect project settings |
+| `explore [path]` / `/explore [path]` | Scan project, detect stacks + build/test/lint commands, generate OTM threat model skeleton |
+| `issue <KEY>` / `/issue <KEY>` | **Implementation**: full SDLC crew from sprint planning → DoD → staging |
+| `sprint <name>` / `/sprint <name>` | Run all tickets in a sprint (parallel where safe) |
+| `design <KEY>` / `/design <KEY>` | **Pre-implementation**: architect + security + compliance → creates ADD/ADR in designs/ |
+| `audit` / `/audit` | Full codebase audit: arch · security · compliance · domain → `.code-crew/audit-YYYYMMDD-HHMMSS.md` |
+| `ask <agent> <question>` / `/ask <agent> <question>` | Ask a specific agent directly (architect, security, engineer, qa, …) |
 | `/ux <KEY>` | **UX**: Figma frame → component spec + tokens → engineer implements → UX Lead reviews (loop) |
-| `/issue <KEY>` | **Implementation**: full SDLC crew from sprint planning → DoD → staging |
-| `/sprint <name>` | Run all tickets in a sprint (parallel where safe) |
-| `/explore [path]` | Scan project, detect stacks, generate OTM threat model skeleton |
-| `/audit` | Full codebase audit: arch · security · compliance · domain → `.code-crew/verify-report-YYYYMMDD.md` |
 | `/domain design <KEY>` | **Domain modeling**: event storming (3-phase async) → bounded contexts, aggregates, glossary, Mermaid diagram |
 | `/domain extract [path]` | Reverse-engineer domain model from existing code |
 | `/mcp list\|connect\|disconnect\|status` | Manage MCP server connections |
@@ -22,10 +32,8 @@ CrewAI-based multi-agent crew for the full software development lifecycle. Agent
 | `/skill install <url\|user/repo>` | Install skill(s) from a GitHub repo or raw URL |
 | `/skill <name>` | Activate a skill (`terse`, `strict`, `explain`, `dry-run`) |
 | `/skill off [name]` | Deactivate one or all skills |
-| `/init` | Scaffold `.code-crew/config.yaml` and auto-detect project settings |
 | `/status` | Show active runs |
 | `/profile <name>` | Switch config profile live |
-| `/ask <agent> <question>` | Ask a specific agent directly outside of a workflow (architect, security, engineer, qa, …) |
 | `/session [new\|use\|list]` | Manage conversation sessions — history persists across restarts, resume any past session |
 | `/fix` | Install missing tools |
 | `/help <msg>` | Inject guidance into a stuck flow |
@@ -47,13 +55,12 @@ cd /path/to/your-platform-repo
 git submodule add git@github.com:your-org/designs.git designs
 
 # 4. Initialise the project (run from your platform repo root)
-code-crew     # start the REPL
-/init         # scaffolds .code-crew/config.yaml + auto-detects project settings
+code-crew init                # scaffolds .code-crew/config.yaml + auto-detects project settings
 
 # 5. Run
-/explore      # scan project, detect stacks, generate OTM skeleton
-/design PROJ-123     # create design docs first
-/issue PROJ-123      # then implement
+code-crew explore             # scan project, detect stacks + build/test/lint commands
+code-crew design PROJ-123     # create design docs first
+code-crew issue PROJ-123      # then implement
 ```
 
 ## Key principles

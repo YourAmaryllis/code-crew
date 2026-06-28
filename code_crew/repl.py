@@ -4,7 +4,7 @@ Interactive REPL for code-crew.
 Slash commands:
   /design <KEY>                 — requirement → ADD/ADR design docs (runs before /issue)
   /ux <KEY>                     — Figma → component spec → implementation → UX review loop
-  /issue <KEY> [--retries N]    — run a single ticket (Jira, Linear, or GitHub; /jira is an alias)
+  /issue <KEY> [--retries N]    — run a single ticket (Jira, Linear, or GitHub Issues)
   /sprint <name> [--retries N]  — plan + run a sprint (parallel where safe)
   /init                         — scaffold a new project in cwd
   /status                       — show active runs
@@ -59,6 +59,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 from rich.console import Console
@@ -285,11 +286,14 @@ def _quieten_crewai_verbosity() -> None:
             label = _tool_label(tool_name, tool_args)
             if label:
                 self.console.print(label)
+            from shared.log import SessionLogger as _SL
+            _SL.get().log_tool_call(tool_name, tool_args)
 
         def handle_tool_usage_finished(
             self, tool_name: str, output: str = "", run_attempts=None
         ) -> None:
-            pass  # full output → Langfuse
+            from shared.log import SessionLogger as _SL
+            _SL.get().log_tool_result(tool_name, output or "")
 
         def handle_tool_usage_error(
             self, tool_name: str, error, run_attempts=None
@@ -501,6 +505,26 @@ class ReplState:
 
 
 # ---------------------------------------------------------------------------
+# Input helper — works in both CLI startup and REPL slash-command context
+# ---------------------------------------------------------------------------
+
+def _read_line(console: "Console", prompt_text: str = "") -> str:
+    """Print prompt_text via PTConsole (bypasses patch_stdout proxy) then read a line.
+
+    Uses sys.__stdin__ so it works whether or not patch_stdout is active and
+    regardless of whether an active PromptSession is running.
+    """
+    if prompt_text:
+        console.print(prompt_text, end="")
+    try:
+        raw_stdin = getattr(sys, "__stdin__", sys.stdin) or sys.stdin
+        line = raw_stdin.readline()
+        return line.rstrip("\n")
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -532,9 +556,24 @@ def main() -> None:
         metavar="NAME",
         help="Config profile to activate (~/.code-crew/profiles/<NAME>.yaml).",
     )
-    args, _ = parser.parse_known_args()
+    args, remaining = parser.parse_known_args()
+
+    # Build startup slash command from positional argv, e.g.:
+    #   code-crew issue LOOPLAT-92  →  /issue LOOPLAT-92
+    #   code-crew explore           →  /explore
+    #   code-crew init              →  /init
+    #   code-crew audit             →  /audit
+    # Any all-lowercase word is forwarded to _handle_slash, which validates it.
+    # New commands are picked up automatically — no list to maintain here.
+    startup_slash: str = ""
+    if remaining and re.match(r'^[a-z]+$', remaining[0]):
+        tail = " ".join(remaining[1:])
+        startup_slash = f"/{remaining[0]} {tail}".strip()
 
     _bootstrap(profile=args.profile)
+
+    from shared.log import SessionLogger as _SessionLogger
+    _SessionLogger.get().setup()
 
     # setup_langfuse() MUST run before any crewai import.
     # crewai/events/event_listener.py creates the EventListener singleton at
@@ -580,21 +619,63 @@ def main() -> None:
     executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="flow")
     ui = SprintUI(console=console)
 
+    # Key bindings: Enter submits, Alt+Enter (Esc then Enter) inserts a newline.
+    # Shift+Enter isn't a distinct escape sequence in most terminals, so Alt+Enter
+    # is the standard workaround for "newline without submit."
+    _repl_kb = KeyBindings()
+
+    @_repl_kb.add("enter")
+    def _submit(event):
+        event.current_buffer.validate_and_handle()
+
+    @_repl_kb.add("escape", "enter")
+    def _newline(event):
+        event.current_buffer.insert_text("\n")
+
     session = PromptSession(
         history=InMemoryHistory(),
         auto_suggest=AutoSuggestFromHistory(),
         style=_PROMPT_STYLE,
         mouse_support=False,
+        multiline=True,
+        key_bindings=_repl_kb,
+        # Continuation line (lines 2+ in multi-line input): align under first char of "> "
+        prompt_continuation=lambda width, _line, _wrap: " " * width,
     )
+
+    # Dispatch the startup command BEFORE patch_stdout so that input() calls
+    # (e.g. in /init or /audit human gates) reach the real terminal, not the
+    # prompt_toolkit stdout proxy (which has no active prompt to flush into yet).
+    # PTConsole routes output through print_formatted_text regardless, so
+    # background-thread output is safe once the REPL loop starts below.
+    if startup_slash:
+        try:
+            _handle_slash(startup_slash, state, ui, executor, console)
+        except Exception as _e:
+            console.print(f"[red]{_e}[/red]")
+
+    # Timer thread: invalidate the active prompt every second so the elapsed-time
+    # counter in _build_prompt updates even when no other output is printing.
+    def _invalidate_loop() -> None:
+        while True:
+            time.sleep(1)
+            app = getattr(session, "app", None)
+            if app is not None:
+                try:
+                    app.invalidate()
+                except Exception:
+                    pass
+
+    threading.Thread(target=_invalidate_loop, daemon=True, name="status-ticker").start()
 
     with patch_stdout(raw=True):
         _last_interrupt = 0.0
         try:
             while True:
+                # Show consultation panel once when the gate fires (must happen
+                # before session.prompt() blocks so the panel appears immediately).
                 pending_q = state.get_pending_question()
                 stuck = state.get_stuck()
-
-                # Show consultation panel the first time we detect the gate
                 if stuck and not pending_q:
                     _key = stuck[0]
                     _entry = state.active.get(_key)
@@ -607,28 +688,11 @@ def main() -> None:
                             _show_consultation_panel(_key, _flow, console)
                             _shown_consultation.add(_key)
 
-                if pending_q:
-                    prompt_msg = HTML(
-                        f'<ansicyan><b>[{pending_q.jira_key}] answer</b></ansicyan>'
-                        f' <ansigreen><b>&gt;</b></ansigreen> '
-                    )
-                elif stuck and _is_in_consultation(stuck, state):
-                    prompt_msg = HTML(
-                        f'<ansiyellow><b>({stuck[0]} awaits decision)</b></ansiyellow>'
-                        f' <ansigreen><b>&gt;</b></ansigreen> '
-                    )
-                elif stuck:
-                    prompt_msg = HTML(
-                        f'<ansiyellow><b>({stuck[0]} needs help)</b></ansiyellow>'
-                        f' <ansigreen><b>&gt;</b></ansigreen> '
-                    )
-                else:
-                    tok = state.session_tokens()
-                    tok_str = f'<ansiblue>[{tok}]</ansiblue> ' if tok else ''
-                    prompt_msg = HTML(f'{tok_str}<ansigreen><b>&gt;</b></ansigreen> ')
-
                 try:
-                    line = session.prompt(prompt_msg)
+                    line = session.prompt(
+                        lambda: _build_prompt(state),
+                        bottom_toolbar=lambda: _bottom_toolbar(state),
+                    )
                 except KeyboardInterrupt:
                     now = time.monotonic()
                     if now - _last_interrupt < 2.0:
@@ -643,12 +707,17 @@ def main() -> None:
                 if not line:
                     continue
 
+                from shared.log import SessionLogger as _SL
+                _SL.get().log_user_input(line)
+
+                # Re-read state after prompt returns (may have changed while waiting)
+                pending_q = state.get_pending_question()
+                stuck = state.get_stuck()
+
                 try:
                     if pending_q:
-                        # Any input while an agent is waiting → answer that agent
                         state.answer_pending(line)
                     elif _is_in_consultation(stuck, state) and not line.startswith("/"):
-                        # Direct input (number or text) routes to architect feedback
                         _inject_help(line, state, console)
                     elif line.lower() in _BARE_EXIT:
                         break
@@ -665,6 +734,8 @@ def main() -> None:
             executor.shutdown(wait=False, cancel_futures=True)
             from shared.telemetry import flush as _lf_flush
             _lf_flush()
+            from shared.log import SessionLogger as _SL2
+            _SL2.get().close()
             console.print("[dim]Bye.[/dim]")
             # os._exit bypasses atexit handlers (including concurrent.futures'
             # _python_exit which blocks forever joining live flow threads).
@@ -697,7 +768,7 @@ def _handle_slash(line: str, state: ReplState, ui: SprintUI, executor: ThreadPoo
         key = parts[1].upper()
         _start_ux(key, state, executor, console)
 
-    elif cmd in ("/issue", "/jira"):
+    elif cmd == "/issue":
         if len(parts) < 2:
             console.print("[red]Usage: /issue <KEY> [--retries N][/red]")
             return
@@ -1513,6 +1584,74 @@ def _scan_project(root: Path) -> dict:
     if ci_methods:
         found["ci.deployment_methods"] = ci_methods
 
+    # --- build / test / lint commands ---
+    # Priority: Makefile targets > package.json scripts > stack heuristics
+    _commands: dict[str, str] = {}
+
+    makefile = root / "Makefile"
+    if makefile.exists():
+        import re as _re
+        try:
+            mk_text = makefile.read_text(encoding="utf-8", errors="ignore")
+            mk_lines = mk_text.splitlines()
+            _mk_targets: dict[str, str] = {}
+            for _i, _line in enumerate(mk_lines):
+                _m = _re.match(r'^([a-z][a-z0-9_\-]*)[\s]*:', _line)
+                if _m:
+                    _tname = _m.group(1)
+                    for _j in range(_i + 1, min(_i + 6, len(mk_lines))):
+                        _cmd = mk_lines[_j].lstrip('\t').strip().lstrip('@-').strip()
+                        if _cmd and not _cmd.startswith('#'):
+                            _mk_targets[_tname] = _cmd
+                            break
+            for _k, _v in _mk_targets.items():
+                if _k in ("test", "tests"):
+                    _commands.setdefault("test", f"make {_k}")
+                elif _k in ("build", "compile"):
+                    _commands.setdefault("build", f"make {_k}")
+                elif _k in ("lint", "check", "vet"):
+                    _commands.setdefault("lint", f"make {_k}")
+                elif _k in ("audit", "vuln", "security"):
+                    _commands.setdefault("audit", f"make {_k}")
+                elif _k in ("typecheck", "type-check", "tsc"):
+                    _commands.setdefault("typecheck", f"make {_k}")
+        except Exception:
+            pass
+
+    pkg_json = root / "package.json"
+    if pkg_json.exists():
+        import json as _j2
+        try:
+            _pkg = _j2.loads(pkg_json.read_text())
+            _scripts = _pkg.get("scripts", {})
+            if "test" in _scripts:
+                _commands.setdefault("test", "npm test")
+            if "build" in _scripts:
+                _commands.setdefault("build", "npm run build")
+            if any(k in _scripts for k in ("typecheck", "type-check", "tsc")):
+                _tc = next(k for k in ("typecheck", "type-check", "tsc") if k in _scripts)
+                _commands.setdefault("typecheck", f"npm run {_tc}")
+            elif "build" in _scripts and "tsc" in _scripts.get("build", ""):
+                _commands.setdefault("typecheck", "npx tsc --noEmit")
+            if any(k in _scripts for k in ("lint", "eslint")):
+                _commands.setdefault("lint", "npm run lint")
+        except Exception:
+            pass
+
+    # Stack-level fallbacks when no Makefile / script entry found
+    if any(root.rglob("go.mod")):
+        _commands.setdefault("test", "go test ./... -count=1 -timeout 120s")
+        _commands.setdefault("build", "go build ./...")
+        if list(root.rglob(".golangci.yml")) or list(root.rglob(".golangci.yaml")):
+            _commands.setdefault("lint", "golangci-lint run ./...")
+        _commands.setdefault("audit", "go mod verify")
+    if (root / "pyproject.toml").exists() or list(root.glob("requirements*.txt")):
+        _commands.setdefault("test", "pytest")
+        _commands.setdefault("lint", "ruff check .")
+        _commands.setdefault("audit", "pip-audit")
+    if _commands:
+        found["_commands"] = _commands
+
     # --- architecture style (low-confidence heuristic; LLM phase overrides) ---
     all_dirs = {p.name for p in root.rglob("*") if p.is_dir() and p.name not in _SKIP}
     if "ports" in all_dirs and ("driving" in all_dirs or "driven" in all_dirs):
@@ -1523,6 +1662,10 @@ def _scan_project(root: Path) -> dict:
         found["architecture.style"] = "onion"
     elif "usecases" in all_dirs or ("domain" in all_dirs and "adapters" in all_dirs):
         found["architecture.style"] = "clean"
+    elif ("handlers" in all_dirs or "controllers" in all_dirs) and "services" in all_dirs and (
+        "repository" in all_dirs or "storage" in all_dirs or "repositories" in all_dirs
+    ):
+        found["architecture.style"] = "layered"
 
     return found
 
@@ -1549,12 +1692,9 @@ def _run_init(console: Console) -> None:
     cfg_dir.mkdir(exist_ok=True)
     config_file = cfg_dir / "config.yaml"
     if not config_file.exists():
-        console.print("Project name: ", end="")
-        name = input().strip() or root.name
-        console.print("Issue tracker [jira/linear/github]: ", end="")
-        tracker = input().strip() or "jira"
-        console.print("Project key (e.g. PROJ): ", end="")
-        project_key = input().strip().upper() or "PROJ"
+        name = _read_line(console, "Project name: ") or root.name
+        tracker = _read_line(console, "Issue tracker [jira/linear/github]: ") or "jira"
+        project_key = (_read_line(console, "Project key (e.g. PROJ): ") or "PROJ").upper()
 
         config_file.write_text(
             f"project: {name}\n"
@@ -1759,6 +1899,31 @@ def _is_in_consultation(stuck: list[str], state: ReplState) -> bool:
 # Help injection
 # ---------------------------------------------------------------------------
 
+def _parse_finding_selection(answer: str, count: int) -> set[int] | None:
+    """Parse a finding selection string into a set of 1-based indices.
+
+    Returns None to signal cancellation (no action).
+    Accepts: empty/'all' → all, 'none'/'n'/'no' → empty set, or comma-sep numbers/ranges.
+    """
+    import re as _re
+    s = answer.strip().lower()
+    if not s or s == "all":
+        return set(range(1, count + 1))
+    if s in ("none", "n", "no"):
+        return set()
+    selected: set[int] = set()
+    for part in _re.split(r"[,\s]+", s):
+        part = part.strip()
+        if not part:
+            continue
+        m = _re.match(r"^(\d+)-(\d+)$", part)
+        if m:
+            selected.update(range(int(m.group(1)), int(m.group(2)) + 1))
+        elif _re.match(r"^\d+$", part):
+            selected.add(int(part))
+    return selected & set(range(1, count + 1))
+
+
 def _start_verify(console: Console) -> None:
     """Run the full verification audit, show summary, gate on human approval, open issues."""
     import re
@@ -1827,12 +1992,13 @@ def _start_verify(console: Console) -> None:
         scan_counts[task_name] = len(re.findall(rf"^FINDING \[{tag}\]", raw, re.MULTILINE))
 
     # --- write report file ---
-    today = date.today().strftime("%Y%m%d")
-    report_path = Path(".code-crew") / f"verify-report-{today}.md"
+    from datetime import datetime as _dt
+    _now = _dt.now()
+    ts = _now.strftime("%Y%m%d-%H%M%S")
+    report_path = Path(".code-crew") / f"audit-{ts}.md"
     report_path.parent.mkdir(exist_ok=True)
 
-    # Always build the report from parsed data — agent content has template text (YYYY-MM-DD etc.)
-    today_fmt = f"{today[:4]}-{today[4:6]}-{today[6:]}"
+    today_fmt = _now.strftime("%Y-%m-%d")
     proj = Path.cwd().name
     rows_required = "\n".join(f"- {r}" for r in required) or "_None_"
     rows_exempt   = "\n".join(f"- {e}" for e in exempt)   or "_None_"
@@ -1872,26 +2038,40 @@ def _start_verify(console: Console) -> None:
 
     # ── Human gate ──────────────────────────────────────────────────────
     console.print()
-    if required:
-        console.print(
-            f"[bold]Chief Architect: approve report and open {len(required)} issue(s)?[/bold] [y/N] ",
-            end="",
-        )
-    else:
-        console.print("[bold]Chief Architect: approve report?[/bold] [y/N] ", end="")
-
-    try:
-        answer = input().strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        answer = "n"
-
-    if answer != "y":
-        console.print(f"[dim]Report saved to {report_path}. No issues created.[/dim]")
-        return
-
     if not required:
-        console.print(f"[green]✓ Report approved. {report_path}[/green]")
+        answer = _read_line(console, "[bold]Chief Architect: approve report?[/bold] [y/N] ").lower()
+        if answer == "y":
+            console.print(f"[green]✓ Report approved. {report_path}[/green]")
+        else:
+            console.print(f"[dim]Report saved to {report_path}. No action taken.[/dim]")
         return
+
+    n = len(required)
+    console.print(f"[bold]Chief Architect: which findings to open as issues?[/bold]")
+    console.print(f"  [dim]Enter 'all' (default), 'none', or numbers — e.g. '3-17' or '1,3,5-10'[/dim]")
+    console.print(f"  [dim]Findings not selected are noted in the report but no ticket is created.[/dim]")
+    answer = _read_line(console, "  [bold]>[/bold] ")
+    if answer == "":
+        console.print(f"\n[dim]Cancelled. Report saved to {report_path}.[/dim]")
+        return
+
+    selected = _parse_finding_selection(answer, n)
+
+    to_open_idx = sorted(selected) if selected else []
+    to_skip_idx = [i for i in range(1, n + 1) if i not in selected]
+
+    if to_skip_idx:
+        console.print(f"\n[dim]Skipping {len(to_skip_idx)} finding(s) — no issues created for:[/dim]")
+        for i in to_skip_idx:
+            console.print(f"  [dim]{i}. {required[i - 1][:90]}[/dim]")
+
+    if not to_open_idx:
+        console.print(f"\n[dim]Report approved. No issues created. {report_path}[/dim]")
+        return
+
+    required_to_open = [required[i - 1] for i in to_open_idx]
+    console.print(f"\n[green]Opening {len(required_to_open)} issue(s)…[/green]")
+    required = required_to_open  # hand off to issue-creation block below
 
     # ── Create issue tickets ─────────────────────────────────────────────
     jira_url   = os.environ.get("JIRA_URL", "").rstrip("/")
@@ -2098,6 +2278,7 @@ def _run_explore(target: str, console: Console) -> None:
     arch_style: str = scan.get("architecture.style", "")
     migration_tool: str = scan.get("db.migration_tool", "")
     ci_methods: list[str] = scan.get("ci.deployment_methods", [])
+    detected_commands: dict[str, str] = scan.pop("_commands", {})
 
     if stacks:
         console.print(f"\n[bold]Detected stacks:[/bold] {', '.join(stacks)}")
@@ -2133,6 +2314,17 @@ def _run_explore(target: str, console: Console) -> None:
         ci_line = f"\n## CI/CD tooling\n\n```yaml\nci:\n  deployment_methods:\n{ci_yaml_list}\n```\n"
     else:
         ci_line = ""
+    if detected_commands:
+        _rows = "\n".join(f"| {k:<18} | `{v}` |" for k, v in detected_commands.items())
+        cmd_line = (
+            f"\n## Project commands\n\n"
+            f"Auto-detected by /explore. Override in `.code-crew/config.yaml` under `commands:`.\n\n"
+            f"| Purpose | Command |\n"
+            f"|---------|--------|\n"
+            f"{_rows}\n"
+        )
+    else:
+        cmd_line = ""
     (out_dir / "structure.md").write_text(
         f"Directory tree of `{root.name}` (auto-generated by /explore):\n\n"
         f"```\n{root.name}/\n{tree_text}\n```\n\n"
@@ -2140,7 +2332,8 @@ def _run_explore(target: str, console: Console) -> None:
         f"```yaml\nstacks:\n{stacks_yaml}\n```\n"
         + arch_line
         + db_line
-        + ci_line,
+        + ci_line
+        + cmd_line,
         encoding="utf-8",
     )
     console.print(f"\n[green]✓[/green] Saved to [dim]{out_dir / 'structure.md'}[/dim]")
@@ -2185,8 +2378,8 @@ def _run_explore(target: str, console: Console) -> None:
     except Exception as exc:
         console.print(f"[dim]LLM phase skipped: {exc}[/dim]")
 
-    # --- persist detected stacks + arch + CI to .code-crew/config.yaml ---
-    if stacks or arch_style or ci_methods:
+    # --- persist detected stacks + arch + CI + commands to .code-crew/config.yaml ---
+    if stacks or arch_style or ci_methods or detected_commands:
         import yaml as _yaml
         cfg_path = out_dir / "config.yaml"
         cfg_data: dict = {}
@@ -2201,10 +2394,19 @@ def _run_explore(target: str, console: Console) -> None:
             cfg_data.setdefault("architecture", {})["style"] = arch_style
         if ci_methods:
             cfg_data.setdefault("ci", {})["deployment_methods"] = ci_methods
+        if detected_commands:
+            existing_cmds = cfg_data.get("commands", {})
+            # Only write keys not already overridden by the user
+            for k, v in detected_commands.items():
+                existing_cmds.setdefault(k, v)
+            cfg_data["commands"] = existing_cmds
+            # Apply to env so this session sees them immediately
+            from shared.config import _ENV_MAP, _apply_section
+            _apply_section(existing_cmds, _ENV_MAP.get("commands", {}), override=False)
         cfg_path.write_text(_yaml.safe_dump(cfg_data, default_flow_style=False, sort_keys=False), encoding="utf-8")
         if stacks:
             os.environ["_CODE_CREW_STACKS_PROFILE"] = ",".join(stacks)
-        console.print(f"[green]✓[/green] Updated [dim]{cfg_path}[/dim] with detected stacks, architecture, and CI/CD")
+        console.print(f"[green]✓[/green] Updated [dim]{cfg_path}[/dim] with detected stacks, architecture, CI/CD, and commands")
 
     svc_dirs = svc_dirs_scan
 
@@ -2541,6 +2743,86 @@ def _export_context(stem: str, log: list[dict], console: Console) -> None:
         lines.append(f"**A (human):** {entry['answer']}\n\n")
     out_file.write_text("".join(lines), encoding="utf-8")
     console.print(f"[green]✓[/green] Saved to [dim]{out_file}[/dim]")
+
+
+def _build_prompt(state: ReplState) -> HTML:
+    """Build the live prompt prefix — ONLY the ❯ symbol (or contextual variant).
+
+    Nothing else goes here: separators and status belong in _bottom_toolbar so
+    they stay fixed and never appear in terminal scrollback on submit.
+    """
+    pending_q = state.get_pending_question()
+    stuck = state.get_stuck()
+
+    if pending_q:
+        return HTML(
+            f"<ansicyan><b>[{pending_q.jira_key}] answer</b></ansicyan>"
+            f" <ansigreen><b>❯</b></ansigreen> "
+        )
+    if stuck and _is_in_consultation(stuck, state):
+        return HTML(
+            f"<ansiyellow><b>({stuck[0]} awaits decision)</b></ansiyellow>"
+            f" <ansigreen><b>❯</b></ansigreen> "
+        )
+    if stuck:
+        return HTML(
+            f"<ansiyellow><b>({stuck[0]} needs help)</b></ansiyellow>"
+            f" <ansigreen><b>❯</b></ansigreen> "
+        )
+    return HTML("<ansigreen><b>❯</b></ansigreen> ")
+
+
+def _bottom_toolbar(state: ReplState) -> HTML:
+    """Fixed bar below the prompt: separator · status line(s) · separator · hint.
+
+    Everything here stays on screen and never scrolls into terminal history.
+    Only the ❯ prefix + user input scrolls up on submit.
+    """
+    import time as _t
+    from code_crew.flow import _fmt_k
+
+    _SEP = "─" * 300
+
+    # Status line from active flows
+    parts: list[str] = []
+    with state.lock:
+        for key, (flow, _) in list(state.active.items()):
+            s = flow.state
+            if s.status == "passed":
+                continue
+            if s.status == "failed":
+                parts.append(f"<ansired>✗ {key} failed</ansired>")
+                continue
+            if s.status == "needs_help":
+                parts.append(f"<ansiyellow>⚑ {key}: needs help</ansiyellow>")
+                continue
+            task = (s.current_task or "starting").replace("_", " ")
+            task_start = getattr(flow, "_task_start", 0.0)
+            elapsed = ""
+            if task_start:
+                secs = int(_t.monotonic() - task_start)
+                m, sec = divmod(secs, 60)
+                elapsed = f"{m}m {sec:02d}s" if m else f"{sec}s"
+            tok = _fmt_k(s.session_tokens) if s.session_tokens else ""
+            meta = " · ".join(p for p in [elapsed, f"↓ {tok}" if tok else ""] if p)
+            entry = f"<b>✻</b> {task}  <ansicyan>{key}</ansicyan>"
+            if meta:
+                entry += f"  <ansiblue>{meta}</ansiblue>"
+            parts.append(entry)
+
+    if parts:
+        status = "  " + "   <ansibrightblack>│</ansibrightblack>   ".join(parts)
+        return HTML(f"{status}\n{_SEP}\n{prefix}")
+    return HTML(f"{_SEP}\n{prefix}")
+
+
+def _bottom_toolbar(_state: ReplState) -> HTML:
+    """Fixed bar below the prompt — separator + hint line."""
+    _SEP = "─" * 300
+    hint = "Alt+Enter for newline  ·  /help for stuck flows"
+    return HTML(
+        f"<ansibrightblack>{_SEP}\n  {hint}</ansibrightblack>"
+    )
 
 
 def _show_status(state: ReplState, console: Console) -> None:

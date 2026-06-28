@@ -109,7 +109,7 @@ Six sequential LLM tasks — a different category of work entirely:
 | `verify_compliance_scan` | compliance_officer | Data retention, consent flows, audit trails, active compliance stacks (GDPR, HIPAA, SOC2…) |
 | `verify_domain_scan` | architect | Entity name drift between `designs/DMD/` and actual code |
 | `verify_chief_review` | architect | Consolidates findings; marks each REQUIRED / EXEMPT / PASS |
-| `verify_report` | scrum_master | Writes `.code-crew/verify-report-YYYYMMDD.md` |
+| `verify_report` | scrum_master | Writes `.code-crew/audit-YYYYMMDD-HHMMSS.md` |
 
 `/verify` reads `structure.md` (from `/explore`) as context, but re-examines source files directly — it cannot rely on `/explore` having been run recently.
 
