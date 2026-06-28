@@ -621,10 +621,11 @@ class TicketFlow:
                         f"↩ REJECTED (attempt {retries}/{self.state.max_retries}) — {reason}",
                     )
 
-                # Clear implementation + devops checkpoints so they re-run with the
-                # review feedback injected — replaying a stale "IMPLEMENTATION COMPLETE"
-                # that produced no files would just fail code review again.
-                for t in ("implementation", "devops_coordination"):
+                # Clear implementation, devops, AND the failed gate so all three
+                # re-run fresh. Without clearing the gate, a stale cached verdict
+                # (e.g. INCOMPLETE from before any implementation existed) gets
+                # replayed on every retry and the loop never recovers.
+                for t in ("implementation", "devops_coordination", gate_task):
                     self.state.task_outputs.pop(t, None)
                 _save_checkpoint(self.state)
                 self._run_implementation()
@@ -749,7 +750,9 @@ class TicketFlow:
             self.state.current_task = task_name
             self.state.current_agent = _TASK_AGENTS.get(task_name, "")
             self.state.elapsed_seconds = 0.0
-            self._on_task_complete(self.state.jira_key, task_name, "[checkpoint]")
+            self.state.status = "passed"
+            self._emit()
+            self.state.status = "running"
             return self.state.task_outputs[task_name]
 
         self.state.current_task = task_name

@@ -708,6 +708,103 @@ def build_domain_extract_crew(target_path: str = "") -> Crew:
         )
 
 
+def build_otm_scope_task(inventory: dict) -> Crew:
+    """Return a single-task Crew that decides how to partition the project into OTM files."""
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    agents = load_bundle_agents(_KNOWLEDGE / "agents")
+
+    lines = ["## Project inventory\n"]
+    if inventory.get("svc_dirs"):
+        lines.append("### Source services (top-level directories)\n" +
+                     "\n".join(f"- {d}" for d in inventory["svc_dirs"]))
+    if inventory.get("cmd_entries"):
+        lines.append("### Sub-executables (cmd/ entries)\n" +
+                     "\n".join(f"- {e}" for e in inventory["cmd_entries"]))
+    if inventory.get("infra_modules"):
+        lines.append("### Infrastructure modules (Terraform ops/modules/)\n" +
+                     "\n".join(f"- {m}" for m in inventory["infra_modules"]))
+    if inventory.get("external_services"):
+        lines.append("### External services detected in source\n" +
+                     "\n".join(f"- {s}" for s in inventory["external_services"]))
+    if inventory.get("stacks"):
+        lines.append(f"### Active stacks\n{', '.join(inventory['stacks'])}")
+    ctx = "\n\n".join(lines)
+
+    t = Task(
+        name="explore_otm_scope",
+        description=f"{ctx}\n\n{tc['explore_otm_scope'].description}",
+        expected_output=tc["explore_otm_scope"].expected_output,
+        agent=agents["architect"],
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        return Crew(
+            agents=[agents["architect"]],
+            tasks=[t],
+            process=Process.sequential,
+            verbose=True,
+        )
+
+
+def build_otm_build_task(project: dict, inventory: dict) -> Crew:
+    """Return a hierarchical Crew that generates a complete OTM YAML for one project scope.
+
+    Uses a fast manager LLM to guide the Architect agent section-by-section,
+    directing it to read key source files via workspace_reader before each section.
+    """
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    agents = load_bundle_agents(_KNOWLEDGE / "agents")
+
+    stacks = inventory.get("stacks", [])
+    structure = _load_project_structure()
+
+    ctx_lines = [
+        f"## OTM project scope\n\n"
+        f"**Project id**: {project['id']}\n"
+        f"**Project name**: {project['name']}\n"
+        f"**Description**: {project['description']}\n\n"
+        f"**Components in scope**: {', '.join(project['components'])}\n\n"
+        f"**Active stacks**: {', '.join(stacks)}"
+    ]
+
+    if inventory.get("infra_modules"):
+        ctx_lines.append(
+            "**Infrastructure modules (Terraform ops/modules/)**: "
+            + ", ".join(inventory["infra_modules"])
+        )
+
+    if inventory.get("key_files"):
+        by_type: dict[str, list[str]] = {}
+        for f in inventory["key_files"]:
+            kind = f.get("type", "other")
+            by_type.setdefault(kind, []).append(f["path"])
+        lines = ["## Key files to read (use workspace_reader on each before the relevant section)\n"]
+        for kind, paths in by_type.items():
+            lines.append(f"**{kind}**:\n" + "\n".join(f"- {p}" for p in paths))
+        ctx_lines.append("\n".join(lines))
+
+    if structure:
+        ctx_lines.append(f"## Project structure\n\n{structure}")
+
+    ctx = "\n\n".join(ctx_lines)
+
+    t = Task(
+        name="explore_otm_build",
+        description=f"{ctx}\n\n{tc['explore_otm_build'].description}",
+        expected_output=tc["explore_otm_build"].expected_output,
+        agent=agents["architect"],
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        return Crew(
+            agents=[agents["architect"]],
+            tasks=[t],
+            process=Process.hierarchical,
+            manager_llm=get_llm_for_tier("fast"),
+            verbose=True,
+        )
+
+
 def _format_ux_context(ux_input: dict) -> str:
     acs = "\n".join(f"- {ac}" for ac in ux_input.get("acceptance_criteria", []))
     structure = _load_project_structure()

@@ -8,6 +8,7 @@ Each line is a JSON-encoded exchange: {role, content, ts}.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,6 +31,7 @@ class Session:
     def __init__(self, name: str) -> None:
         self.name = name
         self._path = _sessions_dir() / f"{name}.jsonl"
+        self._lock = threading.Lock()
         self._exchanges: list[Exchange] = self._load()
 
     def _load(self) -> list[Exchange]:
@@ -47,9 +49,10 @@ class Session:
 
     def add(self, role: str, content: str) -> None:
         ex = Exchange(role=role, content=content)
-        self._exchanges.append(ex)
-        with self._path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(ex)) + "\n")
+        with self._lock:
+            self._exchanges.append(ex)
+            with self._path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(asdict(ex)) + "\n")
 
     def recent(self, n: int = 10) -> list[Exchange]:
         return self._exchanges[-n:]

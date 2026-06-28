@@ -10,11 +10,22 @@ context_agents:
   - qa_lead
 expected_output: >
   Concrete evidence that code was written and verified — NOT a plan. Required:
-  1. `git diff HEAD` output (or `git show <sha> --stat`) showing new or modified production files.
+  1. FILES CHANGED block listing every file path created or modified (see format below).
   2. `go build ./...` (or `npx tsc --noEmit`) output confirming 0 errors.
   3. `go test ./... -count=1` output (or equivalent) confirming tests pass.
   4. Final line: IMPLEMENTATION COMPLETE
   If frontend is skipped due to no Figma link, state that explicitly and still provide (1)-(4) for backend.
+
+  FILES CHANGED format (mandatory — manager will reject output without this):
+  ```
+  FILES CHANGED:
+  - <relative/path/to/file.go>  (created|modified)
+  - <relative/path/to/file_test.go>  (created|modified)
+  - <integration/features/scenario_steps_test.go>  (created|modified)
+  ```
+  The manager will verify: (a) at least one non-test production file is listed, (b) BDD step
+  definition files are listed if BDD scenarios exist for this ticket, (c) all paths are relative
+  to the repo root.
 ---
 
 Implement the feature described in the sprint input, covering both backend and frontend
@@ -87,6 +98,19 @@ New infrastructure requirements:
 - IAM: s3:GetObject on dev-platform-datasets/*
 ```
 If none: state "No new infrastructure requirements."
+
+**Step 11 — Output FILES CHANGED block.**
+Before the completion signal, list every file you created or modified:
+```
+FILES CHANGED:
+- portal/backend/internal/api/register_validation.go  (created)
+- portal/backend/internal/api/register_validation_test.go  (created)
+- portal/backend/internal/ard/data_dictionary.go  (created)
+- integration/features/data_dictionary_steps_test.go  (created)
+```
+This is consumed by the manager to verify completeness, and by the code reviewer to know
+which files to read. Include BDD step definition files. Do not list vendor/, node_modules/,
+or auto-generated files (swagger, migration stubs before edits).
 
 **Step 11 — Verify API spec** (if Step 7 ran).
 Run `api_spec` tool with `operation: check_drift`. If it reports drift, fix before declaring IMPLEMENTATION COMPLETE.

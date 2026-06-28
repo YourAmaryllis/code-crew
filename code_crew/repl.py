@@ -170,9 +170,9 @@ def _switch_profile(name: str) -> bool:
 
 # Tools the human doesn't need to see — pure background context loading.
 _SUPPRESS_TOOLS = frozenset({
-    "jira_view", "jira_sprint_list",   # ticket details already known
-    "knowledge_reader", "sop_reader",  # internal doc lookups
-    "memory_recall",                   # memory hydration
+    "jira_view", "jira_sprint_list",      # ticket details already known
+    "knowledge_reader", "sop_reader",     # internal doc lookups
+    "memory_recall",                      # memory hydration
 })
 
 
@@ -223,6 +223,20 @@ def _tool_label(tool_name: str, args) -> str | None:
 
     if tool_name == "dod_checker":
         return "  [dim]checking definition of done[/dim]"
+
+    if tool_name in ("delegate_work_to_coworker", "Delegate work to coworker"):
+        coworker = (args.get("coworker", "") if isinstance(args, dict) else "").strip()
+        task = (args.get("task", "") if isinstance(args, dict) else "").strip()
+        task_short = task[:70] + ("…" if len(task) > 70 else "")
+        target = f" → [bold]{coworker}[/bold]" if coworker else ""
+        return f"  [dim]manager{target}: {task_short}[/dim]"
+
+    if tool_name in ("ask_question_to_coworker", "Ask question to coworker"):
+        coworker = (args.get("coworker", "") if isinstance(args, dict) else "").strip()
+        question = (args.get("question", "") if isinstance(args, dict) else "").strip()
+        q_short = question[:70] + ("…" if len(question) > 70 else "")
+        target = f" → [bold]{coworker}[/bold]" if coworker else ""
+        return f"  [dim]manager{target}? {q_short}[/dim]"
 
     # Generic fallback — show the name, drop noisy args
     label = tool_name.replace("_", " ")
@@ -286,10 +300,7 @@ def _quieten_crewai_verbosity() -> None:
 
         # event_listener: handle_task_started(source.id, task_name)
         def handle_task_started(self, task_id: str, task_name=None) -> None:
-            raw = (task_name or task_id or "").strip()
-            name = raw.split("\n")[0].replace("_", " ").strip()[:60]
-            if name:
-                self.console.print(f"\n[bold dim]{name}[/bold dim]")
+            pass  # already shown by the ► AGENT KEY TASK status line
 
         # event_listener: handle_task_status(source.id, agent_role, status, task_name)
         def handle_task_status(
@@ -1198,7 +1209,11 @@ def _start_ticket(
         "user_context": user_context,
     })
 
-    flow = TicketFlow(flow_state, on_status=ui.update, on_task_complete=ui.show_summary)
+    flow = TicketFlow(
+        flow_state,
+        on_status=ui.update,
+        on_task_complete=_task_complete_callback(ui, state.session, flow_state.task_outputs),
+    )
 
     def run_and_cleanup():
         try:
@@ -1334,7 +1349,11 @@ def _start_ticket_from_object(ticket, max_retries, code_path, state, ui, executo
         "user_context": user_context,
     })
 
-    flow = TicketFlow(flow_state, on_status=ui.update, on_task_complete=ui.show_summary)
+    flow = TicketFlow(
+        flow_state,
+        on_status=ui.update,
+        on_task_complete=_task_complete_callback(ui, state.session, flow_state.task_outputs),
+    )
 
     def run_and_cleanup():
         try:
@@ -1469,6 +1488,30 @@ def _scan_project(root: Path) -> dict:
         if (root / candidate).exists():
             found["api.doc_standard"] = "openapi"
             break
+
+    # --- CI/CD tooling (collect all; terraform + GHA often coexist) ---
+    ci_methods: list[str] = []
+    if (root / ".github" / "workflows").is_dir() and list((root / ".github" / "workflows").glob("*.yml")):
+        ci_methods.append("github-actions")
+    if (root / ".gitlab-ci.yml").exists():
+        ci_methods.append("gitlab-ci")
+    if (root / "Jenkinsfile").exists():
+        ci_methods.append("jenkins")
+    if any(f.name in ("docker-compose.yml", "docker-compose.yaml")
+           for f in root.iterdir() if f.is_file()):
+        ci_methods.append("docker-compose")
+    if (root / "cdk.json").exists() or any(root.rglob("cdk.ts")):
+        ci_methods.append("aws-cdk")
+    if (root / "pulumi.yaml").exists():
+        ci_methods.append("pulumi")
+    if (root / "fly.toml").exists():
+        ci_methods.append("fly-io")
+    if (root / "vercel.json").exists() or (root / ".vercel").is_dir():
+        ci_methods.append("vercel")
+    if any(root.rglob("*.tf")):
+        ci_methods.append("terraform")
+    if ci_methods:
+        found["ci.deployment_methods"] = ci_methods
 
     # --- architecture style (low-confidence heuristic; LLM phase overrides) ---
     all_dirs = {p.name for p in root.rglob("*") if p.is_dir() and p.name not in _SKIP}
@@ -2054,6 +2097,7 @@ def _run_explore(target: str, console: Console) -> None:
     svc_dirs_scan: list[str] = scan.pop("_svc_dirs", [])
     arch_style: str = scan.get("architecture.style", "")
     migration_tool: str = scan.get("db.migration_tool", "")
+    ci_methods: list[str] = scan.get("ci.deployment_methods", [])
 
     if stacks:
         console.print(f"\n[bold]Detected stacks:[/bold] {', '.join(stacks)}")
@@ -2072,19 +2116,31 @@ def _run_explore(target: str, console: Console) -> None:
     else:
         console.print("[dim]Migration tool not detected — set db.migration_tool in config if needed.[/dim]")
 
+    if ci_methods:
+        console.print(f"[bold]Detected CI/CD tooling:[/bold] {', '.join(ci_methods)}")
+        os.environ["CI_DEPLOYMENT_METHODS"] = ",".join(ci_methods)
+    else:
+        console.print("[dim]CI/CD tooling not detected — set ci.deployment_methods in config if needed.[/dim]")
+
     # --- save structure.md ---
     out_dir = root / ".code-crew"
     out_dir.mkdir(exist_ok=True)
     stacks_yaml = "\n".join(f"  - {s}" for s in stacks) if stacks else "  # none detected"
     arch_line = f"\n## Detected architecture\n\n```yaml\narchitecture:\n  style: {arch_style}\n```\n" if arch_style else ""
     db_line = f"\n## Detected migration tool\n\n```yaml\ndb:\n  migration_tool: {migration_tool}\n```\n" if migration_tool else ""
+    if ci_methods:
+        ci_yaml_list = "\n".join(f"    - {m}" for m in ci_methods)
+        ci_line = f"\n## CI/CD tooling\n\n```yaml\nci:\n  deployment_methods:\n{ci_yaml_list}\n```\n"
+    else:
+        ci_line = ""
     (out_dir / "structure.md").write_text(
         f"Directory tree of `{root.name}` (auto-generated by /explore):\n\n"
         f"```\n{root.name}/\n{tree_text}\n```\n\n"
         f"## Detected stacks\n\n"
         f"```yaml\nstacks:\n{stacks_yaml}\n```\n"
         + arch_line
-        + db_line,
+        + db_line
+        + ci_line,
         encoding="utf-8",
     )
     console.print(f"\n[green]✓[/green] Saved to [dim]{out_dir / 'structure.md'}[/dim]")
@@ -2129,8 +2185,8 @@ def _run_explore(target: str, console: Console) -> None:
     except Exception as exc:
         console.print(f"[dim]LLM phase skipped: {exc}[/dim]")
 
-    # --- persist detected stacks + arch to .code-crew/config.yaml ---
-    if stacks or arch_style:
+    # --- persist detected stacks + arch + CI to .code-crew/config.yaml ---
+    if stacks or arch_style or ci_methods:
         import yaml as _yaml
         cfg_path = out_dir / "config.yaml"
         cfg_data: dict = {}
@@ -2143,11 +2199,12 @@ def _run_explore(target: str, console: Console) -> None:
             cfg_data["stacks"] = stacks
         if arch_style:
             cfg_data.setdefault("architecture", {})["style"] = arch_style
+        if ci_methods:
+            cfg_data.setdefault("ci", {})["deployment_methods"] = ci_methods
         cfg_path.write_text(_yaml.safe_dump(cfg_data, default_flow_style=False, sort_keys=False), encoding="utf-8")
-        # Also activate stacks in current process so they're available immediately
         if stacks:
             os.environ["_CODE_CREW_STACKS_PROFILE"] = ",".join(stacks)
-        console.print(f"[green]✓[/green] Updated [dim]{cfg_path}[/dim] with detected stacks and architecture")
+        console.print(f"[green]✓[/green] Updated [dim]{cfg_path}[/dim] with detected stacks, architecture, and CI/CD")
 
     svc_dirs = svc_dirs_scan
 
@@ -2162,57 +2219,168 @@ def _run_explore(target: str, console: Console) -> None:
 
     tmd_dir = designs_dir / "TMD"
     tmd_dir.mkdir(exist_ok=True)
-    service_id = root.name.lower().replace(" ", "-")
-    tmd_file = tmd_dir / f"{service_id}.yaml"
 
-    if tmd_file.exists():
-        console.print(f"\n[dim]Threat model already exists: designs/TMD/{tmd_file.name} — skipping.[/dim]")
+    # --- Enhanced inventory scan ---
+    console.print("\n[dim]Building component inventory…[/dim]")
+
+    # Sub-executables: cmd/ sub-dirs within each svc_dir
+    cmd_entries: list[str] = []
+    for svc in svc_dirs:
+        cmd_dir = root / svc / "cmd"
+        if cmd_dir.is_dir():
+            for sub in sorted(cmd_dir.iterdir()):
+                if sub.is_dir():
+                    cmd_entries.append(f"{svc}/cmd/{sub.name}")
+
+    # Infrastructure modules from ops/modules/
+    infra_modules: list[str] = []
+    ops_modules = root / "ops" / "modules"
+    if ops_modules.is_dir():
+        for mod in sorted(ops_modules.iterdir()):
+            if mod.is_dir():
+                infra_modules.append(mod.name)
+
+    # Key files: build a reading list for the manager to direct the agent
+    # (dependency manifests, entry points, Terraform module roots)
+    # The agent reads these via workspace_reader to discover external services,
+    # data flows, and infrastructure — no grepping needed.
+    key_files: list[dict] = []
+    _SKIP_DIRS = {".git", "vendor", "node_modules", "__pycache__", ".terraform"}
+
+    for svc in svc_dirs:
+        svc_path = root / svc
+        # Dependency manifests
+        for manifest in ("go.mod", "package.json", "requirements.txt", "pyproject.toml", "Cargo.toml"):
+            p = svc_path / manifest
+            if p.exists():
+                key_files.append({"type": "dependency-manifest", "path": str(p.relative_to(root))})
+        # cmd/ entry points (main.go or equivalent)
+        cmd_path = svc_path / "cmd"
+        if cmd_path.is_dir():
+            for sub in sorted(cmd_path.iterdir()):
+                if sub.is_dir() and sub.name not in _SKIP_DIRS:
+                    for ep in ("main.go", "main.py", "index.ts", "server.go"):
+                        p = sub / ep
+                        if p.exists():
+                            key_files.append({"type": "entry-point", "path": str(p.relative_to(root))})
+                            break
+        # Top-level entry point if no cmd/
+        else:
+            for ep in ("main.go", "main.py", "cmd/main.go"):
+                p = svc_path / ep
+                if p.exists():
+                    key_files.append({"type": "entry-point", "path": str(p.relative_to(root))})
+                    break
+
+    # Terraform module roots (one variables.tf or main.tf per module)
+    for mod_name in infra_modules:
+        mod_path = root / "ops" / "modules" / mod_name
+        for tf_file in ("main.tf", "variables.tf"):
+            p = mod_path / tf_file
+            if p.exists():
+                key_files.append({"type": "terraform-module", "path": str(p.relative_to(root))})
+                break
+
+    inventory = {
+        "svc_dirs": svc_dirs,
+        "cmd_entries": cmd_entries,
+        "infra_modules": infra_modules,
+        "key_files": key_files,
+        "stacks": stacks,
+    }
+
+    console.print(f"  Services: {', '.join(svc_dirs) or 'none'}")
+    if cmd_entries:
+        console.print(f"  Sub-executables: {', '.join(cmd_entries)}")
+    if infra_modules:
+        console.print(f"  Infra modules: {', '.join(infra_modules)}")
+    if key_files:
+        console.print(f"  Key files catalogued: {len(key_files)}")
+
+    # --- Phase 3a: OTM scope decision ---
+    console.print("\n[dim]Phase 3a — OTM scope decision (Architect)…[/dim]")
+    svc_id_fallback = root.name.lower().replace(" ", "-")
+    scope_output = ""
+    try:
+        from code_crew.crew import build_otm_scope_task
+        scope_crew = build_otm_scope_task(inventory)
+        scope_output = scope_crew.kickoff().raw
+    except Exception as exc:
+        console.print(f"[yellow]OTM scope phase failed: {exc}[/yellow]")
+        console.print("[dim]Falling back to single-project OTM.[/dim]")
+        all_components = svc_dirs + cmd_entries
+        scope_output = (
+            f"PROJECT: {svc_id_fallback}\n"
+            f"DESCRIPTION: {project_summary or root.name + ' platform'}\n"
+            f"COMPONENTS: {', '.join(all_components)}\n"
+            f"OTM SCOPE COMPLETE"
+        )
+
+    # Parse PROJECT blocks from scope output
+    projects: list[dict] = []
+    current_proj: dict = {}
+    for line in scope_output.splitlines():
+        line = line.strip()
+        if line.startswith("PROJECT:"):
+            if current_proj:
+                projects.append(current_proj)
+            proj_id = line.split(":", 1)[1].strip()
+            current_proj = {
+                "id": proj_id,
+                "name": proj_id.replace("-", " ").title(),
+                "description": "",
+                "components": [],
+            }
+        elif line.startswith("DESCRIPTION:") and current_proj:
+            current_proj["description"] = line.split(":", 1)[1].strip()
+        elif line.startswith("COMPONENTS:") and current_proj:
+            current_proj["components"] = [c.strip() for c in line.split(":", 1)[1].split(",") if c.strip()]
+    if current_proj:
+        projects.append(current_proj)
+
+    if not projects:
+        console.print("[yellow]No project blocks parsed from scope output — skipping OTM generation.[/yellow]")
         return
 
+    console.print(f"\n[bold]OTM projects:[/bold] {', '.join(p['id'] for p in projects)}")
+
+    # --- Phase 3b: Generate full OTM YAML per project ---
+    console.print("\n[dim]Phase 3b — Generating OTM threat models…[/dim]")
+    from code_crew.crew import build_otm_build_task
+    import re as _re
+
     today = datetime.date.today().isoformat()
-    has_ai = "ai-ml" in stacks
 
-    components = ["  - name: External User\n    id: external-user\n"
-                  "    description: End user or external system\n"
-                  "    parent:\n      trustZone: internet\n    type: actor"]
-    for svc in svc_dirs:
-        svc_id = svc.lower().replace("_", "-")
-        desc = component_descriptions.get(svc, "")
-        components.append(
-            f"  - name: {svc}\n    id: {svc_id}\n    description: '{desc}'\n"
-            f"    parent:\n      trustZone: private\n    type: service\n"
-            f"    assets:\n      processed: []\n      stored: []"
-        )
-    if has_ai:
-        components.append(
-            "  - name: LLM Inference\n    id: llm-inference\n"
-            "    description: Large language model inference endpoint\n"
-            "    parent:\n      trustZone: private\n    type: ai-model\n"
-            "    assets:\n      processed: []\n      stored: []"
-        )
+    for project in projects:
+        tmd_file = tmd_dir / f"{project['id']}.yaml"
+        console.print(f"\n[dim]  Building OTM for [bold]{project['id']}[/bold]…[/dim]")
+        try:
+            build_crew = build_otm_build_task(project, inventory)
+            build_output = build_crew.kickoff().raw
 
-    tmd_file.write_text(
-        f"# OpenThreatModel v0.2.0 — auto-generated by /explore on {today}\n"
-        f"# Edit: add descriptions, assets, dataflows, and threats.\n"
-        f"# See designs/functions/threat-model for instructions.\n\n"
-        f"otmVersion: 0.2.0\n\n"
-        f"project:\n  name: {root.name}\n  id: {service_id}\n"
-        f"  description: '{project_summary}'\n  owner: Security Lead\n"
-        f"  attributes:\n    stacks: {stacks}\n\n"
-        f"representations:\n  - name: Architecture Diagram\n    id: arch-diagram\n    type: diagram\n\n"
-        f"assets: []\n\n"
-        f"components:\n" + "\n\n".join(components) + "\n\n"
-        f"trustZones:\n"
-        f"  - name: Internet\n    id: internet\n    description: Public internet — untrusted\n"
-        f"    risk:\n      trustRating: 0\n\n"
-        f"  - name: Private\n    id: private\n    description: Internal network — restricted access\n"
-        f"    risk:\n      trustRating: 75\n\n"
-        f"  - name: Data\n    id: data\n    description: Persistent storage layer\n"
-        f"    risk:\n      trustRating: 80\n\n"
-        f"dataflows: []\n\nthreats: []\n\nmitigations: []\n",
-        encoding="utf-8",
-    )
-    console.print(f"[green]✓[/green] Created [dim]designs/TMD/{tmd_file.name}[/dim] — add components, dataflows, and threats")
+            # Extract YAML: between first 'otmVersion:' and 'OTM BUILD COMPLETE'
+            yaml_match = _re.search(r"(otmVersion:.*?)(?:OTM BUILD COMPLETE|```\s*$)", build_output, _re.DOTALL)
+            if yaml_match:
+                yaml_text = yaml_match.group(1).strip()
+            else:
+                yaml_text = build_output.split("OTM BUILD COMPLETE")[0].strip()
+                yaml_text = _re.sub(r"^```ya?ml\s*\n?", "", yaml_text, flags=_re.MULTILINE)
+                yaml_text = _re.sub(r"^```\s*$", "", yaml_text, flags=_re.MULTILINE).strip()
+
+            if not yaml_text:
+                console.print(f"[yellow]  No YAML extracted for {project['id']} — skipping.[/yellow]")
+                continue
+
+            tmd_file.write_text(
+                f"# OpenThreatModel v0.2.0 — generated by /explore on {today}\n"
+                f"# Project: {project['name']}\n\n"
+                + yaml_text + "\n",
+                encoding="utf-8",
+            )
+            console.print(f"[green]✓[/green] Written [dim]designs/TMD/{tmd_file.name}[/dim]")
+
+        except Exception as exc:
+            console.print(f"[yellow]  OTM build failed for {project['id']}: {exc}[/yellow]")
 
 
 def _run_fix(console: Console) -> None:
@@ -2282,36 +2450,78 @@ def _inject_help(feedback: str, state: ReplState, console: Console) -> None:
 # ---------------------------------------------------------------------------
 
 def _show_context(key: str, state: ReplState, console: Console) -> None:
-    """Show Q&A log from agent human-input calls; optionally export to .code-crew/decisions/."""
+    """Show completed task outputs and Q&A for the given key.
+
+    Source priority:
+    1. In-memory task_outputs from an active flow (live run).
+    2. Session file entries (role starts with 'task:') — covers past runs and
+       the current session after the flow finishes.
+    3. Relay Q&A log from the active flow.
+    """
     import time as _time
 
     with state.lock:
         flows = list(state.active.values())
 
-    log: list[dict] = []
-    for flow, _ in flows:
-        if not key or flow.state.jira_key == key:
-            log.extend(flow.relay.log)
+    matched = [(flow, fut) for flow, fut in flows if not key or flow.state.jira_key == key]
+    relay_log: list[dict] = []
+    shown_tasks: set[str] = set()
 
-    if not log:
-        console.print("[dim]No agent questions recorded this session.[/dim]")
+    # --- Source 1: in-memory task_outputs (active flow) ---
+    for flow, _ in matched:
+        jira_key = flow.state.jira_key
+        outputs = getattr(flow.state, "task_outputs", {})
+        if outputs:
+            console.print(f"\n[bold]Completed tasks — {jira_key} (live)[/bold]")
+            for task_name, output in outputs.items():
+                shown_tasks.add(task_name)
+                snippet = output.replace("\n", " ")[:200]
+                if len(output) > 200:
+                    snippet += "…"
+                console.print(f"  [green]✓[/green] [bold]{task_name}[/bold]: [dim]{snippet}[/dim]")
+        relay_log.extend(flow.relay.log)
+
+    # --- Source 2: session file task entries ---
+    session_tasks = [
+        ex for ex in state.session._exchanges
+        if ex.role.startswith("task:") and ex.role[5:] not in shown_tasks
+    ]
+    # Filter by key prefix if requested (e.g. task content usually references the jira key)
+    if key and session_tasks:
+        session_tasks = [ex for ex in session_tasks if key.lower() in ex.content.lower()
+                         or key.lower() in ex.role.lower()]
+    if session_tasks:
+        console.print(f"\n[bold]Session history — {state.session.name}[/bold]")
+        for ex in session_tasks:
+            task_name = ex.role[5:]  # strip "task:" prefix
+            snippet = ex.content.replace("\n", " ")[:200]
+            if len(ex.content) > 200:
+                snippet += "…"
+            console.print(f"  [dim]✓[/dim] [bold]{task_name}[/bold]: [dim]{snippet}[/dim]")
+
+    if not matched and not session_tasks:
+        console.print(
+            f"[dim]No task history for {key}.[/dim]" if key
+            else "[dim]No task history in this session. Run /issue to start a flow.[/dim]"
+        )
         return
 
-    console.print(f"\n[bold]Agent questions & answers ({len(log)})[/bold]")
-    for i, entry in enumerate(log, 1):
-        ts = _time.strftime("%H:%M", _time.localtime(entry["timestamp"]))
-        console.print(f"\n  [dim]{i}. {entry['jira_key']}  {ts}[/dim]")
-        console.print(f"  [cyan]Q:[/cyan] {entry['question']}")
-        console.print(f"  [green]A:[/green] {entry['answer']}")
+    # --- Source 3: agent Q&A relay log ---
+    if relay_log:
+        console.print(f"\n[bold]Agent questions & answers ({len(relay_log)})[/bold]")
+        for i, entry in enumerate(relay_log, 1):
+            ts = _time.strftime("%H:%M", _time.localtime(entry["timestamp"]))
+            console.print(f"\n  [dim]{i}. {entry['jira_key']}  {ts}[/dim]")
+            console.print(f"  [cyan]Q:[/cyan] {entry['question']}")
+            console.print(f"  [green]A:[/green] {entry['answer']}")
 
-    # Offer to export
-    console.print(
-        f"\n[dim]Export to [bold].code-crew/decisions/{(key or 'session').lower()}.md[/bold]? [y/N][/dim] ",
-        end="",
-    )
-    answer = input().strip().lower()
-    if answer in ("y", "yes"):
-        _export_context(key or "session", log, console)
+        console.print(
+            f"\n[dim]Export Q&A to [bold].code-crew/decisions/{(key or 'session').lower()}.md[/bold]? [y/N][/dim] ",
+            end="",
+        )
+        answer = input().strip().lower()
+        if answer in ("y", "yes"):
+            _export_context(key or "session", relay_log, console)
 
 
 def _export_context(stem: str, log: list[dict], console: Console) -> None:
@@ -2334,15 +2544,28 @@ def _export_context(stem: str, log: list[dict], console: Console) -> None:
 
 
 def _show_status(state: ReplState, console: Console) -> None:
+    import time as _time
     with state.lock:
         if not state.active:
             console.print("[dim]No active runs.[/dim]")
             return
         for key, (flow, future) in state.active.items():
             s = flow.state
+            task = s.current_task or "—"
+            agent = (s.current_agent or "").upper() or "—"
+            retries = f"cr={s.code_review_retries} sec={s.sec_review_retries} dod={s.dod_retries}"
+            # Live elapsed for the current task (resets each task)
+            task_start = getattr(flow, "_task_start", 0.0)
+            if s.status == "running" and task_start:
+                secs = _time.monotonic() - task_start
+                mins, sec = divmod(int(secs), 60)
+                elapsed = f"{mins}m{sec:02d}s" if mins else f"{sec}s"
+            else:
+                elapsed = "—"
             console.print(
-                f"  [cyan]{key}[/cyan]  {s.status}  task={s.current_task or '—'}"
-                f"  retries(cr={s.code_review_retries} sec={s.sec_review_retries} dod={s.dod_retries})"
+                f"  [cyan]{key}[/cyan]  {s.status}"
+                f"  task=[bold]{task}[/bold]  agent={agent}"
+                f"  elapsed={elapsed}  retries({retries})"
             )
 
 
@@ -2411,6 +2634,16 @@ def _handle_session(args: list[str], state: ReplState, console: Console) -> None
         console.print(
             "[dim]  /session new [name] · /session use <name> · /session list[/dim]"
         )
+
+
+def _task_complete_callback(ui: "SprintUI", session: "Session", task_outputs: dict):
+    """Return an on_task_complete that prints via UI and persists the full output to session."""
+    def _cb(issue_key: str, task_name: str, summary: str) -> None:
+        ui.show_summary(issue_key, task_name, summary)
+        # task_outputs[task_name] is set with the full output before this callback fires
+        full = task_outputs.get(task_name, summary)
+        session.add(f"task:{task_name}", full)
+    return _cb
 
 
 def _ask_agent(agent_name: str, question: str, state: ReplState, console: Console) -> None:
@@ -2622,8 +2855,13 @@ def _print_startup_banner(console: Console, summary) -> None:
 
     console.print()
     console.print(f"[bold]code-crew[/bold]{profile_str}", end="  ")
+    meta_parts = []
     if summary.detected_stacks:
-        console.print(f"[dim]stacks: {', '.join(summary.detected_stacks)}[/dim]")
+        meta_parts.append(f"stacks: {', '.join(summary.detected_stacks)}")
+    if summary.detected_ci_methods:
+        meta_parts.append(f"ci: {', '.join(summary.detected_ci_methods)}")
+    if meta_parts:
+        console.print(f"[dim]{' · '.join(meta_parts)}[/dim]")
     else:
         console.print()
 

@@ -6,21 +6,25 @@ tags: [code-review, architecture, quality, phase-18]
 timestamp: 2026-06-17T00:00:00Z
 agent: tech_lead
 context_agents:
-  - backend_developer
-  - frontend_developer
+  - engineer
+  - devops_lead
 expected_output: >
   A Code Review Report with: per-finding entries (severity, file/line, description, fix),
   branch/commit/PR format check (PASS or FAIL with corrections needed), overall verdict
   (APPROVED / CHANGES REQUESTED), and specific action items for each finding.
 ---
 
-Review the implementation outputs from the backend and frontend developers.
-Use `platform_shell` to inspect actual code where needed (grep, cat, git log).
+Review the implementation from the engineer. The engineer's output includes a `FILES CHANGED:` block listing every file they created or modified.
 
-**Step 0 — Run BDD tests.**
-Before reviewing code, use the `bdd_runner` tool to execute the BDD feature files for this story. Include the test results in your report:
-- If all scenarios pass: mark "BDD: PASS" and proceed to code review.
-- If scenarios fail: identify whether the failure is in the implementation (logic bug) or in the test step definitions (missing step). List which scenarios failed and why. A failing BDD test is a Critical finding that blocks APPROVED.
+**Step 0 — Read the implementation output and load every changed file.**
+1. Find the `FILES CHANGED:` block in the engineer's output. If it is missing or empty, that is a Critical finding — output `INCOMPLETE: engineer did not provide FILES CHANGED block` and stop.
+2. Use `workspace_reader` to read each file listed. Do not rely solely on the text summary — read the actual code.
+3. Verify BDD step definition files are present in the list. If BDD scenarios exist for this ticket but no step definition file was listed or created, that is a Critical finding.
+
+**Step 0.5 — Run BDD tests (if step definitions exist).**
+Use the `bdd_runner` tool to execute the BDD feature files for this story. Include results:
+- All pass → mark "BDD: PASS" and proceed.
+- Failures → distinguish logic bugs (implementation) vs. missing step definitions. A failing BDD test is a Critical finding that blocks APPROVED.
 
 **Step 1 — Clean architecture.**
 Check that the implementation follows the platform's layered structure:

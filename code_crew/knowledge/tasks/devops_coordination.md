@@ -1,83 +1,104 @@
 ---
 type: CrewAI Task
 title: DevOps Coordination
-description: DevOps Lead identifies and applies infrastructure changes required for the feature to run in dev
-tags: [devops, terraform, ecs, secrets, iam, github-actions, phase-16]
+description: DevOps Lead applies infrastructure changes and deploys the feature using the project's configured tooling
+tags: [devops, infrastructure, deployment, phase-16]
 timestamp: 2026-06-20T00:00:00Z
 agent: devops_lead
 context_agents:
   - architect
   - engineer
 expected_output: >
-  NO CHANGES NEEDED (if no new infrastructure is required), OR DEVOPS COMPLETE with a
-  specific list of every Terraform change, secret, SSM parameter, and GitHub Actions
-  update applied to the dev environment.
+  NO CHANGES NEEDED (if no new infrastructure or code to deploy), OR DEVOPS COMPLETE with a
+  specific list of every infrastructure change applied and the deployment action taken.
 ---
 
-Review the engineer's implementation output and apply any infrastructure changes required
-for the feature to run in the dev environment.
+Review the engineer's implementation output and: (1) apply any required infrastructure changes, and (2) deploy the code changes using the project's configured tooling.
 
-**Step 1 — Load `ecs-deployment`** (`knowledge_reader`).
-Confirm conventions for ECS task definition env vars, Secrets Manager patterns, and OIDC IAM roles.
+**Step 0 — Read the FILES CHANGED block.**
+From the engineer's implementation output, find the `FILES CHANGED:` block listing every file created or modified. If the block is absent, output `INCOMPLETE: engineer did not provide FILES CHANGED block` and stop.
 
-**Step 2 — Read the implementation output.**
-The engineer has listed "New infrastructure requirements" at the end of their implementation
-output. Extract every item:
+**Step 1 — Understand the project's tooling.**
+Read `.code-crew/structure.md` (or `.code-crew/config.yaml`) using `workspace_reader`. The `ci.deployment_methods` field lists every CI/CD and infrastructure tool detected in this project, for example:
+```
+ci:
+  deployment_methods:
+    - github-actions
+    - terraform
+```
+Multiple tools are common. Use the right tool for each concern:
+- **Infra provisioning** (new resources, permissions, secrets): Terraform, AWS CDK, Pulumi, etc.
+- **Code deployment** (getting new code running in dev): the CI/CD pipeline (GHA, GitLab CI, Jenkins), docker-compose, fly.io, Vercel, etc.
+
+The startup checks have already verified that required CLIs are installed (terraform, gh, glab, docker, cdk, etc.). Use those tools directly.
+
+**Step 2 — Check infrastructure requirements.**
+From the engineer's output, find "New infrastructure requirements". Extract every item:
 - New environment variables (non-sensitive)
-- New secrets (Secrets Manager paths)
-- New IAM permissions (service, action, resource)
-- New SSM parameters
-- New GitHub Actions steps
+- New secrets (e.g. Secrets Manager, Vault, SSM)
+- New IAM permissions or roles
+- New managed resources (databases, queues, topics, buckets)
+- New CI/CD workflow changes needed for the test environment
 
-If the engineer listed "No new infrastructure requirements" — output `NO CHANGES NEEDED` and stop.
+If the engineer stated "No new infrastructure requirements" — skip Steps 3–4 and go to Step 5.
 
-**Step 3 — Check existing Terraform** (`workspace_reader` on `infra/`).
-Verify what already exists before adding duplicates. Read the relevant ECS task definition
-module and IAM role modules.
+**Step 3 — Check existing infrastructure** (`workspace_reader`).
+Read the relevant infrastructure files (Terraform modules, CDK stacks, Helm values, etc.) before making changes. Verify what already exists to avoid duplicates.
 
-**Step 4 — Apply changes to dev environment.**
-For each required change:
-- **New env var**: add to `environment` block in `infra/modules/<service>/ecs.tf`
-- **New secret**: create in Secrets Manager at `/platform/dev/<service>/<key>`, add to `secrets` block, add `secretsmanager:GetSecretValue` permission
-- **New IAM permission**: add statement to `infra/modules/<service>/iam.tf`
-- **New SSM parameter**: create at `/platform/dev/<service>/<key>`, add `ssm:GetParameter` if not already present
-- **New GitHub Actions step**: update the relevant workflow in `.github/workflows/`
+**Step 4 — Apply infrastructure changes.**
+Use whichever infra tool is configured (from Step 1) to apply the changes to the dev environment:
+- Add env vars / secrets / IAM permissions to the dev-tier resource definitions
+- For Terraform: `terraform plan` first to confirm the diff, then apply with `-target` scoped to dev resources
+- For CDK: `cdk deploy --context env=dev`
+- For Pulumi: `pulumi up --stack dev`
+- For cloud CLIs (aws, gcloud, az): apply only to dev; document exact commands run
+- Do NOT touch staging or production — those are promoted separately
 
-Run `terraform plan` to confirm the diff. Apply only to dev (`-var="env=dev"`).
+**Step 5 — Deploy the code changes.**
+Only run this step if the FILES CHANGED block contains application code files (not infra-only changes).
 
-Staging and production changes are NOT applied here — they occur on the next Terraform apply
-during promotion, after the feature is approved.
+Use the deployment tool configured for this project (from Step 1):
+- **CI pipeline (GHA, GitLab CI, Jenkins, etc.)**: commit the files from FILES CHANGED (list them explicitly — do not use `git add .`) with a conforming commit message, then push the feature branch. The pipeline handles build, test, and deploy to dev automatically.
+- **docker-compose**: rebuild and restart the affected services (`docker-compose up -d --build <service>`)
+- **fly.io**: `fly deploy --config fly.toml`
+- **Vercel**: `vercel deploy --env dev`
+- **Custom script**: run the project's deploy script with the dev target
 
-**Step 5 — Report.**
+When using a CI pipeline: you do not need to wait for it to complete here. Note the branch pushed and that the pipeline is now running.
 
-If no changes were needed:
-```
-NO CHANGES NEEDED
+**Step 6 — Report.**
 
-The feature does not introduce new env vars, secrets, or IAM permissions.
-Existing configuration is sufficient for integration tests.
-```
-
-If changes were applied:
+If infrastructure was changed and code was deployed:
 ```
 DEVOPS COMPLETE
 
-Applied to dev environment:
+Infrastructure changes applied (dev):
+  [Terraform / CDK / etc.]:
+  - Added DB_SECONDARY_URL env var to portal service definition
+  - Added s3:GetObject on dev-datasets/* to portal task role
+  - Created secret /platform/dev/portal/secondary-db-password
 
-Terraform:
-- Added env var DB_SECONDARY_URL to portal ECS task definition
-- Added s3:GetObject on dev-platform-datasets/* to portal task IAM role
+Code deployment:
+  - Committed 4 files to feature/LOOPLAT-92-data-dictionary-mandatory
+  - Pushed branch → [CI pipeline] now running against dev
+```
 
-Secrets Manager:
-- Created /platform/dev/portal/secondary-db-password
+If only code was deployed (no infra changes):
+```
+DEVOPS COMPLETE
 
-SSM Parameters:
-- Created /platform/dev/portal/feature-flag-new-validation
+No infrastructure changes required.
 
-GitHub Actions:
-- Added setup-secondary-db step to ci.yml (integration test env setup)
+Code deployment:
+  - Committed 4 files to feature/LOOPLAT-92-data-dictionary-mandatory
+  - Pushed branch → [CI pipeline] now running against dev
+```
 
-The engineer can now run BDD integration tests with TEST_RESET_ENABLED=true against dev.
+If nothing was needed:
+```
+NO CHANGES NEEDED
+
+No new infrastructure requirements and no code files to deploy.
 ```
 
 **On tool failure** — log the error, try once with an alternative, then skip and continue. Never use absolute paths in shell commands. Document any skipped steps in the report.

@@ -29,6 +29,7 @@ class StartupSummary:
     git_ok: bool
     git_branch: str
     detected_stacks: list[str]
+    detected_ci_methods: list[str]
     checks: list[CheckResult]
     warnings: int
     errors: int
@@ -58,7 +59,12 @@ def run_checks(code_path: Path | None = None) -> StartupSummary:
     stacks = detect_stacks(root)
     required_clis = _required_clis_for_stacks(stacks)
 
-    required_clis.setdefault("gh", "brew install gh  # then: gh auth login")
+    ci_methods = detect_ci_methods(root)
+    required_clis.update(_required_clis_for_ci_methods(ci_methods))
+
+    # gh is always useful (PR creation, GHA status); only require if GHA detected
+    if "github-actions" in ci_methods or not ci_methods:
+        required_clis.setdefault("gh", "brew install gh && gh auth login")
     if _uses_bedrock():
         required_clis.setdefault("aws", "brew install awscli")
 
@@ -85,6 +91,7 @@ def run_checks(code_path: Path | None = None) -> StartupSummary:
         git_ok=git_ok,
         git_branch=git_branch,
         detected_stacks=stacks,
+        detected_ci_methods=ci_methods,
         checks=checks,
         warnings=warnings,
         errors=errors,
@@ -131,6 +138,71 @@ def detect_stacks(root: Path | None = None) -> list[str]:
     if tf_files:
         detected.append("terraform-aws")
     return detected
+
+
+def detect_ci_methods(root: Path | None = None) -> list[str]:
+    """
+    Return CI/CD tooling detected for the project.
+
+    Resolution order:
+      1. `ci.deployment_methods` list in .code-crew/config.yaml
+      2. File-based auto-detection
+    Multiple tools are common (e.g. github-actions + terraform).
+    """
+    root = root or Path.cwd()
+
+    # 1. Explicit config
+    cfg = root / ".code-crew" / "config.yaml"
+    if cfg.exists():
+        try:
+            data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+            methods = data.get("ci", {}).get("deployment_methods")
+            if isinstance(methods, list) and methods:
+                return [str(m) for m in methods]
+        except Exception:
+            pass
+
+    # 2. File-based detection
+    methods: list[str] = []
+    if (root / ".github" / "workflows").is_dir() and list((root / ".github" / "workflows").glob("*.yml")):
+        methods.append("github-actions")
+    if (root / ".gitlab-ci.yml").exists():
+        methods.append("gitlab-ci")
+    if (root / "Jenkinsfile").exists():
+        methods.append("jenkins")
+    if any(f.name in ("docker-compose.yml", "docker-compose.yaml") for f in root.iterdir() if f.is_file()):
+        methods.append("docker-compose")
+    if (root / "cdk.json").exists():
+        methods.append("aws-cdk")
+    if (root / "pulumi.yaml").exists():
+        methods.append("pulumi")
+    if (root / "fly.toml").exists():
+        methods.append("fly-io")
+    if (root / "vercel.json").exists() or (root / ".vercel").is_dir():
+        methods.append("vercel")
+    if list(root.glob("*.tf")) or list(root.rglob("ops/modules/**/*.tf")):
+        methods.append("terraform")
+    return methods
+
+
+def _required_clis_for_ci_methods(ci_methods: list[str]) -> dict[str, str]:
+    hints = _cli_install_hints()
+    result: dict[str, str] = {}
+    _method_clis: dict[str, list[str]] = {
+        "github-actions": ["gh"],
+        "gitlab-ci": ["glab"],
+        "jenkins": [],
+        "docker-compose": ["docker"],
+        "aws-cdk": ["cdk", "aws"],
+        "pulumi": ["pulumi"],
+        "fly-io": ["fly"],
+        "vercel": ["vercel"],
+        "terraform": ["terraform"],
+    }
+    for method in ci_methods:
+        for cli in _method_clis.get(method, []):
+            result[cli] = hints.get(cli, f"install {cli}")
+    return result
 
 
 def _stacks_from_yaml(root: Path) -> list[str] | None:
@@ -255,6 +327,12 @@ def _cli_install_hints() -> dict[str, str]:
         "pre-commit": "pip install pre-commit",
         "linear": "npm i -g @linear/linear && linear auth login",
         "jira": "brew install jira-cli",
+        "docker": "brew install --cask docker",
+        "glab": "brew install glab && glab auth login",
+        "cdk": "npm i -g aws-cdk",
+        "pulumi": "brew install pulumi",
+        "fly": "brew install flyctl",
+        "vercel": "npm i -g vercel",
     }
 
 
