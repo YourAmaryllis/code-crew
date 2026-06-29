@@ -671,13 +671,58 @@ def build_explore_single_task(explore_input: dict, extra_context: str = "") -> s
     td = _KNOWLEDGE / "tasks"
     tc = load_bundle_tasks(td)
 
-    ctx = (
-        f"## Project: {explore_input.get('root_name', '.')}\n\n"
-        f"**Detected stacks**: {', '.join(explore_input.get('stacks', [])) or 'none'}\n"
-        f"**Phase 1 architecture**: {explore_input.get('arch_style', 'undetected')}\n"
-        f"**Phase 1 migration tool**: {explore_input.get('migration_tool', 'undetected')}\n"
-        f"**Service dirs**: {', '.join(explore_input.get('svc_dirs', []))}\n"
-    )
+    # Core detections
+    stacks = explore_input.get("stacks", [])
+    commands = explore_input.get("commands", {})
+    ci_methods = explore_input.get("ci_methods", [])
+    ci_workflows = explore_input.get("ci_workflows", {})
+    terraform = explore_input.get("terraform", {})
+
+    ctx = f"## Project: {explore_input.get('root_name', '.')}\n\n"
+    ctx += f"**Phase 1 architecture**: {explore_input.get('arch_style', 'undetected')}\n"
+    ctx += f"**Phase 1 migration tool**: {explore_input.get('migration_tool', 'undetected')}\n"
+    ctx += f"**Service dirs**: {', '.join(explore_input.get('svc_dirs', []))}\n\n"
+
+    if stacks:
+        ctx += f"### Detected stacks (verify each)\n" + "\n".join(f"- {s}" for s in stacks) + "\n\n"
+
+    if commands:
+        ctx += "### Detected commands (verify source files exist)\n"
+        ctx += "\n".join(f"- `{k}`: `{v}`" for k, v in commands.items()) + "\n\n"
+
+    if ci_methods:
+        ctx += "### Detected CI/CD methods (verify config files)\n"
+        for m in ci_methods:
+            detail = ci_workflows.get(m, "")
+            ctx += f"- {m}" + (f": {detail}" if detail else "") + "\n"
+        ctx += "\n"
+
+    if terraform:
+        ctx += "### Detected Terraform structure (verify by reading files)\n"
+        if terraform.get("root"):
+            ctx += f"- Root: `{terraform['root']}`\n"
+        envs = terraform.get("environments", {})
+        if envs:
+            for env, layers in sorted(envs.items()):
+                ctx += f"- Env `{env}`: {', '.join(layers)}\n"
+        if terraform.get("apply_order"):
+            ctx += f"- Apply order: {terraform['apply_order']}\n"
+        if terraform.get("state_bucket"):
+            ctx += f"- State bucket: `{terraform['state_bucket']}`\n"
+        if terraform.get("state_region"):
+            ctx += f"- State region: `{terraform['state_region']}`\n"
+        if terraform.get("state_key_pattern"):
+            ctx += f"- State key pattern: `{terraform['state_key_pattern']}`\n"
+        if terraform.get("aws_profile"):
+            ctx += f"- AWS profile: `{terraform['aws_profile']}`\n"
+        modules = terraform.get("modules", [])
+        if modules:
+            ctx += f"- Modules ({len(modules)} in `{terraform.get('modules_path', 'ops/modules')}/`): {', '.join(modules[:15])}"
+            if len(modules) > 15:
+                ctx += f" … +{len(modules) - 15} more"
+            ctx += "\n"
+        ctx += "\n"
+
     if extra_context:
         ctx += extra_context
 

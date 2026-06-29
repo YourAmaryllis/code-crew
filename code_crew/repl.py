@@ -1702,23 +1702,39 @@ def _scan_project(root: Path) -> dict:
         import re as _tf_re
         _tf: dict = {}
 
-        # Locate the "ops" or "infra" or "terraform" top-level dir that contains env subdirs
+        # Locate the directory whose immediate children are environment names (dev/staging/prod/…)
+        # Search up to 4 levels deep so it works regardless of nesting (ops/loopora/, infra/, etc.)
         _ENV_NAMES = {"dev", "staging", "prod", "production", "development", "qa", "uat", "sandbox"}
-        _LAYER_NAMES = {"bootstrap", "core-infra", "app-infra", "core", "app", "shared"}
+        _LAYER_NAMES = {"bootstrap", "core-infra", "app-infra", "core", "app", "shared",
+                        "networking", "security", "data", "services"}
+        _SKIP_TF = {".git", "vendor", "node_modules", "__pycache__", ".terraform",
+                    ".idea", ".vscode", "dist", "build", "coverage", ".next", "modules"}
         _tf_root: "Path | None" = None
-        for _candidate in sorted(root.iterdir()):
-            if not _candidate.is_dir() or _candidate.name in _SKIP:
-                continue
-            # Walk one level deeper looking for env dirs
-            for _sub in sorted(_candidate.iterdir()):
-                if not _sub.is_dir():
-                    continue
-                _env_children = [d for d in _sub.iterdir() if d.is_dir() and d.name in _ENV_NAMES]
-                if len(_env_children) >= 2:
-                    _tf_root = _sub
-                    break
-            if _tf_root:
-                break
+
+        def _has_env_children(d: "Path") -> bool:
+            try:
+                children = [c for c in d.iterdir() if c.is_dir() and c.name in _ENV_NAMES]
+                return len(children) >= 2
+            except (PermissionError, OSError):
+                return False
+
+        def _search_tf_root(base: "Path", depth: int) -> "Path | None":
+            if depth == 0:
+                return None
+            try:
+                for entry in sorted(base.iterdir()):
+                    if not entry.is_dir() or entry.name in _SKIP_TF:
+                        continue
+                    if _has_env_children(entry):
+                        return entry
+                    result = _search_tf_root(entry, depth - 1)
+                    if result:
+                        return result
+            except (PermissionError, OSError):
+                pass
+            return None
+
+        _tf_root = _search_tf_root(root, 4)
 
         if _tf_root:
             _rel_tf_root = str(_tf_root.relative_to(root))
@@ -1780,15 +1796,25 @@ def _scan_project(root: Path) -> dict:
             except OSError:
                 continue
 
-        # Modules
-        _mod_dir = root / "ops" / "modules"
-        if not _mod_dir.is_dir():
-            # Fall back to searching for a modules/ dir with *.tf files
-            for _md in root.rglob("modules"):
-                if _md.is_dir() and any(_md.glob("*/*.tf")):
-                    _mod_dir = _md
-                    break
-        if _mod_dir.is_dir():
+        # Modules: find a modules/ directory containing subdirs each with *.tf files
+        # No hardcoded path — works for ops/modules/, infra/modules/, terraform/modules/, etc.
+        _SKIP_GENERAL = {".git", "vendor", "node_modules", "__pycache__", ".terraform",
+                         ".idea", ".vscode", "dist", "build", "coverage", ".next"}
+        _mod_dir: "Path | None" = None
+        for _md in root.rglob("modules"):
+            if not _md.is_dir():
+                continue
+            if any(part in _SKIP_GENERAL for part in _md.parts):
+                continue
+            # Must contain at least 2 subdirs that each have at least one .tf file
+            _mod_subdirs = [
+                d for d in _md.iterdir()
+                if d.is_dir() and not d.name.startswith(".") and any(d.glob("*.tf"))
+            ]
+            if len(_mod_subdirs) >= 2:
+                _mod_dir = _md
+                break
+        if _mod_dir is not None and _mod_dir.is_dir():
             _tf["modules_path"] = str(_mod_dir.relative_to(root))
             _tf["modules"] = sorted(d.name for d in _mod_dir.iterdir() if d.is_dir())
 
@@ -2572,12 +2598,20 @@ def _run_explore(target: str, console: Console) -> None:
     )
     console.print(f"\n[green]✓[/green] Saved to [dim]{out_dir / 'structure.md'}[/dim]")
 
-    # --- Phase 2: LLM architecture assessment ---
+    # --- Phase 2: LLM verification + architecture assessment ---
     component_descriptions: dict[str, str] = {}
     project_summary: str = ""
+    # Collect CI workflow filenames to pass to architect
+    _ci_workflows_for_llm: dict[str, str] = {}
+    if "github-actions" in ci_methods:
+        _wf_dir = root / ".github" / "workflows"
+        if _wf_dir.is_dir():
+            _wf_files = sorted(f.name for f in _wf_dir.glob("*.yml")) + \
+                        sorted(f.name for f in _wf_dir.glob("*.yaml"))
+            _ci_workflows_for_llm["github-actions"] = ", ".join(_wf_files[:20])
     try:
         from code_crew.crew import build_explore_single_task
-        console.print("\n[dim]Running LLM phase (Architect)…[/dim]")
+        console.print("\n[dim]Running LLM phase (Architect — verifying detections + assessing architecture)…[/dim]")
         llm_result = build_explore_single_task(
             {
                 "root_name": root.name,
@@ -2585,10 +2619,21 @@ def _run_explore(target: str, console: Console) -> None:
                 "arch_style": arch_style,
                 "migration_tool": migration_tool,
                 "svc_dirs": svc_dirs_scan,
+                "commands": all_commands,
+                "ci_methods": ci_methods,
+                "ci_workflows": _ci_workflows_for_llm,
+                "terraform": terraform_info,
             },
             extra_context=f"\n## Directory tree\n\n```\n{root.name}/\n{tree_text}\n```\n",
         )
+
+        # Parse verification output — architect may correct any Phase 1 detection
+        verified_stacks: list[str] = []
+        corrected_commands: dict[str, str] = {}
+        verification_notes: list[str] = []
+
         for line in llm_result.splitlines():
+            line = line.strip()
             if line.startswith("ARCHITECTURE_STYLE:") and not arch_style:
                 arch_style = line.split(":", 1)[1].strip()
                 os.environ["ARCHITECTURE_STYLE"] = arch_style
@@ -2600,12 +2645,77 @@ def _run_explore(target: str, console: Console) -> None:
                 if ": " in rest:
                     cdir, desc = rest.split(": ", 1)
                     component_descriptions[cdir.strip()] = desc.strip()
+            elif line.startswith("STACK_VERIFIED:"):
+                parts = line.split(":", 2)
+                if len(parts) >= 2:
+                    verified_stacks.append(parts[1].strip())
+            elif line.startswith("STACK_ADDED:"):
+                parts = line.split(":", 2)
+                if len(parts) >= 2:
+                    s = parts[1].strip()
+                    if s and s not in stacks:
+                        stacks.append(s)
+                        verified_stacks.append(s)
+                        console.print(f"  [green]+[/green] Architect added stack: [bold]{s}[/bold]")
+            elif line.startswith("STACK_NOT_FOUND:"):
+                parts = line.split(":", 2)
+                if len(parts) >= 2:
+                    s = parts[1].strip()
+                    reason = parts[2].strip() if len(parts) > 2 else ""
+                    if s in stacks:
+                        stacks.remove(s)
+                    console.print(f"  [yellow]~[/yellow] Architect removed stack [bold]{s}[/bold]: {reason}")
+                    verification_notes.append(f"Stack {s} not confirmed: {reason}")
+            elif line.startswith("COMMAND_CORRECTED:"):
+                parts = line.split(":", 3)
+                if len(parts) >= 3:
+                    key = parts[1].strip()
+                    cmd = parts[2].strip()
+                    corrected_commands[key] = cmd
+                    console.print(f"  [yellow]~[/yellow] Command corrected: [bold]{key}[/bold] → `{cmd}`")
+            elif line.startswith("COMMAND_ADDED:"):
+                parts = line.split(":", 3)
+                if len(parts) >= 3:
+                    key = parts[1].strip()
+                    cmd = parts[2].strip()
+                    corrected_commands[key] = cmd
+                    console.print(f"  [green]+[/green] Command added: [bold]{key}[/bold] → `{cmd}`")
+            elif line.startswith("COMMAND_NOT_FOUND:"):
+                parts = line.split(":", 2)
+                if len(parts) >= 2:
+                    key = parts[1].strip()
+                    reason = parts[2].strip() if len(parts) > 2 else ""
+                    if key in all_commands:
+                        del all_commands[key]
+                    verification_notes.append(f"Command {key} not confirmed: {reason}")
+            elif line.startswith(("TF_ROOT_VERIFIED:", "TF_ENV_VERIFIED:", "TF_STATE_VERIFIED:",
+                                   "TF_MODULES_VERIFIED:", "TF_CORRECTED:", "TF_DISCOVERED:")):
+                tag = line.split(":", 1)[0]
+                detail = line.split(":", 1)[1].strip() if ":" in line else ""
+                console.print(f"  [dim]TF {tag.replace('TF_', '').lower()}: {detail[:80]}[/dim]")
+                if line.startswith("TF_CORRECTED:"):
+                    verification_notes.append(f"TF correction: {detail}")
+            elif line.startswith(("CICD_VERIFIED:", "CICD_ADDED:", "CICD_NOT_FOUND:")):
+                pass  # informational, no override needed
+
+        # Apply corrections to all_commands
+        for k, v in corrected_commands.items():
+            all_commands[k] = v
+
         # Augment structure.md with LLM findings
         additions = ""
+        if verification_notes:
+            additions += "\n## Architect verification notes\n\n"
+            additions += "\n".join(f"- {n}" for n in verification_notes) + "\n"
         if project_summary:
             additions += f"\n## Project summary\n\n{project_summary}\n"
         if arch_style:
-            additions += f"\n## Architecture (LLM assessed)\n\n```yaml\narchitecture:\n  style: {arch_style}\n```\n"
+            additions += f"\n## Architecture (Architect assessed)\n\n```yaml\narchitecture:\n  style: {arch_style}\n```\n"
+        if component_descriptions:
+            additions += "\n## Components\n\n"
+            additions += "\n".join(
+                f"- **{k}**: {v}" for k, v in sorted(component_descriptions.items())
+            ) + "\n"
         if additions:
             existing = (out_dir / "structure.md").read_text(encoding="utf-8")
             (out_dir / "structure.md").write_text(existing.rstrip() + "\n" + additions, encoding="utf-8")
