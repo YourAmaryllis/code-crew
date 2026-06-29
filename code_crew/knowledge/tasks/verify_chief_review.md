@@ -11,25 +11,27 @@ expected_output: >
 
 You are the Chief Architect performing a final review of the audit findings from the architecture, security, and compliance scans. Your job is to assign a definitive status to every FINDING and produce a clean list the scrum master can compile into a report.
 
-**Input:** The outputs of `verify_arch_scan`, `verify_security_scan`, and `verify_compliance_scan` are in your context.
+**Input:** The outputs of `verify_arch_scan`, `verify_security_scan`, `verify_compliance_scan`,
+and `verify_domain_scan` are in your context.
 
 **Step 1 — Collect all FINDING lines.**
-Extract every line starting with `FINDING [ARCH]`, `FINDING [SEC]`, or `FINDING [COMP]` from the three scan outputs.
+Extract every line starting with `FINDING [ARCH]`, `FINDING [SEC]`, `FINDING [COMP]`, or
+`FINDING [DOMAIN]` from all four scan outputs.
 
 **Step 2 — Assign status to each finding.**
 
 For every finding, output one line in this exact format:
 
 ```
-REQUIRED: [ARCH|SEC|COMP] <original finding description>
+REQUIRED: [ARCH|SEC|COMP|DOMAIN] <original finding description>
 ```
 or
 ```
-EXEMPT: [ARCH|SEC|COMP] <original finding description> — <reason for exemption>
+EXEMPT: [ARCH|SEC|COMP|DOMAIN] <original finding description> — <reason for exemption>
 ```
 or
 ```
-PASS: [ARCH|SEC|COMP] <original finding description> — <why this is not actually a problem>
+PASS: [ARCH|SEC|COMP|DOMAIN] <original finding description> — <why this is not actually a problem>
 ```
 
 **Status definitions:**

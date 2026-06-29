@@ -1569,6 +1569,38 @@ def _scan_project(root: Path) -> dict:
             except ValueError:
                 pass
 
+    # --- compliance standards (scan docs for mentions) ---
+    _COMPLIANCE_KEYWORDS = {
+        "hipaa":   ["hipaa", "phi ", "protected health information", "hitech"],
+        "soc2":    ["soc 2", "soc2", "soc type", "trust service criteria"],
+        "gdpr":    ["gdpr", "general data protection", "data subject", "right to erasure"],
+        "ccpa":    ["ccpa", "california consumer privacy", "right to know"],
+        "pci-dss": ["pci dss", "pci-dss", "payment card industry", "cardholder data"],
+        "fips":    ["fips 140", "fips-140"],
+    }
+    _compliance_standards: list[str] = []
+    _doc_search_dirs = [root / "designs", root / "docs", root]
+    _doc_files_checked: list[Path] = []
+    for _ddir in _doc_search_dirs:
+        if not _ddir.is_dir():
+            continue
+        for _df in list(_ddir.rglob("*.md"))[:30] + list(_ddir.rglob("*.txt"))[:5]:
+            if any(p in _SKIP for p in _df.parts):
+                continue
+            _doc_files_checked.append(_df)
+            if len(_doc_files_checked) > 40:
+                break
+    for _df in _doc_files_checked:
+        try:
+            _text = _df.read_text(encoding="utf-8", errors="ignore").lower()
+            for _std, _keywords in _COMPLIANCE_KEYWORDS.items():
+                if _std not in _compliance_standards and any(kw in _text for kw in _keywords):
+                    _compliance_standards.append(_std)
+        except OSError:
+            pass
+    if _compliance_standards:
+        found["_compliance_standards"] = _compliance_standards
+
     # --- testing framework ---
     if (root / "pytest.ini").exists() or (root / "setup.cfg").exists():
         found["testing.framework"] = "pytest"
@@ -2140,7 +2172,7 @@ def _start_verify(console: Console) -> None:
     from code_crew.crew import build_verify_crew
 
     console.print("\n[bold]Starting verification audit…[/bold]")
-    console.print("[dim]Scans: architecture · security · compliance → chief review → report[/dim]\n")
+    console.print("[dim]Scans: architecture · security · compliance · domain → chief review → report[/dim]\n")
 
     def _kickoff_verify():
         crew = build_verify_crew(project_root=str(Path.cwd()))
@@ -2184,7 +2216,7 @@ def _start_verify(console: Console) -> None:
     exempt   = re.findall(rf"^EXEMPT:\s+({_tag}.+)$",   chief_out, re.MULTILINE)
     passed   = re.findall(rf"^PASS:\s+({_tag}.+)$",     chief_out, re.MULTILINE)
 
-    # --- per-scan finding counts ---
+    # --- per-scan finding and pass counts ---
     scan_defs = [
         ("verify_arch_scan",        "Architecture", "ARCH"),
         ("verify_security_scan",    "Security",     "SEC"),
@@ -2192,9 +2224,13 @@ def _start_verify(console: Console) -> None:
         ("verify_domain_scan",      "Domain",       "DOMAIN"),
     ]
     scan_counts: dict[str, int] = {}
+    scan_passes: dict[str, list[str]] = {}
+    scan_infos: dict[str, list[str]] = {}
     for task_name, _, tag in scan_defs:
         raw = task_map.get(task_name, "")
         scan_counts[task_name] = len(re.findall(rf"^FINDING \[{tag}\]", raw, re.MULTILINE))
+        scan_passes[task_name] = re.findall(rf"^PASS \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)
+        scan_infos[task_name]  = re.findall(rf"^INFO \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)
 
     # --- write report file ---
     from datetime import datetime as _dt
@@ -2207,7 +2243,27 @@ def _start_verify(console: Console) -> None:
     proj = Path.cwd().name
     rows_required = "\n".join(f"- {r}" for r in required) or "_None_"
     rows_exempt   = "\n".join(f"- {e}" for e in exempt)   or "_None_"
-    rows_passed   = "\n".join(f"- {p}" for p in passed)   or "_None_"
+    rows_triaged_pass = "\n".join(f"- {p}" for p in passed) or "_None_"
+
+    # Build per-scan detail sections (findings + passes + infos)
+    _scan_detail_sections = ""
+    for task_name, label, tag in scan_defs:
+        raw = task_map.get(task_name, "")
+        _findings = re.findall(rf"^FINDING \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)
+        _passes   = scan_passes.get(task_name, [])
+        _infos    = scan_infos.get(task_name, [])
+        _scan_detail_sections += f"\n### {label}\n\n"
+        if _findings:
+            _scan_detail_sections += "**Findings:**\n" + "\n".join(f"- {f}" for f in _findings) + "\n\n"
+        else:
+            _scan_detail_sections += "**Findings:** _None_\n\n"
+        if _passes:
+            _scan_detail_sections += "**Passed:**\n" + "\n".join(f"- {p}" for p in _passes) + "\n\n"
+        if _infos:
+            _scan_detail_sections += "**Info:**\n" + "\n".join(f"- {i}" for i in _infos) + "\n\n"
+
+    # Total pass count = per-scan PASS lines + chief-review PASS (false positive) lines
+    total_clean = sum(len(v) for v in scan_passes.values())
     content = (
         f"# Audit Report\n\n"
         f"**Date:** {today_fmt}  \n**Project:** {proj}  \n"
@@ -2216,10 +2272,12 @@ def _start_verify(console: Console) -> None:
         f"| Status | Count |\n|--------|-------|\n"
         f"| REQUIRED (must fix) | {len(required)} |\n"
         f"| EXEMPT (accepted risk) | {len(exempt)} |\n"
-        f"| PASS (clean or false positive) | {len(passed)} |\n\n---\n\n"
+        f"| PASS (false positive triaged by architect) | {len(passed)} |\n"
+        f"| Clean checks (passed per scan) | {total_clean} |\n\n---\n\n"
         f"## Required Fixes\n\n{rows_required}\n\n---\n\n"
         f"## Exemptions\n\n{rows_exempt}\n\n---\n\n"
-        f"## Appendix — Pass Items\n\n{rows_passed}\n"
+        f"## Scan Details\n{_scan_detail_sections}\n---\n\n"
+        f"## Appendix — False Positives (Chief Review PASS)\n\n{rows_triaged_pass}\n"
     )
     report_path.write_text(content + "\n", encoding="utf-8")
 
@@ -2228,13 +2286,15 @@ def _start_verify(console: Console) -> None:
 
     for task_name, label, _ in scan_defs:
         n = scan_counts.get(task_name, 0)
+        p = len(scan_passes.get(task_name, []))
         icon = "[green]✓[/green]" if n == 0 else "[red]✗[/red]"
-        console.print(f"  {icon} {label:<18} {n} finding(s)")
+        console.print(f"  {icon} {label:<18} {n} finding(s), {p} clean check(s)")
 
     console.print()
     console.print(f"  [red bold]REQUIRED:[/red bold]  {len(required)}")
     console.print(f"  [yellow]EXEMPT:[/yellow]    {len(exempt)}")
-    console.print(f"  [green]PASS:[/green]      {len(passed)}")
+    console.print(f"  [green]PASS (false positive):[/green] {len(passed)}")
+    console.print(f"  [green]CLEAN checks:[/green] {total_clean}")
 
     if required:
         console.print(f"\n[red bold]Required fixes — must resolve before next release:[/red bold]")
@@ -2489,6 +2549,7 @@ def _run_explore(target: str, console: Console) -> None:
     api_doc: str = scan.get("api.doc_standard", "")
     api_doc_path: str = scan.get("api.doc_path", "")
     ci_methods: list[str] = scan.get("ci.deployment_methods", [])
+    compliance_standards: list[str] = scan.pop("_compliance_standards", [])
     detected_commands: dict[str, str] = scan.pop("_commands", {})
     terraform_info: dict = scan.pop("_terraform", {})
 
@@ -2685,6 +2746,7 @@ def _run_explore(target: str, console: Console) -> None:
                 "ci_methods": ci_methods,
                 "ci_workflows": _ci_workflows_for_llm,
                 "terraform": terraform_info,
+                "compliance_standards": compliance_standards,
             },
             extra_context=f"\n## Directory tree\n\n```\n{root.name}/\n{tree_text}\n```\n",
         )
@@ -2797,7 +2859,7 @@ def _run_explore(target: str, console: Console) -> None:
         if arch_style:
             additions += f"\n## Architecture\n\n```yaml\narchitecture:\n  style: {arch_style}\n```\n"
         # Append discovery sections in a defined order
-        _discovery_order = ["code_structure", "test_structure", "cicd_workflows", "entry_points"]
+        _discovery_order = ["code_structure", "test_structure", "cicd_workflows", "entry_points", "compliance_standards"]
         for _disc_key in _discovery_order:
             if _disc_key in discoveries:
                 additions += "\n" + discoveries[_disc_key] + "\n"

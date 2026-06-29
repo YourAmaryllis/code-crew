@@ -7,8 +7,8 @@ agent: architect
 expected_output: >
   Verification lines (STACK_VERIFIED/NOT_FOUND/ADDED, COMMAND_VERIFIED/CORRECTED/NOT_FOUND/ADDED,
   CICD_VERIFIED/NOT_FOUND, TF_ROOT_VERIFIED/ENV_VERIFIED/STATE_VERIFIED/MODULES_VERIFIED/CORRECTED),
-  then four DISCOVERY_BEGIN/END blocks (code_structure, test_structure, cicd_workflows, entry_points),
-  then: ARCHITECTURE_STYLE, PROJECT_SUMMARY, one COMPONENT line per service,
+  then five DISCOVERY_BEGIN/END blocks (code_structure, test_structure, cicd_workflows, entry_points,
+  compliance_standards), then: ARCHITECTURE_STYLE, PROJECT_SUMMARY, one COMPONENT line per service,
   then EXPLORE SCAN COMPLETE
 ---
 
@@ -308,6 +308,58 @@ DISCOVERY_BEGIN: entry_points
 | <name> | `<path>` | `<command>` | <env vars, ports, etc.> |
 ...
 DISCOVERY_END: entry_points
+```
+
+---
+
+## Step 5b — Compliance standards
+
+**Goal**: Confirm the Python-detected compliance standards and discover any the scan missed,
+so the audit crew knows which regulatory frameworks apply without re-scanning every time.
+
+The task context includes **Phase 1 compliance standards** detected by keyword scan of designs/
+and docs/. Verify these by reading the actual files, then check for any not yet detected.
+
+Standards to look for — scan designs/, docs/, root `*.md`, and any `SOP/` files:
+
+| Standard | Keywords to find |
+|----------|-----------------|
+| HIPAA    | hipaa, phi, protected health information, hitech |
+| SOC 2    | soc 2, soc2, trust service criteria |
+| GDPR     | gdpr, general data protection, data subject, right to erasure |
+| CCPA     | ccpa, california consumer privacy, right to know |
+| PCI-DSS  | pci dss, pci-dss, cardholder data, payment card industry |
+| FIPS     | fips 140, fips-140 |
+
+Read at most 6 documents. If a document mentions a standard, mark it confirmed.
+
+Output a discovery block:
+
+```
+DISCOVERY_BEGIN: compliance_standards
+## Compliance standards
+
+**Detected and confirmed**:
+- HIPAA — confirmed in `designs/SOP/...` (PHI handling requirements)
+- SOC 2 — confirmed in `designs/SOP/...` (trust service criteria)
+
+**Detected but unconfirmed** (found no clear keyword match after reading files):
+- (list any if applicable)
+
+**Not detected** (no mentions found):
+- GDPR, CCPA, PCI-DSS, FIPS (no mentions found in scanned docs)
+
+**Files scanned**: `<file1>`, `<file2>`, ...
+DISCOVERY_END: compliance_standards
+```
+
+If none are found after checking, say so explicitly:
+```
+DISCOVERY_BEGIN: compliance_standards
+## Compliance standards
+
+No compliance standards detected in designs/ or docs/.
+DISCOVERY_END: compliance_standards
 ```
 
 ---

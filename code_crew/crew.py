@@ -687,7 +687,13 @@ def build_explore_single_task(explore_input: dict, extra_context: str = "") -> s
     if explore_input.get("api_doc_path"):
         ctx += f" (at `{explore_input['api_doc_path']}`)"
     ctx += "\n"
-    ctx += f"**Service dirs**: {', '.join(explore_input.get('svc_dirs', []))}\n\n"
+    ctx += f"**Service dirs**: {', '.join(explore_input.get('svc_dirs', []))}\n"
+    _comp_stds = explore_input.get("compliance_standards", [])
+    if _comp_stds:
+        ctx += f"**Phase 1 compliance standards detected**: {', '.join(_comp_stds)} — verify by reading designs/ and docs/\n"
+    else:
+        ctx += f"**Phase 1 compliance standards**: none detected — check designs/ and docs/ for HIPAA/SOC2/GDPR/CCPA/PCI-DSS/FIPS mentions\n"
+    ctx += "\n"
 
     feature_dirs = explore_input.get("feature_dirs", [])
     test_dirs = explore_input.get("test_dirs", [])
