@@ -711,7 +711,7 @@ def build_domain_extract_crew(target_path: str = "") -> Crew:
 def build_otm_scope_task(inventory: dict) -> Crew:
     """Return a single-task Crew that decides how to partition the project into OTM files."""
     tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
-    agents = load_bundle_agents(_KNOWLEDGE / "agents")
+    agents = build_agents(_make_tools())
 
     lines = ["## Project inventory\n"]
     if inventory.get("svc_dirs"):
@@ -753,7 +753,7 @@ def build_otm_build_task(project: dict, inventory: dict) -> Crew:
     directing it to read key source files via workspace_reader before each section.
     """
     tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
-    agents = load_bundle_agents(_KNOWLEDGE / "agents")
+    agents = build_agents(_make_tools())
 
     stacks = inventory.get("stacks", [])
     structure = _load_project_structure()
