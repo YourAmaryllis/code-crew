@@ -754,7 +754,10 @@ def build_explore_single_task(explore_input: dict, extra_context: str = "") -> s
             process=Process.sequential,
             verbose=True,
         )
-        result = crew.kickoff(inputs=explore_input)
+        # inputs={} prevents CrewAI from treating {env}/{layer} in embedded
+        # values (e.g. Terraform state key patterns) as template variables.
+        # All context is already embedded in the task description via f-strings.
+        result = crew.kickoff(inputs={})
     return str(result)
 
 
