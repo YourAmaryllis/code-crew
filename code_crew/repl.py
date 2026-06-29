@@ -1618,23 +1618,52 @@ def _scan_project(root: Path) -> dict:
         except Exception:
             pass
 
-    pkg_json = root / "package.json"
-    if pkg_json.exists():
-        import json as _j2
+    # Check root package.json first, then find the primary frontend package.json.
+    # Priority: directories named "frontend", "web", "app", "ui", or inside "portal/".
+    _pkg_jsons_to_check: list[tuple[int, str, "Path"]] = []
+    if (root / "package.json").exists():
+        _pkg_jsons_to_check.append((0, "", root / "package.json"))
+    import json as _j2
+    _SKIP_PARTS = {"node_modules", ".next", "dist", "build", "coverage", ".turbo"}
+    _FRONTEND_PRIO = {"frontend": 10, "web": 8, "app": 8, "ui": 7, "portal": 5}
+    for _pj in root.rglob("package.json"):
+        if any(skip in _pj.parts for skip in _SKIP_PARTS):
+            continue
+        if _pj == root / "package.json":
+            continue
         try:
-            _pkg = _j2.loads(pkg_json.read_text())
+            _pd = _j2.loads(_pj.read_text())
+            _deps = {**_pd.get("dependencies", {}), **_pd.get("devDependencies", {})}
+            if not any(k in _deps for k in ("react", "next", "@types/react", "vite")):
+                continue
+            _rel = str(_pj.parent.relative_to(root))
+            # Score: higher = more likely to be the primary frontend
+            _score = sum(
+                _FRONTEND_PRIO.get(part, 0) for part in _pj.parts
+            )
+            _pkg_jsons_to_check.append((_score, _rel, _pj))
+        except Exception:
+            continue
+    # Sort descending by score so primary frontend comes first
+    _pkg_jsons_to_check.sort(key=lambda x: -x[0])
+    _pkg_jsons_to_check = _pkg_jsons_to_check[:3]
+
+    for _, _pkg_rel, _pkg_path in _pkg_jsons_to_check:
+        try:
+            _pkg = _j2.loads(_pkg_path.read_text())
             _scripts = _pkg.get("scripts", {})
+            _cd = f"cd {_pkg_rel} && " if _pkg_rel else ""
             if "test" in _scripts:
-                _commands.setdefault("test", "npm test")
+                _commands.setdefault("test_frontend", f"{_cd}npm test")
             if "build" in _scripts:
-                _commands.setdefault("build", "npm run build")
+                _commands.setdefault("build_frontend", f"{_cd}npm run build")
             if any(k in _scripts for k in ("typecheck", "type-check", "tsc")):
                 _tc = next(k for k in ("typecheck", "type-check", "tsc") if k in _scripts)
-                _commands.setdefault("typecheck", f"npm run {_tc}")
+                _commands.setdefault("typecheck", f"{_cd}npm run {_tc}")
             elif "build" in _scripts and "tsc" in _scripts.get("build", ""):
-                _commands.setdefault("typecheck", "npx tsc --noEmit")
+                _commands.setdefault("typecheck", f"{_cd}npx tsc --noEmit")
             if any(k in _scripts for k in ("lint", "eslint")):
-                _commands.setdefault("lint", "npm run lint")
+                _commands.setdefault("lint_frontend", f"{_cd}npm run lint")
         except Exception:
             pass
 
@@ -2309,19 +2338,73 @@ def _run_explore(target: str, console: Console) -> None:
     stacks_yaml = "\n".join(f"  - {s}" for s in stacks) if stacks else "  # none detected"
     arch_line = f"\n## Detected architecture\n\n```yaml\narchitecture:\n  style: {arch_style}\n```\n" if arch_style else ""
     db_line = f"\n## Detected migration tool\n\n```yaml\ndb:\n  migration_tool: {migration_tool}\n```\n" if migration_tool else ""
+
     if ci_methods:
-        ci_yaml_list = "\n".join(f"    - {m}" for m in ci_methods)
-        ci_line = f"\n## CI/CD tooling\n\n```yaml\nci:\n  deployment_methods:\n{ci_yaml_list}\n```\n"
+        # List workflow filenames for github-actions so agents know what to look at
+        _ci_detail_lines = []
+        for _cm in ci_methods:
+            if _cm == "github-actions":
+                _wf_dir = root / ".github" / "workflows"
+                _wf_files = sorted(f.name for f in _wf_dir.glob("*.yml")) if _wf_dir.is_dir() else []
+                _wf_files += sorted(f.name for f in _wf_dir.glob("*.yaml")) if _wf_dir.is_dir() else []
+                if _wf_files:
+                    _ci_detail_lines.append(f"- **github-actions**: {', '.join(_wf_files[:12])}")
+                else:
+                    _ci_detail_lines.append(f"- **github-actions**")
+            else:
+                _ci_detail_lines.append(f"- **{_cm}**")
+        ci_line = "\n## CI/CD tooling\n\n" + "\n".join(_ci_detail_lines) + "\n"
     else:
         ci_line = ""
-    if detected_commands:
-        _rows = "\n".join(f"| {k:<18} | `{v}` |" for k, v in detected_commands.items())
+
+    # Merge detected commands with any already persisted in config.yaml
+    import yaml as _yaml_cmd
+    _cfg_path = out_dir / "config.yaml"
+    _cfg_cmds: dict[str, str] = {}
+    if _cfg_path.exists():
+        try:
+            _cfg_data = _yaml_cmd.safe_load(_cfg_path.read_text(encoding="utf-8")) or {}
+            _cfg_cmds = _cfg_data.get("commands", {})
+        except Exception:
+            pass
+    # Detected commands take precedence for new keys; config.yaml wins for existing keys
+    all_commands = {**detected_commands, **_cfg_cmds}
+
+    if all_commands:
+        # Group: backend (Go/Python) vs frontend (TypeScript) vs infra
+        _backend_keys = ("test", "build", "lint", "audit")
+        _frontend_keys = ("test_frontend", "build_frontend", "typecheck", "lint_frontend")
+        _infra_keys = ("db_migrate", "api_spec")
+
+        def _cmd_rows(keys):
+            return "\n".join(
+                f"| {k:<20} | `{all_commands[k]}` |" for k in keys if k in all_commands
+            )
+
+        _sections = []
+        _be_rows = _cmd_rows(_backend_keys)
+        _fe_rows = _cmd_rows(_frontend_keys)
+        _infra_rows = _cmd_rows(_infra_keys)
+        _other_rows = "\n".join(
+            f"| {k:<20} | `{v}` |"
+            for k, v in all_commands.items()
+            if k not in _backend_keys + _frontend_keys + _infra_keys
+        )
+
+        _hdr = "| Purpose              | Command |\n|----------------------|---------|"
+        if _be_rows:
+            _sections.append(f"### Backend\n\n{_hdr}\n{_be_rows}")
+        if _fe_rows:
+            _sections.append(f"### Frontend (TypeScript/React)\n\n{_hdr}\n{_fe_rows}")
+        if _infra_rows:
+            _sections.append(f"### Infrastructure\n\n{_hdr}\n{_infra_rows}")
+        if _other_rows:
+            _sections.append(f"### Other\n\n{_hdr}\n{_other_rows}")
+
         cmd_line = (
             f"\n## Project commands\n\n"
             f"Auto-detected by /explore. Override in `.code-crew/config.yaml` under `commands:`.\n\n"
-            f"| Purpose | Command |\n"
-            f"|---------|--------|\n"
-            f"{_rows}\n"
+            + "\n\n".join(_sections) + "\n"
         )
     else:
         cmd_line = ""

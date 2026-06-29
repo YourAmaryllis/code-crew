@@ -135,31 +135,92 @@ def build_agents(tools: dict) -> dict:
     }
 
 
+def _make_guardrail(signal: str, extra: str = ""):
+    """Return a guardrail function that rejects output missing the required completion signal."""
+    def guardrail(output) -> tuple[bool, str]:
+        text = output.raw if hasattr(output, "raw") else str(output)
+        if signal in text:
+            return True, ""
+        if "INCOMPLETE:" in text:
+            return False, (
+                f"Worker reported INCOMPLETE. Send them back with specific instructions "
+                f"to resolve the blocker and complete the work. Required signal: '{signal}'."
+            )
+        msg = (
+            f"Output does not contain the required completion signal '{signal}'. "
+            f"The worker appears to have described a plan rather than executing the work. "
+            f"Send them back to actually do the work and return '{signal}' when done."
+        )
+        if extra:
+            msg += f" {extra}"
+        return False, msg
+    return guardrail
+
+
+def _impl_guardrail(output) -> tuple[bool, str]:
+    """Implementation task: require IMPLEMENTATION COMPLETE + FILES CHANGED block."""
+    text = output.raw if hasattr(output, "raw") else str(output)
+    if "IMPLEMENTATION COMPLETE" in text and "FILES CHANGED:" in text:
+        return True, ""
+    if "IMPLEMENTATION COMPLETE" in text:
+        return False, (
+            "Output has IMPLEMENTATION COMPLETE but is missing the 'FILES CHANGED:' block. "
+            "Send the engineer back to list every file created or modified before completing."
+        )
+    if "INCOMPLETE:" in text:
+        return False, (
+            "Engineer reported INCOMPLETE. Send them back with specific instructions to "
+            "resolve the blocker. If they have tried 3+ times with different approaches, "
+            "output: ESCALATE TO HUMAN: <reason>."
+        )
+    return False, (
+        "Output does not contain 'IMPLEMENTATION COMPLETE' and a 'FILES CHANGED:' block. "
+        "The engineer appears to have planned work rather than executed it. "
+        "Send them back to write the code, run the tests, and return with both signals."
+    )
+
+
 def build_tasks(agents: dict, sprint_input: dict, tasks_dir: Path | None = None) -> dict:
     """Build all tasks from OKF files. Returns a dict keyed by task name."""
     td = tasks_dir or (_KNOWLEDGE / "tasks")
     tc = load_bundle_tasks(td)
     ctx = _format_context(sprint_input)
 
-    def task(name: str, agent_key: str, context_tasks: list | None = None) -> Task:
-        return Task(
+    def task(
+        name: str,
+        agent_key: str,
+        context_tasks: list | None = None,
+        guardrail_fn=None,
+    ) -> Task:
+        t = Task(
             name=name,
             description=f"{ctx}\n\n{tc[name].description}",
             expected_output=tc[name].expected_output,
             agent=agents[agent_key],
             context=context_tasks or [],
         )
+        if guardrail_fn is not None:
+            t.guardrail = guardrail_fn
+            t.guardrail_max_retries = 5
+        return t
+
+    _task_complete   = _make_guardrail("TASK COMPLETE")
+    _devops_complete = _make_guardrail("DEVOPS COMPLETE", extra="'NO CHANGES NEEDED' is also accepted.")
+    _bdd_approved    = _make_guardrail("BDD APPROVED")
+    _release_done    = _make_guardrail("RELEASE NOTE COMPLETE")
+    _staging_done    = _make_guardrail("STAGING VERIFIED",  extra="'STAGING FAILED' is also accepted — it means the check ran.")
+    _smoke_done      = _make_guardrail("SMOKE PASSED",      extra="'SMOKE FAILED' is also accepted — it means the check ran.")
 
     sprint_planning  = task("sprint_planning_check", "scrum_master")
     arch_review      = task("architecture_review",   "architect",      [sprint_planning])
-    scaffold_code    = task("scaffold_code",          "engineer",       [arch_review])
-    scaffold_test    = task("scaffold_test",          "qa_lead",        [arch_review, scaffold_code])
-    bdd_authoring    = task("bdd_test_authoring",     "qa_lead",        [sprint_planning, arch_review, scaffold_test])
+    scaffold_code    = task("scaffold_code",          "engineer",       [arch_review],                        _task_complete)
+    scaffold_test    = task("scaffold_test",          "qa_lead",        [arch_review, scaffold_code],          _task_complete)
+    bdd_authoring    = task("bdd_test_authoring",     "qa_lead",        [sprint_planning, arch_review, scaffold_test], _task_complete)
     bdd_po_review    = task("bdd_po_review",          "product_owner",  [bdd_authoring])
     bdd_arch_review  = task("bdd_arch_review",        "architect",      [bdd_authoring])
-    bdd_final        = task("bdd_finalization",       "qa_lead",        [bdd_po_review, bdd_arch_review])
-    implementation   = task("implementation",          "engineer",       [arch_review, scaffold_code, bdd_final])
-    devops_coord     = task("devops_coordination",    "devops_lead",    [arch_review, implementation])
+    bdd_final        = task("bdd_finalization",       "qa_lead",        [bdd_po_review, bdd_arch_review],     _bdd_approved)
+    implementation   = task("implementation",          "engineer",       [arch_review, scaffold_code, bdd_final], _impl_guardrail)
+    devops_coord     = task("devops_coordination",    "devops_lead",    [arch_review, implementation],        _devops_complete)
     code_review      = task("code_review",            "architect",          [implementation, devops_coord])
     sec_review       = task("security_review",         "security_lead",      [implementation, devops_coord, code_review])
     comp_review      = task("compliance_review",       "compliance_officer", [implementation, devops_coord, code_review, sec_review])
@@ -167,11 +228,11 @@ def build_tasks(agents: dict, sprint_input: dict, tasks_dir: Path | None = None)
                             [sprint_planning, arch_review, scaffold_code, scaffold_test,
                              bdd_authoring, bdd_final, implementation, devops_coord,
                              code_review, sec_review, comp_review])
-    release_notes     = task("release_notes",         "release_engineer",   [dod_check])
+    release_notes     = task("release_notes",         "release_engineer",   [dod_check],                     _release_done)
     promote_staging   = task("promote_staging",       "devops_lead",        [release_notes])
-    staging_verif     = task("staging_verification",  "qa_lead",            [promote_staging])
+    staging_verif     = task("staging_verification",  "qa_lead",            [promote_staging],               _staging_done)
     launch_decision   = task("launch_decision",       "release_engineer",   [release_notes, staging_verif])
-    smoke_test        = task("smoke_test",             "qa_lead",            [staging_verif])
+    smoke_test        = task("smoke_test",             "qa_lead",            [staging_verif],                 _smoke_done)
 
     return {
         "sprint_planning":      sprint_planning,
@@ -215,6 +276,20 @@ MANAGED_TASKS = frozenset({
 _STANDARD_MANAGER_TASKS = frozenset({"implementation"})
 
 
+def _build_manager_agent(task_name: str) -> Agent:
+    """Build a custom manager agent from the manager_engineer OKF definition."""
+    ac = load_bundle_agents(_KNOWLEDGE / "agents")
+    c = ac["manager_engineer"]
+    tier = "standard" if task_name in _STANDARD_MANAGER_TASKS else "fast"
+    return Agent(
+        role=c.role,
+        goal=c.goal,
+        backstory=c.backstory,
+        llm=get_llm_for_tier(tier),
+        verbose=True,
+    )
+
+
 def build_single_task_crew(
     task_name: str,
     sprint_input: dict,
@@ -225,10 +300,10 @@ def build_single_task_crew(
     Build a minimal crew for a single named task. Used by TicketFlow to run
     one task at a time so progress can be tracked and feedback injected between steps.
 
-    Tasks in MANAGED_TASKS use Process.hierarchical with a fast manager LLM that
-    drives the worker until the work is genuinely complete (not just planned).
-    Other tasks run sequentially — they are review/evaluation tasks that produce
-    text output and don't need execution verification.
+    Tasks in MANAGED_TASKS use Process.hierarchical with a custom manager agent that
+    drives the worker until the required completion signal is present — rejecting plans
+    and sending the agent back to do the actual work.  Guardrails on each task provide
+    a second validation layer and trigger auto-retry on missing completion signals.
     """
     from shared.progress_guard import ProgressGuard
 
@@ -242,12 +317,11 @@ def build_single_task_crew(
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
         if task_name in MANAGED_TASKS:
-            manager_tier = "standard" if task_name in _STANDARD_MANAGER_TASKS else "fast"
             return Crew(
-                agents=[t.agent],   # only the assigned worker; manager can't delegate elsewhere
+                agents=[t.agent],   # only the assigned worker; manager delegates back to it
                 tasks=[t],
                 process=Process.hierarchical,
-                manager_llm=get_llm_for_tier(manager_tier),
+                manager_agent=_build_manager_agent(task_name),
                 verbose=True,
                 step_callback=guard,
             )
