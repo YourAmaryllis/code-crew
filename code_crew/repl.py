@@ -21,7 +21,7 @@ Slash commands:
   /skill off [name]             — deactivate one or all skills
   /ask <agent> <question>       — ask a specific agent directly (architect, security, engineer, qa, …)
   /session                      — show current session (name, path, recent exchanges)
-  /session new [name]           — start a new session (default name: today's date)
+  /session new [name]           — start a new session (default name: <project>-<date>)
   /session use <name>           — resume an existing session
   /session list                 — list all sessions for this project
   /fix                          — install all missing tools

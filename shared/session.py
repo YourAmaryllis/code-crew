@@ -81,7 +81,9 @@ class Session:
 
     @staticmethod
     def default_name() -> str:
-        return datetime.now().strftime("%Y-%m-%d")
+        project = Path.cwd().name
+        date = datetime.now().strftime("%Y-%m-%d")
+        return f"{project}-{date}"
 
     @staticmethod
     def list_all() -> list[str]:
