@@ -1696,6 +1696,105 @@ def _scan_project(root: Path) -> dict:
     ):
         found["architecture.style"] = "layered"
 
+    # --- Terraform structure ---
+    # Only scan if Terraform files were found
+    if any(root.rglob("*.tf")):
+        import re as _tf_re
+        _tf: dict = {}
+
+        # Locate the "ops" or "infra" or "terraform" top-level dir that contains env subdirs
+        _ENV_NAMES = {"dev", "staging", "prod", "production", "development", "qa", "uat", "sandbox"}
+        _LAYER_NAMES = {"bootstrap", "core-infra", "app-infra", "core", "app", "shared"}
+        _tf_root: "Path | None" = None
+        for _candidate in sorted(root.iterdir()):
+            if not _candidate.is_dir() or _candidate.name in _SKIP:
+                continue
+            # Walk one level deeper looking for env dirs
+            for _sub in sorted(_candidate.iterdir()):
+                if not _sub.is_dir():
+                    continue
+                _env_children = [d for d in _sub.iterdir() if d.is_dir() and d.name in _ENV_NAMES]
+                if len(_env_children) >= 2:
+                    _tf_root = _sub
+                    break
+            if _tf_root:
+                break
+
+        if _tf_root:
+            _rel_tf_root = str(_tf_root.relative_to(root))
+            _tf["root"] = _rel_tf_root
+
+            # Collect environments and their layers
+            _envs: dict[str, list[str]] = {}
+            for _env_dir in sorted(_tf_root.iterdir()):
+                if not _env_dir.is_dir() or _env_dir.name not in _ENV_NAMES:
+                    continue
+                _layers = [
+                    d.name for d in sorted(_env_dir.iterdir())
+                    if d.is_dir() and d.name in _LAYER_NAMES
+                ]
+                if _layers:
+                    _envs[_env_dir.name] = _layers
+            if _envs:
+                _tf["environments"] = _envs
+
+            # Infer apply order from layer names (bootstrap first, app-infra last)
+            _all_layers = {l for layers in _envs.values() for l in layers}
+            _order = [l for l in ["bootstrap", "core-infra", "core", "app-infra", "app", "shared"]
+                      if l in _all_layers]
+            if _order:
+                _tf["apply_order"] = " → ".join(_order)
+
+        # State backend: search within the detected tf root first, then fall back to whole tree
+        _btf_search_root = _tf_root if _tf_root else root
+        _btf_candidates = list(_btf_search_root.rglob("backend.tf"))[:5]
+        if not _btf_candidates:
+            _btf_candidates = list(root.rglob("backend.tf"))[:5]
+        for _btf in _btf_candidates:
+            try:
+                _btf_text = _btf.read_text(encoding="utf-8", errors="ignore")
+                _bkt = _tf_re.search(r'bucket\s*=\s*"([^"]+)"', _btf_text)
+                _reg = _tf_re.search(r'region\s*=\s*"([^"]+)"', _btf_text)
+                _key = _tf_re.search(r'key\s*=\s*"([^"]+)"', _btf_text)
+                _prof = _tf_re.search(r'profile\s*=\s*"([^"]+)"', _btf_text)
+                if _bkt:
+                    _tf["state_bucket"] = _bkt.group(1)
+                if _reg:
+                    _tf["state_region"] = _reg.group(1)
+                if _key:
+                    # Generalise the key pattern: replace the env/layer segments with {env}/{layer}
+                    _key_val = _key.group(1)
+                    _key_gen = _tf_re.sub(
+                        r'/(dev|staging|prod|production|qa|uat)/',
+                        "/{env}/", _key_val
+                    )
+                    _key_gen = _tf_re.sub(
+                        r'/(bootstrap|core-infra|app-infra|core|app)/',
+                        "/{layer}/", _key_gen
+                    )
+                    _tf["state_key_pattern"] = _key_gen
+                if _prof:
+                    _tf["aws_profile"] = _prof.group(1)
+                if _bkt:
+                    break
+            except OSError:
+                continue
+
+        # Modules
+        _mod_dir = root / "ops" / "modules"
+        if not _mod_dir.is_dir():
+            # Fall back to searching for a modules/ dir with *.tf files
+            for _md in root.rglob("modules"):
+                if _md.is_dir() and any(_md.glob("*/*.tf")):
+                    _mod_dir = _md
+                    break
+        if _mod_dir.is_dir():
+            _tf["modules_path"] = str(_mod_dir.relative_to(root))
+            _tf["modules"] = sorted(d.name for d in _mod_dir.iterdir() if d.is_dir())
+
+        if _tf:
+            found["_terraform"] = _tf
+
     return found
 
 
@@ -2308,6 +2407,7 @@ def _run_explore(target: str, console: Console) -> None:
     migration_tool: str = scan.get("db.migration_tool", "")
     ci_methods: list[str] = scan.get("ci.deployment_methods", [])
     detected_commands: dict[str, str] = scan.pop("_commands", {})
+    terraform_info: dict = scan.pop("_terraform", {})
 
     if stacks:
         console.print(f"\n[bold]Detected stacks:[/bold] {', '.join(stacks)}")
@@ -2408,6 +2508,56 @@ def _run_explore(target: str, console: Console) -> None:
         )
     else:
         cmd_line = ""
+    # --- build Terraform section ---
+    tf_line = ""
+    if terraform_info:
+        _tf_parts: list[str] = ["\n## Terraform infrastructure\n"]
+
+        _tf_root_path = terraform_info.get("root", "")
+        if _tf_root_path:
+            _tf_parts.append(f"Root: `{_tf_root_path}`\n")
+
+        _envs = terraform_info.get("environments", {})
+        if _envs:
+            _apply_order = terraform_info.get("apply_order", "")
+            _env_rows = "\n".join(
+                f"| **{env}** | `{_tf_root_path}/{env}` | {', '.join(layers)} |"
+                for env, layers in sorted(_envs.items())
+            )
+            _tf_parts.append(
+                "### Environments\n\n"
+                "| Environment | Path | Layers |\n"
+                "|-------------|------|--------|\n"
+                + _env_rows
+            )
+            if _apply_order:
+                _tf_parts.append(f"\nApply order: **{_apply_order}**")
+
+        _state_bucket = terraform_info.get("state_bucket", "")
+        _state_region = terraform_info.get("state_region", "")
+        _state_key    = terraform_info.get("state_key_pattern", "")
+        _aws_profile  = terraform_info.get("aws_profile", "")
+        if _state_bucket:
+            _tf_parts.append(
+                "\n### State backend (S3)\n\n"
+                f"| Key | Value |\n"
+                f"|-----|-------|\n"
+                + (f"| bucket | `{_state_bucket}` |\n" if _state_bucket else "")
+                + (f"| region | `{_state_region}` |\n" if _state_region else "")
+                + (f"| key pattern | `{_state_key}` |\n" if _state_key else "")
+                + (f"| AWS profile | `{_aws_profile}` |\n" if _aws_profile else "")
+            )
+
+        _mods = terraform_info.get("modules", [])
+        _mods_path = terraform_info.get("modules_path", "ops/modules")
+        if _mods:
+            _tf_parts.append(
+                f"\n### Modules (`{_mods_path}/`)\n\n"
+                + ", ".join(f"`{m}`" for m in _mods)
+            )
+
+        tf_line = "\n".join(_tf_parts) + "\n"
+
     (out_dir / "structure.md").write_text(
         f"Directory tree of `{root.name}` (auto-generated by /explore):\n\n"
         f"```\n{root.name}/\n{tree_text}\n```\n\n"
@@ -2416,6 +2566,7 @@ def _run_explore(target: str, console: Console) -> None:
         + arch_line
         + db_line
         + ci_line
+        + tf_line
         + cmd_line,
         encoding="utf-8",
     )
