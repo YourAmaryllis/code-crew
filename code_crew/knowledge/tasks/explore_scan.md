@@ -168,23 +168,51 @@ If you cannot find a clear layer separation, document what you observe — even 
 
 ## Step 3 — Test structure discovery
 
-**Goal**: Document test layout so a QA agent or engineer knows exactly where to write
-new tests, what naming pattern to follow, and how to run a specific test.
+**Goal**: Build a complete picture of every test suite in the repo — unit, integration,
+smoke, BDD, e2e — so an engineer or QA agent knows exactly where tests live, how they
+are named, what framework runs them, and which command or script executes each suite.
+**Do not assume any paths; discover them by reading actual files.**
 
-For each stack:
+### 3a — Find test runner scripts and config
 
-1. Use `workspace_reader` with `operation: find_files` to locate test files:
-   - Go: pattern `*_test.go`
-   - TypeScript: pattern `*.test.tsx`, `*.test.ts`, `*.spec.ts`
-   - Python: pattern `test_*.py`, `*_test.py`
-2. Note whether tests are **co-located** (alongside source) or **in a separate directory**
-3. Look for an `integration/`, `e2e/`, or `test/` directory at the service or repo root
-4. If BDD is detected: find `.feature` files and their corresponding step definition files
-   - Note the exact directory for feature files
-   - Note the exact directory for step definitions
-   - Note how to run a single feature vs. the full suite
+First, look for test execution mechanisms across the whole repo:
 
-For BDD specifically: read one `.feature` file to understand the format and naming convention.
+1. **Shell scripts**: use `find_files` with pattern `**/run*test*.sh`, `**/run*bdd*.sh`,
+   `**/run*integration*.sh`, `**/scripts/*.sh`. Read any that look test-related.
+2. **Makefile targets**: if a `Makefile` was detected, read it and list targets that
+   contain the words `test`, `bdd`, `integration`, `smoke`, or `e2e`.
+3. **package.json scripts**: for any `package.json` that contains test-related script keys
+   (`test`, `test:unit`, `test:e2e`, `test:integration`, `vitest`, `jest`, `playwright`),
+   note the exact command.
+4. **Config files**: look for `jest.config.*`, `vitest.config.*`, `playwright.config.*`,
+   `pytest.ini`, `pyproject.toml` (for `[tool.pytest]`), `.godog.yml`.
+
+### 3b — Locate test files
+
+Use `find_files` to discover where tests actually live — do not guess paths:
+
+- Go: `*_test.go` (note which directories they appear in — some may be co-located with
+  source, others in a dedicated directory like `integration/`)
+- TypeScript/JavaScript: `*.test.tsx`, `*.test.ts`, `*.test.js`, `*.spec.ts`, `*.spec.js`
+- Python: `test_*.py`, `*_test.py`
+- BDD: `*.feature` (the context provides detected feature dirs — verify each one exists
+  and read one feature file to understand the format)
+- Step definitions: for each `.feature` dir found, look for `*_steps.go`, `*steps*.go`,
+  `steps_*.go`, `*_test.go` in the same or sibling directory
+
+### 3c — Classify each test suite
+
+For every distinct test suite discovered, determine:
+- **Type**: unit | integration | BDD | smoke | e2e | other
+- **Location**: actual directory path (discovered, not assumed)
+- **Framework**: go test / godog / vitest / jest / playwright / pytest / other
+- **How to run**: prefer the discovered script or Makefile target if one exists;
+  otherwise document the direct command (`go test ./path/...`, `npm test`, etc.)
+- **How to run a single test**: the command to run one test case or one feature file
+- **Config file**: path to the framework config if one exists
+
+If a `scripts/` directory exists near the test suite, list all `.sh` files in it —
+they often contain the canonical execution commands with environment setup.
 
 Output a discovery block:
 
@@ -192,22 +220,17 @@ Output a discovery block:
 DISCOVERY_BEGIN: test_structure
 ## Test structure
 
-### <stack-name>
+### <Suite name> — <type>
 
-**Unit tests**: <co-located | separate directory>
-- Location: `<path pattern>` (e.g., `portal/backend/internal/**/*_test.go`)
-- Naming: `<pattern>` (e.g., `<filename>_test.go`)
-- Run all: `<command>`
-- Run single test: `<command>` (e.g., `go test ./portal/backend/internal/gcs/... -run TestUpload`)
+- **Location**: `<discovered path>`
+- **Framework**: `<framework>`
+- **Run all**: `<command or script path>`
+- **Run single**: `<command>` (e.g., go test ./path -run TestName, or feature file path)
+- **Config**: `<config file path if any>`
+- **Scripts available**: `<script1>`, `<script2>` (list scripts/ files if present)
 
-**Integration / BDD tests** (if present):
-- Feature files: `<path>` (e.g., `integration/features/*.feature`)
-- Step definitions: `<path>`
-- Run: `<command>`
-
-**Test framework**: <name and config file location>
-
-[repeat for each stack]
+[one section per distinct test suite — do not merge suites from different directories
+ or frameworks into one section]
 DISCOVERY_END: test_structure
 ```
 
