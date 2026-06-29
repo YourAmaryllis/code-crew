@@ -2470,14 +2470,11 @@ def _run_explore(target: str, console: Console) -> None:
                 lines.extend(_tree(entry, prefix + ext, depth + 1, max_depth))
         return lines
 
-    # Full tree (for architect context only — not written to structure.md)
+    # Full tree for architect context only — never printed or written to structure.md
     tree_lines = _tree(root, max_depth=4)
     tree_text = "\n".join(tree_lines)
 
-    # Compact top-level listing (directories only, for console display)
-    console.print(f"\n[bold]{root}[/bold]")
-    for _tl in _tree(root, max_depth=0):
-        console.print(_tl)
+    console.print(f"\n[bold]Scanning {root}[/bold]")
 
     # --- Phase 1: pure-Python signal scan ---
     scan = _scan_project(root)
