@@ -2745,45 +2745,11 @@ def _export_context(stem: str, log: list[dict], console: Console) -> None:
     console.print(f"[green]✓[/green] Saved to [dim]{out_file}[/dim]")
 
 
-def _build_prompt(state: ReplState) -> HTML:
-    """Build the live prompt prefix — ONLY the ❯ symbol (or contextual variant).
-
-    Nothing else goes here: separators and status belong in _bottom_toolbar so
-    they stay fixed and never appear in terminal scrollback on submit.
-    """
-    pending_q = state.get_pending_question()
-    stuck = state.get_stuck()
-
-    if pending_q:
-        return HTML(
-            f"<ansicyan><b>[{pending_q.jira_key}] answer</b></ansicyan>"
-            f" <ansigreen><b>❯</b></ansigreen> "
-        )
-    if stuck and _is_in_consultation(stuck, state):
-        return HTML(
-            f"<ansiyellow><b>({stuck[0]} awaits decision)</b></ansiyellow>"
-            f" <ansigreen><b>❯</b></ansigreen> "
-        )
-    if stuck:
-        return HTML(
-            f"<ansiyellow><b>({stuck[0]} needs help)</b></ansiyellow>"
-            f" <ansigreen><b>❯</b></ansigreen> "
-        )
-    return HTML("<ansigreen><b>❯</b></ansigreen> ")
-
-
-def _bottom_toolbar(state: ReplState) -> HTML:
-    """Fixed bar below the prompt: separator · status line(s) · separator · hint.
-
-    Everything here stays on screen and never scrolls into terminal history.
-    Only the ❯ prefix + user input scrolls up on submit.
-    """
+def _collect_status_parts(state: ReplState) -> list[str]:
+    """Build HTML fragments for each active flow. Called each prompt redraw."""
     import time as _t
     from code_crew.flow import _fmt_k
 
-    _SEP = "─" * 300
-
-    # Status line from active flows
     parts: list[str] = []
     with state.lock:
         for key, (flow, _) in list(state.active.items()):
@@ -2809,20 +2775,59 @@ def _bottom_toolbar(state: ReplState) -> HTML:
             if meta:
                 entry += f"  <ansiblue>{meta}</ansiblue>"
             parts.append(entry)
+    return parts
+
+
+def _build_prompt(state: ReplState) -> HTML:
+    """Build the prompt prefix shown above the ❯ cursor.
+
+    Layout (top to bottom):
+      ─────── separator ───────────   (always shown — marks boundary of prior output)
+        ✻ task  2m 15s  ↓ 5k  │ …   (status row — only shown when flows are active)
+      ─────── separator ───────────   (only shown when status row is present)
+      ❯ ▌                             (cursor on its own line)
+
+    The separator + status scroll into terminal history on submit, giving useful
+    context (what the agent was doing when you sent that message).
+    The hint never scrolls — it lives in the bottom_toolbar below the cursor.
+    """
+    _SEP = "─" * 300
+
+    parts = _collect_status_parts(state)
+    pending_q = state.get_pending_question()
+    stuck = state.get_stuck()
+
+    if pending_q:
+        cursor = (
+            f"<ansicyan><b>[{pending_q.jira_key}] answer</b></ansicyan>"
+            f" <ansigreen><b>❯</b></ansigreen> "
+        )
+    elif stuck and _is_in_consultation(stuck, state):
+        cursor = (
+            f"<ansiyellow><b>({stuck[0]} awaits decision)</b></ansiyellow>"
+            f" <ansigreen><b>❯</b></ansigreen> "
+        )
+    elif stuck:
+        cursor = (
+            f"<ansiyellow><b>({stuck[0]} needs help)</b></ansiyellow>"
+            f" <ansigreen><b>❯</b></ansigreen> "
+        )
+    else:
+        cursor = "<ansigreen><b>❯</b></ansigreen> "
+
+    sep = f"<ansibrightblack>{_SEP}</ansibrightblack>"
 
     if parts:
-        status = "  " + "   <ansibrightblack>│</ansibrightblack>   ".join(parts)
-        return HTML(f"{status}\n{_SEP}\n{prefix}")
-    return HTML(f"{_SEP}\n{prefix}")
+        status_row = "  " + "   <ansibrightblack>│</ansibrightblack>   ".join(parts)
+        return HTML(f"{sep}\n{status_row}\n{sep}\n{cursor}")
+
+    return HTML(f"{sep}\n{cursor}")
 
 
 def _bottom_toolbar(_state: ReplState) -> HTML:
-    """Fixed bar below the prompt — separator + hint line."""
-    _SEP = "─" * 300
+    """Fixed bar below the cursor — hint only, never scrolls into history."""
     hint = "Alt+Enter for newline  ·  /help for stuck flows"
-    return HTML(
-        f"<ansibrightblack>{_SEP}\n  {hint}</ansibrightblack>"
-    )
+    return HTML(f"<ansibrightblack>  {hint}</ansibrightblack>")
 
 
 def _show_status(state: ReplState, console: Console) -> None:
