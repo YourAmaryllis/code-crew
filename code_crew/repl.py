@@ -2445,7 +2445,7 @@ def _run_explore(target: str, console: Console) -> None:
     import datetime
     import json as _json
 
-    root = Path(target).expanduser() if target else Path.cwd()
+    root = (Path(target).expanduser() if target else Path.cwd()).resolve()
     if not root.exists():
         console.print(f"[red]Directory not found: {root}[/red]")
         return
