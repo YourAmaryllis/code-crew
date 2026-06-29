@@ -70,6 +70,27 @@ Verify the proposed branch name and commit subject follow SOP-DoD Section 3:
 
 **On tool failure** — log the error, try once with an alternative (list parent dir, use `find_files` before `read_file`), then skip and continue. Never use absolute paths in shell commands. If critical context is unavailable, output `INCOMPLETE: <reason>` instead of a verdict.
 
+**Step 4b — Update structure.md**
+
+After reading FILES CHANGED, check if the implementation introduced structure not yet in
+`.code-crew/structure.md`. Use what you can see in the changed files — do not guess.
+
+What to check:
+- A new directory was created under a service → may need an entry in `## Code structure`
+- A test file appeared in a location not previously documented → update `## Test structure`
+- A new script was added under `scripts/` that runs tests → update the relevant test suite's
+  "Scripts available" line in `## Test structure`
+- A new top-level component or service directory was created → add to `## Components`
+- A new command is needed to build/test the new code → add to `## Project commands`
+
+How to update:
+1. Read `.code-crew/structure.md` using `workspace_reader`
+2. Make the smallest correct addition using `platform_shell` —
+   append only the new lines to the relevant section
+3. Do NOT rewrite the whole file. `/explore` is responsible for full regeneration.
+
+Skip this step if FILES CHANGED contains no structure that is absent from structure.md.
+
 **Step 5 — Overall verdict.**
 - **APPROVED**: no Critical or High findings; Minor findings listed as non-blocking suggestions.
 - **CHANGES REQUESTED**: one or more Critical/High findings that must be resolved before merge.

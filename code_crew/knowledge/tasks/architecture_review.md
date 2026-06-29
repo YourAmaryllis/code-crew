@@ -92,6 +92,28 @@ When the Chief Architect's response arrives as human feedback:
   appropriate option or derive a new approach, and document it as above.
 - Then re-run this review from Step 1 to confirm alignment before producing APPROVED TO PROCEED.
 
+**Step 5b — Update structure.md**
+
+After updating ADRs/ADDs/SADs, check whether this issue introduces structure that is not
+yet reflected in `.code-crew/structure.md`. Only update if something is genuinely new —
+do not modify entries that are still accurate.
+
+What to look for:
+- **New component or service**: add an entry to the `## Components` section
+- **New test suite or testing approach**: add a suite block to `## Test structure`
+- **New build/test/lint command**: add a row to `## Project commands`
+- **New code layer or naming convention**: add or extend an entry in `## Code structure`
+
+How to update:
+1. Read `.code-crew/structure.md` using `workspace_reader`
+2. Identify the exact section that needs updating
+3. Use `platform_shell` to append the new content with a targeted command —
+   for example: `python3 -c "open('.code-crew/structure.md','a').write('\n- **new-svc**: ...\n')"`
+   or a shell heredoc appended to the file
+4. Do NOT rewrite the whole file — make the smallest correct addition
+
+If nothing new is introduced, skip this step entirely.
+
 **Step 6 — Final gate**
 
 Only after all documentation is up to date:

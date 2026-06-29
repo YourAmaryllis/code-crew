@@ -102,6 +102,22 @@ EOF
 gh pr merge --merge --delete-branch
 ```
 
+**Step 4b — Update structure.md**
+
+If this design introduces a new component, service, or significant structural pattern
+not yet in `.code-crew/structure.md`, add it now so implementation agents have accurate
+context before writing a single line of code.
+
+What to add:
+- New component or service → entry in `## Components`
+- New code layer or directory convention → entry in `## Code structure`
+- New test suite planned → placeholder entry in `## Test structure`
+
+Read `.code-crew/structure.md` via `workspace_reader`, append only the new lines via
+`platform_shell`. Do not rewrite the whole file.
+
+Skip if the design introduces no structure that is absent from structure.md.
+
 **Step 5 — Update the issue ticket.**
 
 Post a comment to the issue with the list of created documents:
