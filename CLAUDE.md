@@ -138,6 +138,16 @@ To move a task between modes, edit the `MANAGED_TASKS` frozenset in `crew.py`.
 
 - `knowledge/decisions/CREW-001-fullstack-engineer.md` — SDLC role alignment + full-stack engineer rationale
 
+## Git push
+
+This repo belongs to the `arthurtsang` GitHub account. The default active `gh` account is `arthur-loopora`, which does not have push access. To push commits:
+
+```bash
+gh auth switch --user arthurtsang
+git push
+gh auth switch --user arthur-loopora   # always switch back afterwards
+```
+
 ## README maintenance rule
 
 **Keep `README.md` current.** After every feature addition, command rename, config change, or new agent/flow:
