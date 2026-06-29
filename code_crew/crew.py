@@ -681,7 +681,21 @@ def build_explore_single_task(explore_input: dict, extra_context: str = "") -> s
     ctx = f"## Project: {explore_input.get('root_name', '.')}\n\n"
     ctx += f"**Phase 1 architecture**: {explore_input.get('arch_style', 'undetected')}\n"
     ctx += f"**Phase 1 migration tool**: {explore_input.get('migration_tool', 'undetected')}\n"
+    ctx += f"**Phase 1 migration path**: {explore_input.get('migration_path', 'not detected')}\n"
+    ctx += f"**Phase 1 test framework**: {explore_input.get('test_framework', 'not detected')}\n"
+    ctx += f"**Phase 1 API doc standard**: {explore_input.get('api_doc', 'not detected')}"
+    if explore_input.get("api_doc_path"):
+        ctx += f" (at `{explore_input['api_doc_path']}`)"
+    ctx += "\n"
     ctx += f"**Service dirs**: {', '.join(explore_input.get('svc_dirs', []))}\n\n"
+
+    feature_dirs = explore_input.get("feature_dirs", [])
+    test_dirs = explore_input.get("test_dirs", [])
+    if feature_dirs:
+        ctx += f"**BDD feature dirs**: {', '.join(feature_dirs)}\n"
+    if test_dirs:
+        ctx += f"**Detected test dirs**: {', '.join(test_dirs)}\n"
+    ctx += "\n"
 
     if stacks:
         ctx += f"### Detected stacks (verify each)\n" + "\n".join(f"- {s}" for s in stacks) + "\n\n"

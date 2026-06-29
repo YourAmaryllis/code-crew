@@ -1,46 +1,46 @@
 ---
 type: CrewAI Task
 title: Project Exploration Scan
-description: Architect verifies Phase 1 detections by reading actual files, then assesses architecture, summarises the project, and describes each service component
+description: Architect verifies Phase 1 detections, then discovers code structure, test structure, CI/CD workflow purposes, and entry points — producing a complete reference that all future workflow agents rely on
 tags: [explore, architecture, project-scan, verification]
 agent: architect
 expected_output: >
-  One VERIFIED/CORRECTED/NOT_FOUND line per detected item (stacks, commands, CI/CD, Terraform),
-  then:
-  ARCHITECTURE_STYLE: <clean|hexagonal|onion|layered|undetected>
-  PROJECT_SUMMARY: <1-2 sentence description of what this project does>
-  COMPONENT: <dir_name>: <one-sentence description>
-  ...one COMPONENT line per service directory...
-  EXPLORE SCAN COMPLETE
+  Verification lines (STACK_VERIFIED/NOT_FOUND/ADDED, COMMAND_VERIFIED/CORRECTED/NOT_FOUND/ADDED,
+  CICD_VERIFIED/NOT_FOUND, TF_ROOT_VERIFIED/ENV_VERIFIED/STATE_VERIFIED/MODULES_VERIFIED/CORRECTED),
+  then four DISCOVERY_BEGIN/END blocks (code_structure, test_structure, cicd_workflows, entry_points),
+  then: ARCHITECTURE_STYLE, PROJECT_SUMMARY, one COMPONENT line per service,
+  then EXPLORE SCAN COMPLETE
 ---
 
-You are performing a project exploration scan. The context contains Phase 1 auto-detection
-results produced by a pure file-system scan. Your job is to:
+You are performing a **comprehensive project exploration scan**. Your output will be saved as
+`structure.md` and used by ALL future agents (engineer, QA, DevOps) when working on issues.
+After this scan, agents should never need to re-discover where things live.
 
-1. **Verify every detected item** by reading the actual files — do not trust the detection blindly
-2. Assess the architecture pattern
-3. Summarise the project
-4. Describe each service/component
+**Goal**: Build a complete, verified picture of the codebase so that:
+- An engineer knows exactly where to add a new handler, service, model, or test
+- A QA agent knows where test files live, how to run them, and how to write a new BDD scenario
+- A DevOps agent knows which CI/CD workflow handles which environment
+
+Use `workspace_reader` throughout. Always try `list_directory` before `read_file`. Never guess —
+read the actual files. If a read fails, try the parent directory, then continue.
 
 ---
 
 ## Step 0 — Verify Phase 1 detections
 
-The context provides detected stacks, commands, CI/CD methods, and infrastructure structure.
-For each item, use `workspace_reader` to confirm it exists and is correct.
-Output one verification line per item using the formats below.
+The context contains Phase 1 auto-detection results. Verify each by reading actual files.
 
 ### Stacks
 
 For each detected stack, check the canonical file:
 
-| Stack | Check |
-|-------|-------|
+| Stack | Canonical check |
+|-------|----------------|
 | go-backend | `go.mod` exists at root or in a service dir |
 | typescript-react | `package.json` with `react` or `@types/react` in deps, or `.tsx` files exist |
 | python | `requirements.txt`, `pyproject.toml`, or `setup.py` exist |
 | terraform | `*.tf` files exist |
-| terraform-aws | `*.tf` files contain `provider "aws"` or `source = "hashicorp/aws"` |
+| terraform-aws | `*.tf` files contain `provider "aws"` |
 | ecs-deployment | `*ecs*.tf`, `*task-definition*.json`, or ECS resource in tf files |
 | bdd-testing | `*.feature` files exist |
 | java | `pom.xml` or `build.gradle` exists |
@@ -48,7 +48,7 @@ For each detected stack, check the canonical file:
 
 Use `workspace_reader` with `operation: find_files` or `read_file` to check.
 
-Output:
+Output one line per stack:
 ```
 STACK_VERIFIED: <stack>: <file that confirms it>
 STACK_NOT_FOUND: <stack>: <what you looked for and didn't find>
@@ -57,53 +57,40 @@ STACK_ADDED: <stack>: <file that reveals an undetected stack>
 
 ### Commands
 
-For each detected command, verify the source file actually contains that command:
-
-- If a command references a `Makefile` target: confirm the target exists in `Makefile`
-- If a command references `npm run <script>`: confirm the `scripts` section in the relevant `package.json` has that key
-- If a command uses `go test`: confirm `go.mod` exists
-- If a command references `cd <path>`: confirm that path exists in the repo
+For each detected command, verify the source file actually contains it:
+- If it references a `Makefile` target: confirm the target exists in `Makefile`
+- If it references `npm run <script>`: confirm the script key exists in the relevant `package.json`
+- If it uses `go test`: confirm `go.mod` exists
+- If it references `cd <path>`: confirm that path exists
 
 Output:
 ```
 COMMAND_VERIFIED: <key>: <command>
 COMMAND_CORRECTED: <key>: <corrected_command>: <reason>
 COMMAND_NOT_FOUND: <key>: <reason>
-```
-
-If you find a command that wasn't detected (e.g., a `test` target in a Makefile that was missed), add:
-```
 COMMAND_ADDED: <key>: <command>: <source>
 ```
 
 ### CI/CD
 
 For each detected CI/CD method, confirm the config files exist:
-
-- `github-actions`: list `.github/workflows/` directory, output the workflow filenames
+- `github-actions`: confirm `.github/workflows/` exists and list the workflow filenames
 - `gitlab-ci`: confirm `.gitlab-ci.yml` exists
-- `terraform`: confirm `*.tf` files exist (already covered by stack check)
 - Others: confirm the respective config file exists
 
 Output:
 ```
-CICD_VERIFIED: <method>: <detail — e.g. "12 workflows in .github/workflows/">
+CICD_VERIFIED: <method>: <detail>
 CICD_NOT_FOUND: <method>: <what was missing>
 CICD_ADDED: <method>: <what you found that wasn't detected>
 ```
 
-### Terraform structure (if terraform stack detected)
+### Terraform structure (if detected)
 
-If Terraform was detected, verify the infrastructure structure:
-
-1. Confirm the reported `tf_root` directory exists by listing it
-2. For each reported environment (dev/staging/prod/etc), confirm its subdirectories exist
-3. Read one `backend.tf` from within the tf root and confirm:
-   - The S3 bucket name
-   - The region
-   - The state key pattern
-   - The AWS profile (if any)
-4. List the modules directory and confirm the module list is accurate
+1. Confirm `tf_root` directory exists
+2. For each reported environment, confirm its subdirectories exist
+3. Read one `backend.tf` and confirm: S3 bucket, region, state key pattern, AWS profile
+4. List and confirm the modules directory
 
 Output:
 ```
@@ -113,49 +100,215 @@ TF_STATE_VERIFIED: bucket=<bucket>, region=<region>, key_pattern=<pattern>, prof
 TF_MODULES_VERIFIED: <count> modules in <path>: <module1>, <module2>, ...
 TF_CORRECTED: <field>: <corrected_value>: <reason>
 TF_NOT_FOUND: <what was reported but doesn't exist>
-```
-
-If Terraform is detected but no structure was reported in Phase 1, discover and report it:
-```
-TF_DISCOVERED: <what you found>
+TF_DISCOVERED: <what you found that wasn't in Phase 1>
 ```
 
 ---
 
-## Step 1 — Read README and entrypoints
+## Step 1 — Read README and key docs
 
-Use `workspace_reader` to try reading (in order, stop when found):
+Use `workspace_reader` to read (try in order, stop when found):
 - `README.md` or `README.rst` at root
 - `docs/README.md`
-- The main entrypoint: `main.go`, first `cmd/*/main.go` match, `main.py`, `app.py`, `server.py`, `index.ts`, `index.js`
 
-Read at most 3 files. If none exist, proceed with the tree only.
+Read at most 2 files. If none exist, proceed with the tree only.
 
 ---
 
-## Step 2 — Architecture assessment
+## Step 2 — Code structure discovery
 
-Consider the directory tree in your context. Look for:
-- **Hexagonal** (Ports & Adapters): explicit `ports/` (or `driving/`/`driven/`) separation from domain logic; `adapters/` directory; no business logic in transport layer
-- **Clean Architecture**: `usecases/` or `use_cases/` with business rules isolated from frameworks; `entities/`, `adapters/`
-- **Onion**: concentric rings — `domain/` innermost, `application/`, `infrastructure/`; dependencies point inward only
-- **Layered**: `handlers/` or `controllers/` + `services/` + `repository/` or `storage/` — classic three-tier
+**Goal**: Document where each type of code lives so an engineer picking up a ticket knows
+exactly where to add new code without exploring the repo.
+
+For each verified backend/service stack (Go, Python, Java, etc.):
+
+1. Use `workspace_reader` with `operation: list_directory` on the main source directory
+   (e.g., the `internal/` or `src/` directory of the service)
+2. For subdirectories with names like `handlers`, `api`, `services`, `service`,
+   `repository`, `store`, `models`, `entities`, `domain`, `adapters`: list them to see their contents
+3. Read 1-2 existing source files (a handler and a service) to understand naming conventions
+4. Document the layer layout and where new files of each type should be added
+
+For each verified frontend stack (TypeScript/React, Vue, etc.):
+
+1. List the `src/` directory
+2. Note the component directory, page directory, hooks directory, API client directory
+3. Identify whether files use barrel exports (`index.ts`), co-located styles, etc.
+
+Output a discovery block containing a markdown section per stack:
+
+```
+DISCOVERY_BEGIN: code_structure
+## Code structure
+
+### <stack-name> (<root-directory>/)
+
+**Layer layout**:
+
+| Layer | Directory | Purpose |
+|-------|-----------|---------|
+| HTTP handlers | `<path>` | <what goes here> |
+| Business logic | `<path>` | <what goes here> |
+| ... | | |
+
+**Naming conventions**:
+- New handler: `<example path and file name pattern>`
+- New service: `<example path and file name pattern>`
+
+**Key source files read**: `<file1>`, `<file2>`
+
+[repeat for each stack]
+DISCOVERY_END: code_structure
+```
+
+If you cannot find a clear layer separation, document what you observe — even a flat
+`src/` layout is useful to document.
+
+---
+
+## Step 3 — Test structure discovery
+
+**Goal**: Document test layout so a QA agent or engineer knows exactly where to write
+new tests, what naming pattern to follow, and how to run a specific test.
+
+For each stack:
+
+1. Use `workspace_reader` with `operation: find_files` to locate test files:
+   - Go: pattern `*_test.go`
+   - TypeScript: pattern `*.test.tsx`, `*.test.ts`, `*.spec.ts`
+   - Python: pattern `test_*.py`, `*_test.py`
+2. Note whether tests are **co-located** (alongside source) or **in a separate directory**
+3. Look for an `integration/`, `e2e/`, or `test/` directory at the service or repo root
+4. If BDD is detected: find `.feature` files and their corresponding step definition files
+   - Note the exact directory for feature files
+   - Note the exact directory for step definitions
+   - Note how to run a single feature vs. the full suite
+
+For BDD specifically: read one `.feature` file to understand the format and naming convention.
+
+Output a discovery block:
+
+```
+DISCOVERY_BEGIN: test_structure
+## Test structure
+
+### <stack-name>
+
+**Unit tests**: <co-located | separate directory>
+- Location: `<path pattern>` (e.g., `portal/backend/internal/**/*_test.go`)
+- Naming: `<pattern>` (e.g., `<filename>_test.go`)
+- Run all: `<command>`
+- Run single test: `<command>` (e.g., `go test ./portal/backend/internal/gcs/... -run TestUpload`)
+
+**Integration / BDD tests** (if present):
+- Feature files: `<path>` (e.g., `integration/features/*.feature`)
+- Step definitions: `<path>`
+- Run: `<command>`
+
+**Test framework**: <name and config file location>
+
+[repeat for each stack]
+DISCOVERY_END: test_structure
+```
+
+---
+
+## Step 4 — CI/CD workflow analysis
+
+**Goal**: Document what each CI/CD workflow does so a DevOps agent knows which workflow
+handles which service, environment, and action.
+
+If GitHub Actions was detected:
+
+1. List all files in `.github/workflows/` — these were already provided in context
+2. Read up to **6** workflow files, prioritizing those with names suggesting:
+   deploy, build, push, release, integration, staging, prod
+3. For each workflow read, note:
+   - `on:` trigger (push, pull_request, workflow_dispatch, schedule)
+   - Target branch pattern (if applicable)
+   - What services or images it builds/deploys
+   - Target environment (dev, staging, prod, or all)
+   - Key steps (ECR push, ECS deploy, SSH, etc.)
+
+If GitLab CI was detected: read `.gitlab-ci.yml` and extract the same information.
+
+Output a discovery block:
+
+```
+DISCOVERY_BEGIN: cicd_workflows
+## CI/CD workflows
+
+### GitHub Actions (`.github/workflows/`)
+
+| Workflow file | Trigger | Purpose | Environment |
+|--------------|---------|---------|-------------|
+| `<filename>` | <push to main / PR / manual> | <what it does> | <env> |
+...
+
+**Notes**:
+- <any important patterns, e.g. "all deploy workflows require manual approval for prod">
+- <e.g. "BDD tests triggered on PR and can be run manually via workflow_dispatch">
+DISCOVERY_END: cicd_workflows
+```
+
+If no CI/CD workflows could be read, output a block noting what was found:
+```
+DISCOVERY_BEGIN: cicd_workflows
+## CI/CD workflows
+
+No workflow files could be read. Detected methods: <list>.
+DISCOVERY_END: cicd_workflows
+```
+
+---
+
+## Step 5 — Entry points and local dev setup
+
+**Goal**: Document how each service starts so an engineer can run the project locally
+and so agents know the exact entry point file to trace when debugging.
+
+For each service component:
+
+1. Look for `main.go`, `cmd/*/main.go`, `main.py`, `app.py`, `server.py`,
+   `main.tsx`, `index.ts`, or equivalent entry point files
+2. Note the start command (from README, Makefile, or package.json `start` script)
+3. Note key environment variables (from `.env.example`, README, or config loading code)
+
+Output a discovery block:
+
+```
+DISCOVERY_BEGIN: entry_points
+## Entry points
+
+| Service | Entry point file | Start command | Notes |
+|---------|-----------------|---------------|-------|
+| <name> | `<path>` | `<command>` | <env vars, ports, etc.> |
+...
+DISCOVERY_END: entry_points
+```
+
+---
+
+## Step 6 — Architecture assessment
+
+Consider the directory tree. Look for:
+- **Hexagonal**: explicit `ports/` + `adapters/` separation; no business logic in transport layer
+- **Clean**: `usecases/` with isolated business rules; `entities/`, `adapters/`
+- **Onion**: concentric rings — `domain/` innermost, `application/`, `infrastructure/`
+- **Layered**: `handlers/` or `controllers/` + `services/` + `repository/` — classic three-tier
 - **Undetected**: none of the above is clearly identifiable
-
-Use `knowledge_reader` to load `stacks/arch-<style>.md` if you identify a style, to confirm your assessment matches the definition.
 
 Output:
 ```
 ARCHITECTURE_STYLE: <style>
 ```
 
-If Phase 1 detected a style and you agree, output the same. If you disagree, output your assessment. If genuinely undetected, output `undetected`.
-
 ---
 
-## Step 3 — Project summary
+## Step 7 — Project summary
 
-From the README / entrypoint / tree, write 1-2 sentences describing what this project does and who uses it. Be specific: name the domain, not just the technology.
+Write 1-2 sentences describing what this project does and who uses it.
+Be specific: name the domain, not just the technology.
 
 Output:
 ```
@@ -164,23 +317,31 @@ PROJECT_SUMMARY: <description>
 
 ---
 
-## Step 4 — Component descriptions
+## Step 8 — Component descriptions
 
-The context lists candidate service/component directories from Phase 1. For each, use `workspace_reader` to skim its README (if any) or the first 30 lines of its main source file. Write one sentence describing what the component does.
+For each candidate service/component directory from Phase 1, skim its README or first
+30 lines of its main source file. Write one sentence describing what it does.
+
+Note whether it is a deployable service, a shared library, a CLI, or an integration test suite.
 
 Output one line per component:
 ```
 COMPONENT: <dir_name>: <description>
 ```
 
-If a directory is a shared library or utility (not a deployable service), note that explicitly.
-
 ---
 
 ## On tool failure
 
-Log the error, try once with an alternative (list parent dir if read fails, use `find_files` before `read_file`). Skip and continue — never block the scan on a single failure. Never use absolute paths. Note any skipped items in the output.
+Log the error, try once with an alternative (list parent dir if read fails, use `find_files`
+before `read_file`). Skip and continue — never block the scan on a single failure. Never use
+absolute paths. Note any skipped items in the DISCOVERY blocks.
 
 ---
 
-## Step 5 — Output EXPLORE SCAN COMPLETE
+## Step 9 — Output EXPLORE SCAN COMPLETE
+
+After all steps, output exactly:
+```
+EXPLORE SCAN COMPLETE
+```

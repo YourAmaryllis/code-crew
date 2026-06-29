@@ -1500,8 +1500,21 @@ def _scan_project(root: Path) -> dict:
                     break
             except Exception:
                 pass
-    if any(root.rglob("*.feature")):
+    _feature_files = [f for f in root.rglob("*.feature") if not any(p in _SKIP for p in f.parts)]
+    if _feature_files:
         stacks.append("bdd-testing")
+        # Unique parent dirs of feature files (relative to root), up to 5
+        _feat_dirs_seen: set[str] = set()
+        _feat_dirs: list[str] = []
+        for _ff in _feature_files[:20]:
+            try:
+                _rel = str(_ff.parent.relative_to(root))
+                if _rel not in _feat_dirs_seen:
+                    _feat_dirs_seen.add(_rel)
+                    _feat_dirs.append(_rel)
+            except ValueError:
+                pass
+        found["_feature_dirs"] = _feat_dirs[:5]
     found["_stacks"] = stacks
 
     # --- service dirs (top-level dirs with source files) ---
@@ -1512,6 +1525,20 @@ def _scan_project(root: Path) -> dict:
         and any(any(d.rglob(ext)) for ext in ext_src)
     ][:8]
     found["_svc_dirs"] = svc_dirs
+
+    # --- test dirs (dirs clearly for testing) ---
+    _test_dir_names = {"test", "tests", "spec", "specs", "integration", "e2e", "__tests__",
+                       "bdd", "features", "testdata"}
+    _test_dirs_found: list[str] = []
+    for _td in root.rglob("*"):
+        if not _td.is_dir() or any(p in _SKIP for p in _td.parts):
+            continue
+        if _td.name.lower() in _test_dir_names or _td.name.lower().startswith("test"):
+            try:
+                _test_dirs_found.append(str(_td.relative_to(root)))
+            except ValueError:
+                pass
+    found["_test_dirs"] = _test_dirs_found[:10]
 
     # --- migration tool ---
     if (root / "alembic.ini").exists():
@@ -1532,6 +1559,15 @@ def _scan_project(root: Path) -> dict:
         if (root / candidate).is_dir():
             found["db.schema_path"] = candidate + "/"
             break
+    if "db.schema_path" not in found:
+        for _mdir in list(root.rglob("migrations"))[:5]:
+            if not _mdir.is_dir() or any(p in _SKIP for p in _mdir.parts):
+                continue
+            try:
+                found["db.schema_path"] = str(_mdir.relative_to(root)) + "/"
+                break
+            except ValueError:
+                pass
 
     # --- testing framework ---
     if (root / "pytest.ini").exists() or (root / "setup.cfg").exists():
@@ -1554,11 +1590,26 @@ def _scan_project(root: Path) -> dict:
         found["testing.bdd"] = "true"
 
     # --- API doc standard ---
+    _openapi_names = {"swagger.json", "swagger.yaml", "openapi.json", "openapi.yaml"}
+    _api_doc_found = False
     for candidate in ("docs/swagger.json", "docs/swagger.yaml", "docs/openapi.json",
                        "docs/openapi.yaml", "openapi.yaml", "openapi.json"):
         if (root / candidate).exists():
             found["api.doc_standard"] = "openapi"
+            found["api.doc_path"] = candidate
+            _api_doc_found = True
             break
+    if not _api_doc_found:
+        for _af in list(root.rglob("swagger.yaml")) + list(root.rglob("swagger.json")) + \
+                    list(root.rglob("openapi.yaml")) + list(root.rglob("openapi.json")):
+            if any(p in _SKIP for p in _af.parts):
+                continue
+            try:
+                found["api.doc_standard"] = "openapi"
+                found["api.doc_path"] = str(_af.relative_to(root))
+                break
+            except ValueError:
+                pass
 
     # --- CI/CD tooling (collect all; terraform + GHA often coexist) ---
     ci_methods: list[str] = []
@@ -2429,8 +2480,14 @@ def _run_explore(target: str, console: Console) -> None:
     scan = _scan_project(root)
     stacks: list[str] = scan.pop("_stacks", [])
     svc_dirs_scan: list[str] = scan.pop("_svc_dirs", [])
+    feature_dirs_scan: list[str] = scan.pop("_feature_dirs", [])
+    test_dirs_scan: list[str] = scan.pop("_test_dirs", [])
     arch_style: str = scan.get("architecture.style", "")
     migration_tool: str = scan.get("db.migration_tool", "")
+    migration_path: str = scan.get("db.schema_path", "")
+    test_framework: str = scan.get("testing.framework", "")
+    api_doc: str = scan.get("api.doc_standard", "")
+    api_doc_path: str = scan.get("api.doc_path", "")
     ci_methods: list[str] = scan.get("ci.deployment_methods", [])
     detected_commands: dict[str, str] = scan.pop("_commands", {})
     terraform_info: dict = scan.pop("_terraform", {})
@@ -2618,7 +2675,13 @@ def _run_explore(target: str, console: Console) -> None:
                 "stacks": stacks,
                 "arch_style": arch_style,
                 "migration_tool": migration_tool,
+                "migration_path": migration_path,
+                "test_framework": test_framework,
+                "api_doc": api_doc,
+                "api_doc_path": api_doc_path,
                 "svc_dirs": svc_dirs_scan,
+                "feature_dirs": feature_dirs_scan,
+                "test_dirs": test_dirs_scan,
                 "commands": all_commands,
                 "ci_methods": ci_methods,
                 "ci_workflows": _ci_workflows_for_llm,
@@ -2628,16 +2691,39 @@ def _run_explore(target: str, console: Console) -> None:
         )
 
         # Parse verification output — architect may correct any Phase 1 detection
+        # Also collect DISCOVERY_BEGIN/END blocks for rich markdown sections
         verified_stacks: list[str] = []
         corrected_commands: dict[str, str] = {}
         verification_notes: list[str] = []
+        discoveries: dict[str, str] = {}  # section_name → markdown content
+        _in_discovery: str | None = None
+        _discovery_lines: list[str] = []
 
-        for line in llm_result.splitlines():
-            line = line.strip()
-            if line.startswith("ARCHITECTURE_STYLE:") and not arch_style:
-                arch_style = line.split(":", 1)[1].strip()
-                os.environ["ARCHITECTURE_STYLE"] = arch_style
-                console.print(f"[bold]LLM architecture assessment:[/bold] {arch_style}")
+        for raw_line in llm_result.splitlines():
+            # Handle DISCOVERY_BEGIN/END before stripping (preserve indentation inside blocks)
+            stripped = raw_line.strip()
+            if stripped.startswith("DISCOVERY_BEGIN:"):
+                _in_discovery = stripped.split(":", 1)[1].strip()
+                _discovery_lines = []
+                continue
+            if stripped.startswith("DISCOVERY_END:"):
+                if _in_discovery:
+                    discoveries[_in_discovery] = "\n".join(_discovery_lines).strip()
+                    console.print(f"  [green]✓[/green] Discovered: [bold]{_in_discovery}[/bold]")
+                _in_discovery = None
+                _discovery_lines = []
+                continue
+            if _in_discovery is not None:
+                _discovery_lines.append(raw_line)
+                continue
+
+            line = stripped
+            if line.startswith("ARCHITECTURE_STYLE:"):
+                _arch = line.split(":", 1)[1].strip()
+                if _arch and (not arch_style or _arch != "undetected"):
+                    arch_style = _arch
+                    os.environ["ARCHITECTURE_STYLE"] = arch_style
+                    console.print(f"[bold]LLM architecture assessment:[/bold] {arch_style}")
             elif line.startswith("PROJECT_SUMMARY:"):
                 project_summary = line.split(":", 1)[1].strip()
             elif line.startswith("COMPONENT:"):
@@ -2710,7 +2796,16 @@ def _run_explore(target: str, console: Console) -> None:
         if project_summary:
             additions += f"\n## Project summary\n\n{project_summary}\n"
         if arch_style:
-            additions += f"\n## Architecture (Architect assessed)\n\n```yaml\narchitecture:\n  style: {arch_style}\n```\n"
+            additions += f"\n## Architecture\n\n```yaml\narchitecture:\n  style: {arch_style}\n```\n"
+        # Append discovery sections in a defined order
+        _discovery_order = ["code_structure", "test_structure", "cicd_workflows", "entry_points"]
+        for _disc_key in _discovery_order:
+            if _disc_key in discoveries:
+                additions += "\n" + discoveries[_disc_key] + "\n"
+        # Any extra discovery sections the architect added
+        for _disc_key, _disc_content in discoveries.items():
+            if _disc_key not in _discovery_order:
+                additions += "\n" + _disc_content + "\n"
         if component_descriptions:
             additions += "\n## Components\n\n"
             additions += "\n".join(
