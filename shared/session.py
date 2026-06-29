@@ -81,7 +81,15 @@ class Session:
 
     @staticmethod
     def default_name() -> str:
-        project = Path.cwd().name
+        import subprocess
+        try:
+            root = subprocess.check_output(
+                ["git", "rev-parse", "--show-toplevel"],
+                stderr=subprocess.DEVNULL, text=True
+            ).strip()
+            project = Path(root).name
+        except Exception:
+            project = Path.cwd().name
         date = datetime.now().strftime("%Y-%m-%d")
         return f"{project}-{date}"
 
