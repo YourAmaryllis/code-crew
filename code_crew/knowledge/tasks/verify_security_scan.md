@@ -11,114 +11,97 @@ expected_output: >
 
 Scan the codebase for security issues. Use `workspace_reader` to inspect source files.
 
-**CRITICAL: All paths must be relative to the project root (`.`). Never use absolute paths.**
-**SCOPE LIMIT: At most 12 file reads total. Prioritise TMD validation and secrets scan.**
+**CRITICAL: All paths must be relative to `.`. Never use absolute paths.**
+**CRITICAL: If a tool call fails or returns an error, output `INFO [SEC]: <tool> failed on <path> — skipped` and
+immediately move to the next step. Do NOT retry with a different path or pattern.**
+**CRITICAL: The only valid base paths are: `.`, `designs/`, `portal/`, `attestation/`,
+`fhir_proxy/`, `healthcare-calculator/`, `panome/`, `integration/`, `ops/`. Never use
+`workspace`, `/workspace`, `workspace/`, or any absolute path.**
 
 ---
 
-**Step 1 — Hardcoded secrets scan.**
+**Step 1 — OTM threat model validation (highest priority — do this first).**
 
-Search for patterns that indicate hardcoded credentials in source files (not in `.env` or
-`.env.example`):
-- Regex patterns: `(secret|password|token|api_key|apikey|private_key)\s*=\s*["'][^"']{8,}["']`
-- AWS key patterns: `AKIA[0-9A-Z]{16}`, `aws_secret_access_key\s*=`
-- Private key headers: `-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----`
-- Skip: test files, example files, `*.example`, `*.sample`, mock data
+Use `workspace_reader` with `list_directory` on `designs/TMD/` to get the file list.
 
-If clean: `PASS [SEC]: No hardcoded secrets found in source files`.
-Report each hit as a `FINDING [SEC]`.
-
----
-
-**Step 2 — OTM threat model validation (read every TMD file).**
-
-Use `workspace_reader` to list ALL files under `designs/TMD/`.
-
-Then read **every** `.yaml` file in that list, one by one. Do not skip small files —
-a 1-4 line file is almost certainly invalid.
-
-For each file read, immediately output one line (before reading the next file):
+Then read each `.yaml` file one by one. Immediately after reading each file, output ONE line:
 
 A file is **valid** only if ALL of these are true:
-- It contains the YAML key `otmVersion:` on a non-comment line (not preceded by `#`)
-- It contains at least one of: `components:`, `threats:`, `dataFlows:`, `trustZones:`
-- The content is actual YAML, not an error message, not a JSON dump (starts with `{` or `{"`)
-  and not a placeholder (contains `<PROJECT_NAME>` or `<description>`)
+- Contains `otmVersion:` as a real YAML key on a non-comment line (line does NOT start with `#`)
+- Contains at least one of: `components:`, `threats:`, `dataFlows:`, `trustZones:`
+- Is not a JSON dump (does not have a line starting with `{` or `{"`)
+- Is not a placeholder (does not contain `<PROJECT_NAME>` or `<description>`)
 
-If the file is just comments + a line starting with `{` or `{"`, it is a JSON dump — invalid.
+If file is valid: `PASS [SEC]: TMD valid — designs/TMD/<filename>.yaml`
+If file is invalid: `FINDING [SEC]: TMD file invalid — designs/TMD/<filename>.yaml [HIGH] (reason: <json dump / error message / placeholder / missing otmVersion>)`
 
-Valid: `PASS [SEC]: TMD valid — designs/TMD/<filename>.yaml`
-Invalid: `FINDING [SEC]: TMD file invalid — designs/TMD/<filename>.yaml [HIGH] (reason: <error message / JSON dump / placeholder / prose / only comments>)`
+After checking all files, compare against the `## Architectural components` table from your
+context (structure.md). Only rows where Type = `deployable service` require a TMD.
+Do NOT flag rows with Type = `test suite`, `infrastructure`, `external`, or `infrastructure + test fixtures`.
 
-Then compare the TMD files against the `## Architectural components` table in the task context
-(from structure.md). Only look at rows where the **Type** column is `deployable service`.
-Do NOT expect TMDs for rows with Type = `test suite`, `infrastructure`, `external`, or
-`infrastructure + test fixtures`.
+For each deployable-service component with no TMD file at all:
+`FINDING [SEC]: No threat model found for component — <component-name> [MEDIUM]`
 
-For each `deployable service` component with no TMD file:
-```
-FINDING [SEC]: No threat model found for component — <component-name> [MEDIUM]
-```
-
-If `designs/TMD/` does not exist or is empty:
-```
-FINDING [SEC]: No threat models found in designs/TMD/ — threat modelling not established [HIGH]
-```
+If `designs/TMD/` is empty or does not exist:
+`FINDING [SEC]: No threat models found in designs/TMD/ — threat modelling not established [HIGH]`
 
 ---
 
-**Step 3 — OWASP Top 10 spot-check (targeted, 2 file reads max).**
+**Step 2 — Hardcoded secrets scan (2 searches maximum, specific paths only).**
 
-Read 1 handler and 1 auth-related file. Check:
-- **A01 Broken Access Control**: routes checked for auth middleware
-- **A02 Cryptographic Failures**: no MD5/SHA1/DES/RC4 in crypto contexts
-- **A03 Injection**: parameterised queries used (no raw string SQL)
-- **A05 Security Misconfiguration**: no `DEBUG=True` or open CORS (`*`) in production paths
-- **A06 Vulnerable Components**: check `commands.audit` in structure.md; if no audit command,
-  flag as FINDING that dependency auditing is not configured
-- **A09 Logging Failures**: auth events (login, logout, token issue) have log statements
+Do EXACTLY ONE search call per path below. Do not retry if a search returns errors.
 
-Output one PASS or FINDING per category checked.
+Search 1: use `search` on path `portal/backend/internal/api/` with pattern:
+`(secret|password|api_key|apikey|private_key)\s*=\s*["'][^"']{8,}["']`
 
----
+After Search 1, immediately output what you found (PASS or FINDING) before doing Search 2.
 
-**Step 4 — NIST CSF spot-check (documentation only, no file reads).**
+Search 2: use `search` on path `healthcare-calculator/server/internal/` with the same pattern.
 
-Use what you already know from Step 2 (TMD files and architecture context) to assess:
-- **Identify**: Do TMDs document assets and components? (PASS if TMD has `assets:` section)
-- **Protect**: Is access control documented in any TMD? (check `trustZones:` section)
-- **Detect**: Are monitoring/alerting mentions visible in structure.md or TMDs?
-- **Respond**: Did Step 5 of compliance scan find an IR runbook? (note if unknown)
-- **Recover**: Note if not checked (within scope limit)
+After Search 2, immediately output results (PASS or FINDING).
 
-One line per function. Use INFO if evidence is partial.
+Then stop — do NOT do any more searches. If either path does not exist, output:
+`INFO [SEC]: Path not found — <path> — secrets scan skipped for this service`
+
+If clean across all searches: `PASS [SEC]: No hardcoded secrets found in scanned paths`
+Report each hit as: `FINDING [SEC]: Hardcoded secret — <file>:<line> [HIGH]`
 
 ---
 
-**Step 5 — SBOM / dependency audit.**
+**Step 3 — OWASP spot-check (2 file reads).**
 
-Check if a lockfile (`go.sum`, `package-lock.json`, `requirements.txt`, `poetry.lock`) exists.
-Use `find_files` with pattern `**/go.sum` or `**/package-lock.json` — do not read contents.
+Read `portal/backend/internal/api/handlers.go` (or the first handler file you find via
+`list_directory portal/backend/internal/api/` if handlers.go does not exist).
 
-If present: `PASS [SEC]: Lockfile committed — <filename>`.
-If absent: `FINDING [SEC]: No lockfile committed — dependency versions unpinned [MEDIUM]`.
+Read `portal/backend/internal/auth/` or the first auth-related file in portal/backend/.
+
+Check from the two files only:
+- **A01**: Auth middleware present in handler? `PASS [SEC]: A01 — auth middleware present in handlers`
+- **A02**: No MD5/SHA1/DES/RC4? `PASS [SEC]: A02 — no weak crypto in reviewed files`
+- **A03**: No raw SQL string concatenation? `PASS [SEC]: A03 — no raw SQL injection pattern`
+- **A05**: No DEBUG=True or open CORS(*)? `PASS [SEC]: A05 — no insecure config in reviewed files`
+- **A09**: Auth events have log statements? If log present: `PASS [SEC]: A09 — auth events logged`; If not: `FINDING [SEC]: A09 Logging Failures — auth events not logged [MEDIUM]`
+
+If a file does not exist: `INFO [SEC]: OWASP check — <file> not found, check skipped`
+Mark unchecked items as `INFO [SEC]: <OWASP item> — not checked within scope`
 
 ---
 
-**Step 6 — Handle tool failures.**
+**Step 4 — NIST CSF check (no file reads — use Step 1 TMD content).**
 
-If any tool call fails: log `ERROR: <tool>(<args>) → <error>`, try once with an alternative.
-Never use absolute paths. Include a `TOOL FAILURES:` block before the final line if any step
-was skipped.
+Based only on the TMD files you already read in Step 1:
+- **Identify**: TMDs have `components:` or `assets:` → `PASS [SEC]: NIST CSF Identify — assets documented in TMDs`
+- **Protect**: TMDs have `trustZones:` → `PASS [SEC]: NIST CSF Protect — trust zones documented`
+- **Detect**: TMDs mention monitoring → `PASS` or `INFO [SEC]: NIST CSF Detect — monitoring not in TMDs`
+- **Respond/Recover**: `INFO [SEC]: NIST CSF Respond/Recover — not checked`
 
 ---
 
-**Step 7 — Format findings.**
+**Step 5 — Final format.**
 
-Every check performed — whether it passed or failed — must appear in the output.
-
+Every check — whether passed or failed — must appear. Output format:
 ```
-FINDING [SEC]: <one-sentence description> — <file:line or component name>  [CRITICAL|HIGH|MEDIUM]
+FINDING [SEC]: <one-sentence description> — <file:line or component>  [CRITICAL|HIGH|MEDIUM]
 PASS [SEC]: <what was checked and found clean>
 INFO [SEC]: <contextual note — not a violation>
 ```
