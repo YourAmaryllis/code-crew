@@ -3196,17 +3196,22 @@ def _run_explore(target: str, console: Console) -> None:
             build_crew = build_otm_build_task(project, inventory)
             build_output = build_crew.kickoff().raw
 
+            # Strip model artifacts before extracting YAML.
+            # NVIDIA models sometimes emit <|python_tag|>{...} tool-call blobs
+            # or <|tool_call|> tokens in the output instead of (or before) YAML.
+            clean_output = _re.sub(r"<\|[^|>]+\|>[^\n]*\n?", "", build_output)
+
             # Extract YAML: between first 'otmVersion:' and 'OTM BUILD COMPLETE'
-            yaml_match = _re.search(r"(otmVersion:.*?)(?:OTM BUILD COMPLETE|```\s*$)", build_output, _re.DOTALL)
+            yaml_match = _re.search(r"(otmVersion:.*?)(?:OTM BUILD COMPLETE|```\s*$)", clean_output, _re.DOTALL)
             if yaml_match:
                 yaml_text = yaml_match.group(1).strip()
             else:
-                yaml_text = build_output.split("OTM BUILD COMPLETE")[0].strip()
+                yaml_text = clean_output.split("OTM BUILD COMPLETE")[0].strip()
                 yaml_text = _re.sub(r"^```ya?ml\s*\n?", "", yaml_text, flags=_re.MULTILINE)
                 yaml_text = _re.sub(r"^```\s*$", "", yaml_text, flags=_re.MULTILINE).strip()
 
-            if not yaml_text:
-                console.print(f"[yellow]  No YAML extracted for {project['id']} — skipping.[/yellow]")
+            if not yaml_text or "otmVersion:" not in yaml_text:
+                console.print(f"[yellow]  No valid OTM YAML extracted for {project['id']} — skipping.[/yellow]")
                 continue
 
             tmd_file.write_text(
