@@ -32,26 +32,23 @@ Report each hit as a `FINDING [SEC]`.
 
 **Step 2 — OTM threat model validation (read every TMD file).**
 
-Use `workspace_reader` to list files under `designs/TMD/`.
+Use `workspace_reader` to list ALL files under `designs/TMD/`.
 
-First, build the list of expected TMDs by reading `## Architectural components` from the task
-context (structure.md). Each deployable service/runtime component listed there should have a
-corresponding `.yaml` file in `designs/TMD/`.
+Then read **every** `.yaml` file in that list, one by one. Do not skip small files —
+a file that is only a few lines is likely invalid and must be flagged.
 
-**For each TMD file that exists** — read its content and validate:
-1. Does it start with `otmVersion:` or contain `otmVersion`? (valid OTM YAML)
-2. Does it contain at least one of: `components:`, `threats:`, `dataFlows:`, `trustZones:`?
-3. Does it have meaningful content (not a placeholder with `<PROJECT_NAME>`, error messages,
-   raw JSON tool-call output, or just comments)?
+For each file read, check:
+1. Does the file contain `otmVersion:`? If not, it is invalid.
+2. Does the file contain at least one of: `components:`, `threats:`, `dataFlows:`, `trustZones:`?
+3. Does the content look like an error message, a JSON tool-call dump (starts with `{"`),
+   a prose explanation, or a placeholder with `<PROJECT_NAME>`? If so, it is invalid.
 
-Valid TMD: `PASS [SEC]: TMD valid — designs/TMD/<filename>.yaml (has <N> threats, <N> components)`
-Invalid TMD (error message, JSON dump, placeholder):
-```
-FINDING [SEC]: TMD file is not a valid threat model — designs/TMD/<filename>.yaml [HIGH]
-  Content issue: <describe what's wrong — error message / placeholder / raw JSON / etc.>
-```
+Output one line per file:
+- Valid: `PASS [SEC]: TMD valid — designs/TMD/<filename>.yaml`
+- Invalid: `FINDING [SEC]: TMD file invalid — designs/TMD/<filename>.yaml [HIGH] (reason: <error message / JSON dump / placeholder / prose>)`
 
-**For each architectural component with no TMD file**:
+Then compare the list of TMD files against the `## Architectural components` table in the
+task context (from structure.md). For each deployable service component that has no TMD file:
 ```
 FINDING [SEC]: No threat model found for component — <component-name> [MEDIUM]
 ```

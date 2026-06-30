@@ -37,14 +37,29 @@ Then run Step 2 and Step 3 only.
 
 **Step 2 — Personal data handling (all projects).**
 
-Search for models or database columns that likely contain personal data (fields named `email`,
-`phone`, `name`, `address`, `dob`, `ssn`, `ip_address`, `user_id` in DB schemas or ORM models).
-For each:
-- Is it encrypted at rest? (check migration for column-level encryption or ADD/ADR notes)
-- Is there a retention policy? (delete/archive logic tied to a schedule or user request)
-- Is there a consent record for collection? (consent table or consent flag)
+**Do NOT grep the whole codebase** — that produces too many false positives (Go variable names,
+function parameters, etc.). Instead, find PII by reading likely model files directly:
 
-Output a FINDING for each gap, or a PASS if all checks are clean.
+1. Use `workspace_reader` with `list_directory` on each service's `internal/` directory.
+   Look for subdirectories named: `user`, `users`, `account`, `accounts`, `customer`,
+   `customers`, `rental`, `rentals`, `patient`, `member`, `profile`, `auth`, `identity`.
+2. For each found subdirectory, list it and read the Go/Python/TypeScript file that defines
+   the primary struct or class (e.g. `user.go`, `user.py`, `models.go`, `store.go`).
+3. In each file, look for struct fields or DB columns tagged with `db:"..."`, `json:"..."`,
+   or column names that are PII: `email`, `phone`, `name`, `address`, `dob`, `ssn`,
+   `ip_address`, `buyer_email`, `buyer_name`, `first_name`, `last_name`.
+
+Check at most **4 files** total. Focus on `portal/backend/`, `attestation/`, and any service
+that handles users or transactions.
+
+For each PII field found:
+- Is it encrypted at rest? (check for column-level encryption in the same file or a migration)
+- Is there a retention policy? (look for delete/archive logic in the same package)
+- Is there a consent record for collection? (consent table or flag in same package)
+
+If PII fields are found without these controls: `FINDING [COMP]: ...`
+If PII fields found and controls exist: `PASS [COMP]: PII field <name> has encryption/retention/consent`
+If no PII-containing files found after checking service model directories: `INFO [COMP]: No PII model files found in checked directories — <list what you checked>`
 
 ---
 
