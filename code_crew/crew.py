@@ -678,6 +678,85 @@ def _precheck_security(project_root: str) -> str:
     return "\n".join(lines)
 
 
+def _precheck_architecture(project_root: str) -> str:
+    """Pre-check SAD drift and ADR coverage in Python.
+    Returns a context block injected into the arch scan task."""
+    import re as _re
+    root = Path(project_root) if project_root else Path.cwd()
+    lines: list[str] = ["## Pre-computed architecture facts (Python check — treat as authoritative)\n"]
+
+    # SAD component vs code directory check
+    sad_file = root / "designs" / "SAD" / "SAD-3-Decomposition-View.md"
+    lines.append("### SAD decomposition drift")
+    if not sad_file.exists():
+        lines.append("- SAD-3-Decomposition-View.md not found — SAD drift check skipped")
+    else:
+        sad_text = sad_file.read_text(errors="replace")
+        # Extract table rows: | Component name | description |
+        row_pat = _re.compile(r"^\|\s*([^|]+?)\s*\|", _re.MULTILINE)
+        # Known external actors that have no code directory
+        external_actors = {"data owner", "data user", "data seller", "external"}
+        # Extract component names from the SAD (skip header/separator rows)
+        components_checked: set[str] = set()
+        for m in row_pat.finditer(sad_text):
+            name = m.group(1).strip()
+            if name.lower() in ("component", "element", "name", "---", ""):
+                continue
+            if name.startswith("-") or name.startswith("|"):
+                continue
+            if name in components_checked:
+                continue
+            components_checked.add(name)
+            name_lower = name.lower()
+            if any(actor in name_lower for actor in external_actors):
+                lines.append(f"- {name}: EXTERNAL ACTOR (no code directory expected)")
+                continue
+            # Map common SAD names to directories
+            dir_hints = {
+                "portal": "portal",
+                "container": "attestation",
+                "instrumentation": "attestation",
+                "fhir": "fhir_proxy",
+                "healthcare": "healthcare-calculator",
+                "panome": "panome",
+                "s3 proxy": "s3-proxy",
+                "attestation": "attestation",
+            }
+            matched_dir = next(
+                (d for k, d in dir_hints.items() if k in name_lower), None
+            )
+            if matched_dir:
+                exists = (root / matched_dir).exists()
+                status = "EXISTS" if exists else "MISSING"
+                lines.append(f"- {name} → {matched_dir}/: {status}")
+            else:
+                lines.append(f"- {name}: directory mapping unknown")
+
+    # ADR coverage check
+    adr_dir = root / "designs" / "ADR"
+    lines.append("\n### ADR coverage")
+    if not adr_dir.exists():
+        lines.append("- designs/ADR/ not found — ADR coverage check skipped")
+    else:
+        adr_files = [f.name for f in adr_dir.iterdir() if f.suffix == ".md"]
+        adr_lower = " ".join(adr_files).lower()
+        decisions = {
+            "HTTP framework (Go)": ["go", "golang", "gin", "echo", "gorilla", "chi", "entrypoint"],
+            "Auth mechanism": ["auth", "mtls", "jwt", "keycloak", "okta"],
+            "Cloud deployment": ["ecs", "terraform", "deploy", "infra", "cloud"],
+            "Database": ["postgres", "database", "rds", "sql", "db"],
+        }
+        for decision, keywords in decisions.items():
+            matches = [f for f in adr_files if any(k in f.lower() for k in keywords)]
+            if matches:
+                lines.append(f"- {decision}: COVERED — {', '.join(matches[:3])}")
+            else:
+                lines.append(f"- {decision}: NOT COVERED — no matching ADR found")
+        lines.append(f"- Total ADR files: {len(adr_files)}")
+
+    return "\n".join(lines)
+
+
 def build_verify_crew(project_root: str = "") -> Crew:
     """Build and return a sequential 5-task verification crew."""
     tools = _make_tools(code_path=project_root)
@@ -690,6 +769,7 @@ def build_verify_crew(project_root: str = "") -> Crew:
     arch = os.environ.get("ARCHITECTURE_STYLE", "")
     compliance = os.environ.get("CODE_CREW_COMPLIANCE", "")
     security_facts = _precheck_security(project_root)
+    arch_facts = _precheck_architecture(project_root)
     ctx = (
         f"## Verification context\n\n"
         f"**Project root**: {project_root or '.'}\n"
@@ -716,8 +796,8 @@ def build_verify_crew(project_root: str = "") -> Crew:
             context=context_tasks or [],
         )
 
-    arch_scan   = _vtask("verify_arch_scan")
-    sec_scan    = _vtask("verify_security_scan", extra_ctx=security_facts)
+    arch_scan   = _vtask("verify_arch_scan",       extra_ctx=arch_facts)
+    sec_scan    = _vtask("verify_security_scan",   extra_ctx=security_facts)
     comp_scan   = _vtask("verify_compliance_scan")
     domain_scan = _vtask("verify_domain_scan")
     chief_rev   = _vtask("verify_chief_review",    [arch_scan, sec_scan, comp_scan, domain_scan])

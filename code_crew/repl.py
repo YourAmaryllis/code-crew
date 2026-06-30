@@ -2228,9 +2228,14 @@ def _start_verify(console: Console) -> None:
     scan_infos: dict[str, list[str]] = {}
     for task_name, _, tag in scan_defs:
         raw = task_map.get(task_name, "")
-        scan_counts[task_name] = len(re.findall(rf"^FINDING \[{tag}\]", raw, re.MULTILINE))
-        scan_passes[task_name] = re.findall(rf"^PASS \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)
-        scan_infos[task_name]  = re.findall(rf"^INFO \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)
+        _all_findings = re.findall(rf"^FINDING \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)
+        scan_counts[task_name] = len(set(_all_findings))  # deduplicate
+        scan_passes[task_name] = list(dict.fromkeys(
+            re.findall(rf"^PASS \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)
+        ))
+        scan_infos[task_name]  = list(dict.fromkeys(
+            re.findall(rf"^INFO \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)
+        ))
 
     # --- write report file ---
     from datetime import datetime as _dt
@@ -2245,13 +2250,23 @@ def _start_verify(console: Console) -> None:
     rows_exempt   = "\n".join(f"- {e}" for e in exempt)   or "_None_"
     rows_triaged_pass = "\n".join(f"- {p}" for p in passed) or "_None_"
 
-    # Build per-scan detail sections (findings + passes + infos)
+    # Build per-scan detail sections (findings + passes + infos) — deduplicate each list
+    def _dedup(items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for item in items:
+            key = item.strip()
+            if key not in seen:
+                seen.add(key)
+                result.append(item)
+        return result
+
     _scan_detail_sections = ""
     for task_name, label, tag in scan_defs:
         raw = task_map.get(task_name, "")
-        _findings = re.findall(rf"^FINDING \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)
-        _passes   = scan_passes.get(task_name, [])
-        _infos    = scan_infos.get(task_name, [])
+        _findings = _dedup(re.findall(rf"^FINDING \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE))
+        _passes   = _dedup(scan_passes.get(task_name, []))
+        _infos    = _dedup(scan_infos.get(task_name, []))
         _scan_detail_sections += f"\n### {label}\n\n"
         if _findings:
             _scan_detail_sections += "**Findings:**\n" + "\n".join(f"- {f}" for f in _findings) + "\n\n"
