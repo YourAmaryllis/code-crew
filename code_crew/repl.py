@@ -2169,10 +2169,89 @@ def _start_verify(console: Console) -> None:
     import json as _json
     from datetime import date
 
-    from code_crew.crew import build_verify_crew
+    from code_crew.crew import build_verify_crew, _precheck_security, _precheck_architecture
 
     console.print("\n[bold]Starting verification audit…[/bold]")
     console.print("[dim]Scans: architecture · security · compliance · domain → chief review → report[/dim]\n")
+
+    # Run Python pre-checks before the LLM crew — these are authoritative for objective facts
+    _cwd = str(Path.cwd())
+    _sec_facts  = _precheck_security(_cwd)
+    _arch_facts = _precheck_architecture(_cwd)
+
+    def _parse_precheck_into_lines(facts: str, tag: str) -> tuple[list[str], list[str], list[str]]:
+        """Convert pre-check fact lines into FINDING/PASS/INFO lists."""
+        findings: list[str] = []
+        passes:   list[str] = []
+        infos:    list[str] = []
+        for line in facts.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("- "):
+                continue
+            entry = stripped[2:]
+            entry_lower = entry.lower()
+            if tag == "SEC":
+                if "**invalid**" in entry_lower or "no tmd file found" in entry_lower:
+                    name = entry.split(":")[0].strip()
+                    reason = entry.split("—", 1)[1].strip() if "—" in entry else "invalid"
+                    if "designs/TMD/" in entry:
+                        findings.append(f"TMD file invalid — {entry.split(':')[0].strip()} [HIGH] ({reason})")
+                    else:
+                        findings.append(f"No threat model found for component — {name} [MEDIUM]")
+                elif "tmd invalid" in entry_lower:
+                    name = entry.split(":")[0].strip()
+                    reason = entry.split("(", 1)[1].rstrip(")") if "(" in entry else "invalid"
+                    findings.append(f"Threat model invalid for component — {name} [HIGH] ({reason})")
+                elif ": valid" in entry_lower or "tmd valid" in entry_lower:
+                    passes.append(entry.replace(": VALID", "").replace("TMD VALID — ", "TMD valid — "))
+                elif "tmd valid" in entry_lower:
+                    passes.append(f"TMD valid — {entry.split('TMD VALID')[0].strip()}")
+                elif ": `" in entry and ("[high]" in entry_lower or "[low]" in entry_lower):
+                    # Hardcoded secret line: "- path:line: `snippet` [HIGH]"
+                    severity = "HIGH" if "[high]" in entry_lower else "LOW"
+                    path_part = entry.split(":")[0].strip().lstrip("- ")
+                    line_part = entry.split(":")[1].strip() if len(entry.split(":")) > 1 else "?"
+                    findings.append(f"Hardcoded secret — {path_part}:{line_part} [{severity}]")
+                elif "no hardcoded secrets found" in entry_lower:
+                    passes.append("No hardcoded secrets found in scanned Go source files")
+                else:
+                    infos.append(entry)
+            elif tag == "ARCH":
+                if "exists in code and in sad" in entry_lower:
+                    name_dir = entry.split("→")[0].strip() if "→" in entry else entry.split(":")[0].strip()
+                    dir_part = entry.split("→")[1].split(":")[0].strip() if "→" in entry else ""
+                    passes.append(f"SAD component {name_dir} present at {dir_part} — aligned with SAD")
+                elif "exists in code but not in sad" in entry_lower:
+                    name = entry.split("→")[0].strip() if "→" in entry else entry.split(":")[0].strip()
+                    infos.append(f"Component not in SAD — {name} (newer than SAD)")
+                elif "directory missing from code" in entry_lower:
+                    name = entry.split("→")[0].strip() if "→" in entry else entry.split(":")[0].strip()
+                    dir_part = entry.split("→")[1].split(":")[0].strip() if "→" in entry else ""
+                    findings.append(f"Code directory missing — {name} ({dir_part} not found)")
+                elif "not a deployable service" in entry_lower:
+                    infos.append(f"Non-deployable entry — {entry.split(':')[0].strip()}")
+                elif "referenced in sad but not in structure" in entry_lower:
+                    keyword = entry.split("'")[1] if "'" in entry else "unknown"
+                    findings.append(f"SAD references '{keyword}' not found in code")
+                elif "sad drift check skipped" in entry_lower or "not found" in entry_lower:
+                    infos.append(entry)
+                elif "covered —" in entry_lower:
+                    decision = entry.split(":")[0].strip()
+                    detail = entry.split("COVERED —")[1].strip() if "COVERED —" in entry else ""
+                    passes.append(f"ADR covers {decision} — {detail}")
+                elif "not covered" in entry_lower:
+                    decision = entry.split(":")[0].strip()
+                    findings.append(f"No ADR for {decision}")
+                elif "adr coverage check skipped" in entry_lower:
+                    infos.append("No ADR directory found — ADR coverage check skipped")
+                elif "total adr files" in entry_lower:
+                    infos.append(entry)
+                else:
+                    infos.append(entry)
+        return findings, passes, infos
+
+    _sec_findings,  _sec_passes,  _sec_infos  = _parse_precheck_into_lines(_sec_facts,  "SEC")
+    _arch_findings, _arch_passes, _arch_infos = _parse_precheck_into_lines(_arch_facts, "ARCH")
 
     def _kickoff_verify():
         crew = build_verify_crew(project_root=str(Path.cwd()))
@@ -2228,14 +2307,35 @@ def _start_verify(console: Console) -> None:
     scan_infos: dict[str, list[str]] = {}
     for task_name, _, tag in scan_defs:
         raw = task_map.get(task_name, "")
-        _all_findings = re.findall(rf"^FINDING \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)
-        scan_counts[task_name] = len(set(_all_findings))  # deduplicate
-        scan_passes[task_name] = list(dict.fromkeys(
-            re.findall(rf"^PASS \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)
-        ))
-        scan_infos[task_name]  = list(dict.fromkeys(
-            re.findall(rf"^INFO \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)
-        ))
+        _all_findings = list(dict.fromkeys(re.findall(rf"^FINDING \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)))
+        _all_passes   = list(dict.fromkeys(re.findall(rf"^PASS \[{tag}\]:?\s+(.+)$",    raw, re.MULTILINE)))
+        _all_infos    = list(dict.fromkeys(re.findall(rf"^INFO \[{tag}\]:?\s+(.+)$",    raw, re.MULTILINE)))
+
+        # Merge Python pre-check results (authoritative for objective checks)
+        if tag == "SEC":
+            for f in _sec_findings:
+                if f not in _all_findings:
+                    _all_findings.append(f)
+            for p in _sec_passes:
+                if p not in _all_passes:
+                    _all_passes.append(p)
+            for i in _sec_infos:
+                if i not in _all_infos:
+                    _all_infos.append(i)
+        elif tag == "ARCH":
+            for f in _arch_findings:
+                if f not in _all_findings:
+                    _all_findings.append(f)
+            for p in _arch_passes:
+                if p not in _all_passes:
+                    _all_passes.append(p)
+            for i in _arch_infos:
+                if i not in _all_infos:
+                    _all_infos.append(i)
+
+        scan_counts[task_name] = len(_all_findings)
+        scan_passes[task_name] = _all_passes
+        scan_infos[task_name]  = _all_infos
 
     # --- write report file ---
     from datetime import datetime as _dt
