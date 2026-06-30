@@ -11,6 +11,8 @@ expected_output: >
 
 You are generating a complete OpenThreatModel (OTM) v0.2.0 YAML for one project. The project scope, component inventory, active stacks, infrastructure modules, and a list of key files are provided in your context.
 
+**CRITICAL: Write the YAML directly in your text response. Do NOT call any function or tool named `generate_otm`, `create_otm`, `write_file`, or similar. There is no such tool — attempting to call one will fail. Your only tools are `workspace_reader` (to read source files) and `knowledge_reader` (to load reference docs). The OTM YAML must appear as plain text in your reply.**
+
 **Manager instructions (enforced before each section):**
 - Before Section 1: read all `dependency-manifest` files listed in Key files (go.mod, package.json, requirements.txt). These reveal external library dependencies and cloud SDK usage — the primary signal for external services.
 - Before Section 3: read all `entry-point` files listed in Key files (main.go, server.go, etc.) for each component in scope. These show what the component does, what it connects to, and what data it handles.
@@ -153,7 +155,7 @@ Check entry-point files for evidence of existing controls (TLS, JWT validation, 
 
 ## Output format
 
-Output the complete OTM as valid YAML, then end with:
+Write the complete OTM as plain YAML text in your response. Do not call any function or tool to produce it. End with:
 ```
 OTM BUILD COMPLETE
 ```
