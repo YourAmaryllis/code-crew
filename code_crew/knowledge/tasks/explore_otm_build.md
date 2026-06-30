@@ -2,7 +2,7 @@
 type: CrewAI Task
 title: OTM Threat Model Build
 description: Security architect generates a complete OpenThreatModel YAML for one project scope
-tags: [explore, threat-model, otm, stride, hipaa]
+tags: [explore, threat-model, otm, stride, plot4ai, linddun, hipaa]
 agent: architect
 expected_output: >
   A complete, valid OpenThreatModel v0.2.0 YAML document for the given project.
@@ -99,22 +99,40 @@ Focus on flows that carry sensitive assets. Cover:
 
 ## Section 6 — threats
 
-Apply STRIDE to the components and dataflows from Sections 4–5. For each threat:
+Apply the appropriate framework(s) per component type. A single OTM file can mix framework categories — use the `categories` array on each threat to identify the framework.
+
+**Framework selection rules**:
+- **STRIDE** (always): Apply to all API endpoints, services, data stores, auth flows, and trust boundaries.
+  Categories: `Spoofing`, `Tampering`, `Repudiation`, `Information Disclosure`, `Denial of Service`, `Elevation of Privilege`
+- **PLOT4ai** (AI/ML components): Apply if any component in scope is an LLM inference endpoint, embedding store, RAG pipeline, training/fine-tuning pipeline, data curation pipeline, data guide service, model registry, or agent/tool-calling system. Detect these by looking for `anthropic`, `openai`, `bedrock`, `langchain`, `transformers`, `llama` imports in `go.mod`/`requirements.txt`, or AI processing logic in entry-point files read in earlier sections.
+  Categories: `Output Control`, `Privacy Violation`, `Linkability`, `Transparency`, `Security Breach`, `Availability`, `Fairness`, `Accountability`
+- **LINDDUN** (personal-data flows): Apply if the system processes PII or PHI and GDPR, CCPA, or HIPAA stacks are active.
+  Categories: `Linking`, `Identifying`, `Non-repudiation`, `Detecting`, `Data Disclosure`, `Unawareness`, `Non-compliance`
+- **DIE** (cloud-native services): Apply if any component runs as an ECS task, Lambda, or container. Evaluate blast radius, artifact immutability, and credential lifetime.
+  Categories: `Distributed`, `Immutable`, `Ephemeral`
+
+For each threat:
 - `id` — T-<three-digit-number>
 - `name` / `description` — what could go wrong and what impact it has
-- `categories` — STRIDE categories: Spoofing, Tampering, Repudiation, InformationDisclosure, DoS, ElevationOfPrivilege
+- `categories` — one or more category names from the applicable framework(s) above
 - `risk.likelihood` / `risk.impact` — HIGH / MEDIUM / LOW
 - `targetedComponents` / `targetedAssets` — ids from Sections 3–4
 
-If `ai-ml` is in the active stacks, also apply PLOT4ai threats:
-- Prompt injection via user-controlled inputs
-- Model output manipulation used for clinical decisions
-- Model exfiltration
+**Minimum coverage per component type** (see `threat-dragon` knowledge for full table):
+- Public API endpoint: Spoofing, Tampering, Information Disclosure, Denial of Service (STRIDE)
+- Data store: Tampering, Information Disclosure, Repudiation (STRIDE)
+- ECS task / Lambda: Distributed (blast radius), Immutable (signed image), Ephemeral (credential TTL) (DIE)
+- LLM / inference endpoint: Output Control, Security Breach, Privacy Violation, Accountability (PLOT4ai)
+- Data curation pipeline: Security Breach (data poisoning), Fairness (dataset bias), Accountability (PLOT4ai)
+- Container attestation service: Security Breach (forged attestation), Immutable (result integrity), Accountability (PLOT4ai + DIE)
+- Embedding store: Privacy Violation, Linkability, Security Breach (PLOT4ai)
+- Agent / tool-calling: Output Control, Accountability, Availability (PLOT4ai)
 
-If HIPAA/GDPR stacks are active, add:
+If HIPAA/GDPR stacks are active, include LINDDUN threats:
 - Unlawful PHI retention (data not deleted on request)
-- Inadequate audit logging for access to PHI
+- Inadequate audit logging for PHI access
 - Cross-border PHI transfer without safeguards
+- Re-identification from quasi-identifiers in health data
 
 Focus on HIGH-impact threats. Aim for 8–15 threats for a typical service.
 
