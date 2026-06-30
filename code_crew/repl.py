@@ -2305,6 +2305,7 @@ def _start_verify(console: Console) -> None:
     scan_counts: dict[str, int] = {}
     scan_passes: dict[str, list[str]] = {}
     scan_infos: dict[str, list[str]] = {}
+    _scan_findings_merged: dict[str, list[str]] = {}
     for task_name, _, tag in scan_defs:
         raw = task_map.get(task_name, "")
         _all_findings = list(dict.fromkeys(re.findall(rf"^FINDING \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE)))
@@ -2333,9 +2334,11 @@ def _start_verify(console: Console) -> None:
                 if i not in _all_infos:
                     _all_infos.append(i)
 
-        scan_counts[task_name] = len(_all_findings)
-        scan_passes[task_name] = _all_passes
-        scan_infos[task_name]  = _all_infos
+        scan_counts[task_name]   = len(_all_findings)
+        scan_passes[task_name]   = _all_passes
+        scan_infos[task_name]    = _all_infos
+        # Store merged findings list for the report section (not just the count)
+        _scan_findings_merged[task_name] = _all_findings
 
     # --- write report file ---
     from datetime import datetime as _dt
@@ -2363,8 +2366,7 @@ def _start_verify(console: Console) -> None:
 
     _scan_detail_sections = ""
     for task_name, label, tag in scan_defs:
-        raw = task_map.get(task_name, "")
-        _findings = _dedup(re.findall(rf"^FINDING \[{tag}\]:?\s+(.+)$", raw, re.MULTILINE))
+        _findings = _dedup(_scan_findings_merged.get(task_name, []))
         _passes   = _dedup(scan_passes.get(task_name, []))
         _infos    = _dedup(scan_infos.get(task_name, []))
         _scan_detail_sections += f"\n### {label}\n\n"
