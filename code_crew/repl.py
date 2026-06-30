@@ -2859,7 +2859,7 @@ def _run_explore(target: str, console: Console) -> None:
         if arch_style:
             additions += f"\n## Architecture\n\n```yaml\narchitecture:\n  style: {arch_style}\n```\n"
         # Append discovery sections in a defined order
-        _discovery_order = ["code_structure", "test_structure", "cicd_workflows", "entry_points", "compliance_standards"]
+        _discovery_order = ["code_structure", "test_structure", "cicd_workflows", "entry_points", "architectural_components", "compliance_standards"]
         for _disc_key in _discovery_order:
             if _disc_key in discoveries:
                 additions += "\n" + discoveries[_disc_key] + "\n"
@@ -2878,8 +2878,21 @@ def _run_explore(target: str, console: Console) -> None:
     except Exception as exc:
         console.print(f"[dim]LLM phase skipped: {exc}[/dim]")
 
-    # --- persist detected stacks + arch + CI + commands to .code-crew/config.yaml ---
-    if stacks or arch_style or ci_methods or detected_commands:
+    # --- persist detected stacks + arch + CI + commands + compliance to .code-crew/config.yaml ---
+    # Merge compliance standards from LLM discovery (architect may have found more than Python scan)
+    _llm_compliance: list[str] = []
+    if "compliance_standards" in discoveries:
+        import re as _re
+        for _line in discoveries["compliance_standards"].splitlines():
+            _m = _re.match(r"-\s+(\w[\w\s-]+?)\s+[—–-]", _line.strip())
+            if _m:
+                _std = _m.group(1).strip().lower().replace(" ", "-")
+                if _std not in _llm_compliance:
+                    _llm_compliance.append(_std)
+    # Merge: prefer LLM-confirmed list; fallback to Python-detected
+    final_compliance = _llm_compliance or compliance_standards
+
+    if stacks or arch_style or ci_methods or detected_commands or final_compliance:
         import yaml as _yaml
         cfg_path = out_dir / "config.yaml"
         cfg_data: dict = {}
@@ -2894,6 +2907,9 @@ def _run_explore(target: str, console: Console) -> None:
             cfg_data.setdefault("architecture", {})["style"] = arch_style
         if ci_methods:
             cfg_data.setdefault("ci", {})["deployment_methods"] = ci_methods
+        if final_compliance:
+            cfg_data["compliance_standards"] = final_compliance
+            os.environ["CODE_CREW_COMPLIANCE"] = ",".join(final_compliance)
         if detected_commands:
             existing_cmds = cfg_data.get("commands", {})
             # Only write keys not already overridden by the user
@@ -2906,7 +2922,10 @@ def _run_explore(target: str, console: Console) -> None:
         cfg_path.write_text(_yaml.safe_dump(cfg_data, default_flow_style=False, sort_keys=False), encoding="utf-8")
         if stacks:
             os.environ["_CODE_CREW_STACKS_PROFILE"] = ",".join(stacks)
-        console.print(f"[green]✓[/green] Updated [dim]{cfg_path}[/dim] with detected stacks, architecture, CI/CD, and commands")
+        _cfg_parts = ["stacks", "architecture", "CI/CD", "commands"]
+        if final_compliance:
+            _cfg_parts.append(f"compliance ({', '.join(final_compliance)})")
+        console.print(f"[green]✓[/green] Updated [dim]{cfg_path}[/dim] with {', '.join(_cfg_parts)}")
 
     svc_dirs = svc_dirs_scan
 

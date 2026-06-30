@@ -7,9 +7,9 @@ agent: architect
 expected_output: >
   Verification lines (STACK_VERIFIED/NOT_FOUND/ADDED, COMMAND_VERIFIED/CORRECTED/NOT_FOUND/ADDED,
   CICD_VERIFIED/NOT_FOUND, TF_ROOT_VERIFIED/ENV_VERIFIED/STATE_VERIFIED/MODULES_VERIFIED/CORRECTED),
-  then five DISCOVERY_BEGIN/END blocks (code_structure, test_structure, cicd_workflows, entry_points,
-  compliance_standards), then: ARCHITECTURE_STYLE, PROJECT_SUMMARY, one COMPONENT line per service,
-  then EXPLORE SCAN COMPLETE
+  then six DISCOVERY_BEGIN/END blocks (code_structure, test_structure, cicd_workflows, entry_points,
+  architectural_components, compliance_standards), then: ARCHITECTURE_STYLE, PROJECT_SUMMARY,
+  one COMPONENT line per service, then EXPLORE SCAN COMPLETE
 ---
 
 You are performing a **comprehensive project exploration scan**. Your output will be saved as
@@ -308,6 +308,57 @@ DISCOVERY_BEGIN: entry_points
 | <name> | `<path>` | `<command>` | <env vars, ports, etc.> |
 ...
 DISCOVERY_END: entry_points
+```
+
+---
+
+## Step 5c — Architectural component discovery
+
+**Goal**: Map SAD decomposition components to actual code so that the security scan knows which
+components need threat models and the arch scan knows what should match the SAD.
+
+1. Use `workspace_reader` to read `designs/SAD/SAD-3-Decomposition-View.md` (the Element Catalog
+   table in section 3.2). If no SAD exists, use the service directories discovered in Step 2.
+2. For each SAD component: identify the corresponding code directory/directories in the project.
+3. Note any code services that do not appear in the SAD (they may be newer than the SAD).
+4. Note any SAD components with no corresponding code directory (possible gap or renamed).
+
+Output a discovery block:
+
+```
+DISCOVERY_BEGIN: architectural_components
+## Architectural components
+
+Derived from SAD decomposition view and current code structure.
+SAD source: `designs/SAD/SAD-3-Decomposition-View.md`
+
+| SAD Component | Code directory | Type | Notes |
+|---------------|----------------|------|-------|
+| LooporaData Portal | `portal/` | deployable service | ... |
+| Container Instrumentation Pipeline | `attestation/` | deployable service | worker + server |
+| ...  | | | |
+
+**In code but not in SAD** (newer than SAD or not yet documented):
+- `healthcare-calculator/` — Healthcare pricing calculator service
+- `panome/` — MCP-based data discovery service
+
+**In SAD but not in code** (removed, renamed, or not yet implemented):
+- (list if any)
+DISCOVERY_END: architectural_components
+```
+
+If no SAD exists:
+```
+DISCOVERY_BEGIN: architectural_components
+## Architectural components
+
+No SAD found. Components derived from code structure only.
+
+| Component | Directory | Type |
+|-----------|-----------|------|
+| <name> | `<dir>/` | deployable service |
+...
+DISCOVERY_END: architectural_components
 ```
 
 ---

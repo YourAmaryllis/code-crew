@@ -1,18 +1,18 @@
 ---
 type: CrewAI Task
 title: Security Verification Scan
-description: Security lead scans for hardcoded secrets, OWASP violations, OTM content validity, NIST gaps, and dependency vulnerabilities
-tags: [verify, security, scan, owasp, nist, secrets]
+description: Security lead validates TMD files for all architectural components, checks for hardcoded secrets, and runs targeted OWASP/NIST checks
+tags: [verify, security, scan, owasp, nist, secrets, tmds]
 agent: security_lead
 expected_output: >
   Structured list of findings tagged [SEC], each prefixed with FINDING, PASS, or INFO.
   Every checked item — whether clean or not — gets a line. Ends with SECURITY SCAN COMPLETE.
 ---
 
-Scan the codebase for security issues. Use `workspace_reader` to inspect source files and
-`knowledge_reader` to load `functions/security-privacy.md` and active stack guides.
+Scan the codebase for security issues. Use `workspace_reader` to inspect source files.
 
 **CRITICAL: All paths must be relative to the project root (`.`). Never use absolute paths.**
+**SCOPE LIMIT: At most 12 file reads total. Prioritise TMD validation and secrets scan.**
 
 ---
 
@@ -25,28 +25,35 @@ Search for patterns that indicate hardcoded credentials in source files (not in 
 - Private key headers: `-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----`
 - Skip: test files, example files, `*.example`, `*.sample`, mock data
 
-Report each hit as a FINDING. If clean: `PASS [SEC]: No hardcoded secrets found in source files`.
+If clean: `PASS [SEC]: No hardcoded secrets found in source files`.
+Report each hit as a `FINDING [SEC]`.
 
 ---
 
-**Step 2 — OTM threat model validity.**
+**Step 2 — OTM threat model validation (read every TMD file).**
 
-Use `workspace_reader` to list files under `designs/TMD/`. For each service or component in
-the codebase (identified by `cmd/`, `services/`, `apps/` directories or top-level module names),
-check if a matching OTM YAML exists in `designs/TMD/`.
+Use `workspace_reader` to list files under `designs/TMD/`.
 
-For **each TMD file that does exist**, read its content and validate it is an actual threat model:
-- A valid OTM file must contain at least one of: `components:`, `threats:`, `dataFlows:`, `trustZones:`
-- If a TMD file contains an error message, stack trace, Python exception, or is otherwise not a
-  valid OTM YAML structure, flag it:
-  ```
-  FINDING [SEC]: TMD file is not a valid threat model — designs/TMD/<filename>.yaml [HIGH]
-  ```
-- If the file is valid OTM: `PASS [SEC]: TMD valid — designs/TMD/<filename>.yaml`
+First, build the list of expected TMDs by reading `## Architectural components` from the task
+context (structure.md). Each deployable service/runtime component listed there should have a
+corresponding `.yaml` file in `designs/TMD/`.
 
-For services with **no TMD file**:
+**For each TMD file that exists** — read its content and validate:
+1. Does it start with `otmVersion:` or contain `otmVersion`? (valid OTM YAML)
+2. Does it contain at least one of: `components:`, `threats:`, `dataFlows:`, `trustZones:`?
+3. Does it have meaningful content (not a placeholder with `<PROJECT_NAME>`, error messages,
+   raw JSON tool-call output, or just comments)?
+
+Valid TMD: `PASS [SEC]: TMD valid — designs/TMD/<filename>.yaml (has <N> threats, <N> components)`
+Invalid TMD (error message, JSON dump, placeholder):
 ```
-FINDING [SEC]: No threat model found for service — <service-directory> [MEDIUM]
+FINDING [SEC]: TMD file is not a valid threat model — designs/TMD/<filename>.yaml [HIGH]
+  Content issue: <describe what's wrong — error message / placeholder / raw JSON / etc.>
+```
+
+**For each architectural component with no TMD file**:
+```
+FINDING [SEC]: No threat model found for component — <component-name> [MEDIUM]
 ```
 
 If `designs/TMD/` does not exist or is empty:
@@ -56,71 +63,63 @@ FINDING [SEC]: No threat models found in designs/TMD/ — threat modelling not e
 
 ---
 
-**Step 3 — OWASP Top 10 spot-check.**
+**Step 3 — OWASP Top 10 spot-check (targeted, 2 file reads max).**
 
-For each category, do a targeted scan. Output a PASS or FINDING for each:
+Read 1 handler and 1 auth-related file. Check:
+- **A01 Broken Access Control**: routes checked for auth middleware
+- **A02 Cryptographic Failures**: no MD5/SHA1/DES/RC4 in crypto contexts
+- **A03 Injection**: parameterised queries used (no raw string SQL)
+- **A05 Security Misconfiguration**: no `DEBUG=True` or open CORS (`*`) in production paths
+- **A06 Vulnerable Components**: check `commands.audit` in structure.md; if no audit command,
+  flag as FINDING that dependency auditing is not configured
+- **A09 Logging Failures**: auth events (login, logout, token issue) have log statements
 
-- **A01 Broken Access Control**: look for routes without auth middleware; check role enforcement.
-  PASS if auth middleware is consistently applied; FINDING if unprotected routes found.
-- **A02 Cryptographic Failures**: find `MD5`, `SHA1`, `DES`, `RC4` usage; HTTP (not HTTPS) hardcoded URLs.
-  PASS if no weak ciphers found.
-- **A03 Injection**: find raw string concatenation into SQL queries; unsanitised shell commands.
-  PASS if parameterised queries used throughout.
-- **A04 Insecure Design**: find `TODO: add auth`, `# FIXME security`, placeholder validation.
-- **A05 Security Misconfiguration**: find `DEBUG=True` or `debug: true` outside test files; open CORS (`*`).
-- **A06 Vulnerable Components**: check `commands.audit` in `.code-crew/structure.md`; if set, note
-  whether audit output is available in workspace; if not set, emit a FINDING that dependency
-  auditing is not configured.
-- **A07 Authentication Failures**: check for rate limiting on login endpoints; token expiry handling.
-- **A09 Logging Failures**: check that auth events (login, logout, token issue) have log statements.
+Output one PASS or FINDING per category checked.
 
 ---
 
-**Step 4 — NIST CSF spot-check.**
+**Step 4 — NIST CSF spot-check (documentation only, no file reads).**
 
-Check alignment with NIST Cybersecurity Framework core functions (high-level only):
+Use what you already know from Step 2 (TMD files and architecture context) to assess:
+- **Identify**: Do TMDs document assets and components? (PASS if TMD has `assets:` section)
+- **Protect**: Is access control documented in any TMD? (check `trustZones:` section)
+- **Detect**: Are monitoring/alerting mentions visible in structure.md or TMDs?
+- **Respond**: Did Step 5 of compliance scan find an IR runbook? (note if unknown)
+- **Recover**: Note if not checked (within scope limit)
 
-- **Identify**: Is there an asset inventory or component registry? (check designs/ADD/ or SAD)
-  PASS if ADDs document all services and their data; INFO if partial.
-- **Protect**: Is access control documented and enforced? (check auth middleware and ADR)
-  PASS if IAM/auth policies documented in designs/.
-- **Detect**: Is there monitoring/alerting for anomalous activity? (check for references to
-  SIEM, CloudWatch alarms, or intrusion detection in designs/ or infrastructure code)
-- **Respond**: Is there an incident response runbook? (check designs/SOP/)
-  FINDING if no IR runbook exists.
-- **Recover**: Is there a backup/restore procedure? (check designs/SOP/ or infrastructure)
-  INFO if not found.
+One line per function. Use INFO if evidence is partial.
 
 ---
 
 **Step 5 — SBOM / dependency audit.**
 
-Check if a lockfile (`requirements.txt`, `go.sum`, `package-lock.json`) is present and committed.
-Flag if absent: `FINDING [SEC]: No lockfile committed — dependency versions unpinned [MEDIUM]`.
-If present: `PASS [SEC]: Lockfile present — <filename>`.
+Check if a lockfile (`go.sum`, `package-lock.json`, `requirements.txt`, `poetry.lock`) exists.
+Use `find_files` with pattern `**/go.sum` or `**/package-lock.json` — do not read contents.
+
+If present: `PASS [SEC]: Lockfile committed — <filename>`.
+If absent: `FINDING [SEC]: No lockfile committed — dependency versions unpinned [MEDIUM]`.
 
 ---
 
 **Step 6 — Handle tool failures.**
 
-If any tool call fails: log `ERROR: <tool>(<args>) → <error>`, try once with an alternative
-approach, then skip. Never use absolute paths in shell commands — always relative to project root.
-Include a `TOOL FAILURES:` block before the final line if any step was skipped.
+If any tool call fails: log `ERROR: <tool>(<args>) → <error>`, try once with an alternative.
+Never use absolute paths. Include a `TOOL FAILURES:` block before the final line if any step
+was skipped.
 
 ---
 
 **Step 7 — Format findings.**
 
-Every check that was performed — whether it passed or failed — must appear in the output.
-Do not omit checks that passed.
+Every check performed — whether it passed or failed — must appear in the output.
 
 ```
 FINDING [SEC]: <one-sentence description> — <file:line or component name>  [CRITICAL|HIGH|MEDIUM]
 PASS [SEC]: <what was checked and found clean>
-INFO [SEC]: <contextual note — not a violation, but relevant>
+INFO [SEC]: <contextual note — not a violation>
 ```
 
-End your output with exactly:
+End with exactly:
 ```
 SECURITY SCAN COMPLETE
 ```

@@ -620,11 +620,13 @@ def build_verify_crew(project_root: str = "") -> Crew:
     structure = _load_project_structure()
     stacks = os.environ.get("CODE_CREW_STACKS", "")
     arch = os.environ.get("ARCHITECTURE_STYLE", "")
+    compliance = os.environ.get("CODE_CREW_COMPLIANCE", "")
     ctx = (
         f"## Verification context\n\n"
         f"**Project root**: {project_root or '.'}\n"
         f"**Stacks**: {stacks or 'not set'}\n"
         f"**Architecture**: {arch or 'not set'}\n"
+        f"**Compliance standards in scope**: {compliance or 'not set — check structure.md'}\n"
         f"{_designs_context_line()}\n"
     )
     if structure:

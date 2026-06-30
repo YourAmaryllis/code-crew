@@ -176,6 +176,12 @@ def load_yaml_config(path: Path, override: bool = True) -> dict:
         if override or "_CODE_CREW_STACKS_PROFILE" not in os.environ:
             os.environ["_CODE_CREW_STACKS_PROFILE"] = stacks_str
 
+    compliance = data.get("compliance_standards")
+    if isinstance(compliance, list) and compliance:
+        compliance_str = ",".join(str(s) for s in compliance)
+        if override or "CODE_CREW_COMPLIANCE" not in os.environ:
+            os.environ["CODE_CREW_COMPLIANCE"] = compliance_str
+
     # llm: section — serialised as JSON into LLM_CONFIG for llm_factory to consume
     if "llm" in data and isinstance(data["llm"], dict):
         import json as _json
