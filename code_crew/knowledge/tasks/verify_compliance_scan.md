@@ -1,7 +1,7 @@
 ---
 type: CrewAI Task
 title: Compliance Verification Scan
-description: Compliance officer reads detected standards from structure.md then audits the codebase against each applicable framework
+description: Compliance officer audits PII handling, audit trail, and regulatory framework coverage using at most 4 file reads with immediate per-file output
 tags: [verify, compliance, gdpr, hipaa, soc2, scan]
 agent: compliance_officer
 expected_output: >
@@ -9,151 +9,95 @@ expected_output: >
   Every checked item — whether clean or not — gets a line. Ends with COMPLIANCE SCAN COMPLETE.
 ---
 
-Scan the codebase and designs for compliance issues. Use `workspace_reader` to inspect source
-files and designs documents.
+Scan for compliance issues. Use `workspace_reader` throughout.
 
-**CRITICAL: All paths must be relative to the project root (`.`). Never use absolute paths.**
+**CRITICAL: All paths must be relative to `.`. Never use absolute paths.**
+**CRITICAL: At most 4 file reads total. Output a FINDING or PASS line IMMEDIATELY after
+reading each file — do not accumulate results and output them all at the end.**
+**CRITICAL: Do not make another tool call after you have output all findings from the last
+file you read. If you have nothing more to read, write your summary and stop.**
 
 ---
 
-**Step 1 — Identify applicable compliance standards.**
+**Step 1 — Standards in scope (no tool calls needed).**
 
-Read the `## Compliance standards` section from the project structure in your context (loaded
-from `.code-crew/structure.md`). This section was produced by `/explore` and lists which
-regulatory frameworks were detected in designs/ and docs/.
+Your task context includes `## Compliance standards` from `.code-crew/structure.md`.
+Use those standards. If the section is absent, assume: HIPAA, SOC 2, GDPR, CCPA.
 
-If the structure context does not contain a `## Compliance standards` section, scan yourself:
-use `workspace_reader` to read `designs/SOP/` and `designs/ADR/` files and look for mentions of:
-HIPAA, PHI, SOC 2, GDPR, CCPA, PCI-DSS, FIPS.
-
-For each standard detected, run the checklist in Step 5.
-If **no** standards are detected after checking, output:
+Output one line per standard:
 ```
-INFO [COMP]: No compliance frameworks detected in designs/ or docs/ — running baseline check only
+INFO [COMP]: Compliance standard in scope — <standard>
 ```
-Then run Step 2 and Step 3 only.
 
 ---
 
-**Step 2 — Personal data handling (all projects).**
+**Step 2 — PII model check (1 file read).**
 
-**Do NOT grep the whole codebase** — that produces too many false positives (Go variable names,
-function parameters, etc.). Instead, find PII by reading likely model files directly:
+Read this exact file: `portal/backend/internal/user/user.go`
 
-1. Use `workspace_reader` with `list_directory` on each service's `internal/` directory.
-   Look for subdirectories named: `user`, `users`, `account`, `accounts`, `customer`,
-   `customers`, `rental`, `rentals`, `patient`, `member`, `profile`, `auth`, `identity`.
-2. For each found subdirectory, list it and read the Go/Python/TypeScript file that defines
-   the primary struct or class (e.g. `user.go`, `user.py`, `models.go`, `store.go`).
-3. In each file, look for struct fields or DB columns tagged with `db:"..."`, `json:"..."`,
-   or column names that are PII: `email`, `phone`, `name`, `address`, `dob`, `ssn`,
-   `ip_address`, `buyer_email`, `buyer_name`, `first_name`, `last_name`.
+After reading it, immediately scan the content for struct fields or db/json tags containing:
+`email`, `phone`, `name`, `address`, `dob`, `ssn`, `ip_address`, `first_name`, `last_name`
 
-Check at most **4 files** total. Focus on `portal/backend/`, `attestation/`, and any service
-that handles users or transactions.
+For EACH PII field found, output ONE line immediately:
+- No encryption or deletion logic visible in file: `FINDING [COMP]: PII field '<field>' collected without documented encryption or retention — portal/backend/internal/user/user.go [MEDIUM]`
+- Encryption/deletion logic visible: `PASS [COMP]: PII field '<field>' has protection controls — portal/backend/internal/user/user.go`
 
-For each PII field found:
-- Is it encrypted at rest? (check for column-level encryption in the same file or a migration)
-- Is there a retention policy? (look for delete/archive logic in the same package)
-- Is there a consent record for collection? (consent table or flag in same package)
+If file does not exist or has no PII fields: `INFO [COMP]: No PII model fields found in portal/backend/internal/user/user.go`
 
-If PII fields are found without these controls: `FINDING [COMP]: ...`
-If PII fields found and controls exist: `PASS [COMP]: PII field <name> has encryption/retention/consent`
-If no PII-containing files found after checking service model directories: `INFO [COMP]: No PII model files found in checked directories — <list what you checked>`
+Then output this line immediately: `INFO [COMP]: PII model check done`
 
 ---
 
-**Step 3 — Audit trail check (all projects).**
+**Step 3 — Audit trail check (1 file read).**
 
-For each sensitive operation visible in the codebase (auth events, data exports, admin actions,
-config changes, financial transactions):
-- Verify a log or audit record is written before or after the operation
-- Check the log does not contain raw PII (phone, email, SSN in log messages)
+Read this exact file: `portal/backend/internal/auditevent/event.go`
 
----
+After reading it, immediately output:
+- File exists and defines audit event types: `PASS [COMP]: Audit event system present — portal/backend/internal/auditevent/event.go`
+- File exists but appears minimal/empty: `FINDING [COMP]: Audit event file exists but appears minimal — may not cover all sensitive operations [LOW]`
+- File does not exist: `FINDING [COMP]: No audit event system found in portal/backend/internal/ — sensitive operation logging not verified [MEDIUM]`
 
-**Step 4 — Data subject rights (GDPR or CCPA).**
-
-If GDPR or CCPA is in scope, look for endpoints or handlers implementing:
-- Right to access / right to know (export user data)
-- Right to erasure (delete or anonymise user data)
-- Right to portability (data export in machine-readable format)
-
-Check designs/ADD/ for documented data subject request flows.
-If GDPR/CCPA not in scope: output `PASS [COMP]: Data subject rights check — not in scope (GDPR/CCPA not detected)`.
+Then output: `INFO [COMP]: Audit trail check done`
 
 ---
 
-**Step 5 — Per-standard checklists.**
+**Step 4 — Regulatory framework documentation (1 file read).**
 
-Run only the checklists for standards detected in Step 1.
+Read this exact file: `designs/SOP/SOP-8-Compliance.md`
 
-### HIPAA checklist
-1. **PHI encryption at rest** — grep for encryption at column or field level for health data
-2. **PHI in transit** — check that HTTPS is enforced and no health data flows over plain HTTP
-3. **Minimum necessary access** — check that health data queries include scoping (e.g. by patient/provider)
-4. **BAA documentation** — check designs/ for a Business Associate Agreement or BAA reference
-5. **Breach notification handler** — look for incident response or breach notification code/SOP
-6. **Audit log for PHI access** — verify access to health records is logged
+After reading it, for each standard that was in scope (from Step 1), output ONE line:
+- SOP addresses the standard: `PASS [COMP]: <standard> controls documented in designs/SOP/SOP-8-Compliance.md`
+- SOP does not address the standard: `FINDING [COMP]: <standard> controls not documented in compliance SOP [MEDIUM]`
+- If file does not exist: `FINDING [COMP]: No compliance SOP found at designs/SOP/SOP-8-Compliance.md [HIGH]`
 
-Output one PASS or FINDING line per item.
-
-### SOC 2 checklist
-1. **Access control reviews** — check designs/SOP/ for access review SOP
-2. **Change management** — check for PR-based deployment gates or approved change management SOP
-3. **Incident response runbook** — check designs/SOP/ for an IR runbook
-4. **Monitoring / alerting** — look for references to alerting tools (PagerDuty, OpsGenie, CloudWatch alarms)
-5. **Vendor/third-party risk** — check designs/ for third-party risk assessment or BAA/DPA list
-
-Output one PASS or FINDING line per item.
-
-### GDPR checklist
-1. **Consent records** — look for consent table, consent flag, or consent API
-2. **Lawful basis documentation** — check designs/ for documented lawful basis per data category
-3. **DPA/DPIA** — check designs/ for a Data Processing Agreement or Data Protection Impact Assessment
-4. **Data retention policy** — look for scheduled deletion or archival jobs with documented retention periods
-5. **Data breach notification procedure** — check designs/SOP/ for breach notification within 72 hours
-
-Output one PASS or FINDING line per item.
-
-### CCPA checklist
-1. **Right to know / access endpoint** — does a data export endpoint exist?
-2. **Right to delete endpoint** — does a user data deletion endpoint exist?
-3. **Opt-out of sale** — if data is shared with third parties, is there an opt-out mechanism?
-4. **Privacy policy reference** — check for privacy policy link or documentation in designs/
-
-Output one PASS or FINDING line per item.
-
-### PCI-DSS checklist
-1. **No raw card data stored** — grep for `card_number`, `cvv`, `ccv`, `pan` in source code and DB schema
-2. **Payment data in scope** — check designs/ for PCI scope documentation
-3. **Tokenisation or third-party PSP** — verify card data handling is delegated to a PCI-certified PSP
-
-### FIPS checklist
-1. **No weak ciphers** — grep for `MD5`, `SHA1`, `DES`, `RC4` in cryptographic contexts
-2. **Approved algorithms** — look for AES-256, RSA-4096, ECDSA P-384 usage
+Then output: `INFO [COMP]: SOP documentation check done`
 
 ---
 
-**Step 6 — Handle tool failures.**
+**Step 5 — Data subject rights check (1 file read).**
 
-If any tool call fails: log `ERROR: <tool>(<args>) → <error>`, try once with an alternative,
-then skip. Include a `TOOL FAILURES:` block before the final line if any step was skipped.
+If GDPR or CCPA is in scope, read `designs/ADD/` directory listing (not individual files).
+Check whether any ADD filename mentions: `data-subject`, `right-to-delete`, `erasure`,
+`right-to-know`, `privacy`, `opt-out`, `data-export`.
+
+- ADD found: `PASS [COMP]: Data subject rights ADD documented — <filename>`
+- No ADD found: `FINDING [COMP]: No data subject rights design document found in designs/ADD/ — GDPR/CCPA right-to-erasure not documented [MEDIUM]`
+
+If GDPR and CCPA both not in scope: `PASS [COMP]: Data subject rights check — not in scope`
 
 ---
 
-**Step 7 — Format all findings.**
+**Step 6 — Stop and format.**
 
-Every check that was performed — whether it passed or failed — must appear in the output.
-Do not omit checks that passed.
+Do NOT read any more files after Steps 2–5. Write your final output:
 
 ```
-FINDING [COMP]: <one-sentence description> — <file, endpoint, or data field>  [CRITICAL|HIGH|MEDIUM]
+FINDING [COMP]: <one-sentence description> — <file or component>  [CRITICAL|HIGH|MEDIUM|LOW]
 PASS [COMP]: <what was checked and found compliant>
-INFO [COMP]: <contextual note — not a violation, but relevant>
+INFO [COMP]: <contextual note>
 ```
 
-End your output with exactly:
+End with exactly:
 ```
 COMPLIANCE SCAN COMPLETE
 ```

@@ -33,59 +33,65 @@ INFO [ARCH]: Component identified — <name> (<directory>)
 
 **Step 2 — SAD decomposition drift check.**
 
+**IMPORTANT: You MUST complete this step and output at least one PASS or FINDING line.**
+
 Use `workspace_reader` to read `designs/SAD/SAD-3-Decomposition-View.md`, focusing on
-section 3.2 (Element Catalog table).
+section 3.2 (Element Catalog table). Then use `list_directory` on `.` (the project root,
+relative path) to confirm which component directories exist.
 
-For each SAD component in the Element Catalog:
-1. Does the corresponding code directory exist? (use list_directory on the project root)
-2. Does the component's documented purpose match what the `## Architectural components`
-   section in structure.md describes?
+For each SAD component in the Element Catalog, check if its code directory exists:
+- Directory exists and purpose matches structure.md: `PASS [ARCH]: SAD component <name> present at <directory> — aligned with SAD`
+- Directory exists but purpose seems mismatched: `FINDING [ARCH]: SAD drift — <component> purpose mismatch — <file>`
+- Directory not found: `FINDING [ARCH]: SAD component missing from code — <component> (<expected directory>)`
 
-For each code component NOT in the SAD: flag as INFO (may be newer than the SAD).
-For each SAD component with no code directory: flag as FINDING.
-For each mismatch between SAD description and actual code purpose: flag as FINDING.
+For each component in structure.md NOT in the SAD:
+- `INFO [ARCH]: Component not in SAD — <name> (may be newer than SAD)`
 
-If no SAD exists:
+If no SAD file exists at `designs/SAD/SAD-3-Decomposition-View.md`:
 ```
-INFO [ARCH]: No SAD found in designs/ — SAD drift check skipped
+INFO [ARCH]: No SAD found in designs/SAD/ — SAD drift check skipped
 ```
-
-Read at most **1 SAD file**. Do not read ADD files in this step.
 
 ---
 
 **Step 3 — Layer dependency check (one component only).**
 
-Pick the most critical deployable service from Step 1 (prefer the one with the most
-complex layering, e.g. a service with handlers + services + models).
+**IMPORTANT: You MUST complete this step and output at least one PASS or FINDING line.**
 
-For that one component:
-1. List its internal directory structure
-2. Read **1 handler file** and **1 service file**
-3. Check that:
-   - Handlers import services (not the other way)
+Pick the most critical deployable service from Step 1 (prefer one with handlers + services
++ models layers). For that one component:
+1. List its `internal/` directory structure (1 tool call)
+2. Read **1 handler file** and **1 service file** (2 tool calls)
+3. Check:
+   - Handlers import services (not the reverse)
    - Services do not import from handlers
-   - No business logic visible in the handler (parsing + service call only)
+   - Handler contains parsing + service call, not raw business logic
 
-Report the component name and what you checked. Output one PASS or FINDING line.
+Output format:
+- Correct layering: `PASS [ARCH]: Layer dependency rules met — <component> handler calls service, no reverse import`
+- Violation found: `FINDING [ARCH]: Layer violation — <detail> — <file>`
 
-If you already read enough from Step 2 to assess this: use that, don't re-read.
+If you cannot read the files (too many reads used in Step 2): output
+`INFO [ARCH]: Layer dependency check skipped — file read budget exhausted`
 
 ---
 
 **Step 4 — ADR coverage check (index only).**
 
-Use `knowledge_reader` to list available ADR documents. Do **not** read individual ADRs —
-only check what titles exist.
+**IMPORTANT: You MUST complete this step and output at least one PASS or FINDING line.**
 
-Look for ADR coverage of these key decisions (visible from prior steps):
+Use `workspace_reader` with `list_directory` on `designs/ADR/`. Do **not** read individual
+ADRs — only check what titles exist in the filenames.
+
+Look for ADR coverage of these decisions (visible from prior steps):
 - HTTP framework choice (e.g. gin, echo, gorilla/mux)
 - Database driver or ORM
 - Auth mechanism (JWT, mTLS, Auth0)
-- Primary cloud provider and deployment target (ECS, Lambda)
+- Cloud deployment target (ECS, Lambda, Kubernetes)
 
-For each decision visible in the code that has no matching ADR title: flag as FINDING.
-For each that is covered: flag as PASS.
+For each decision visible in the code with no matching ADR title: `FINDING [ARCH]: No ADR for <decision>`
+For each that is covered: `PASS [ARCH]: ADR covers <decision>`
+If `designs/ADR/` does not exist: `INFO [ARCH]: No ADR directory found — ADR coverage check skipped`
 
 ---
 

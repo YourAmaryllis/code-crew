@@ -35,20 +35,27 @@ Report each hit as a `FINDING [SEC]`.
 Use `workspace_reader` to list ALL files under `designs/TMD/`.
 
 Then read **every** `.yaml` file in that list, one by one. Do not skip small files —
-a file that is only a few lines is likely invalid and must be flagged.
+a 1-4 line file is almost certainly invalid.
 
-For each file read, check:
-1. Does the file contain `otmVersion:`? If not, it is invalid.
-2. Does the file contain at least one of: `components:`, `threats:`, `dataFlows:`, `trustZones:`?
-3. Does the content look like an error message, a JSON tool-call dump (starts with `{"`),
-   a prose explanation, or a placeholder with `<PROJECT_NAME>`? If so, it is invalid.
+For each file read, immediately output one line (before reading the next file):
 
-Output one line per file:
-- Valid: `PASS [SEC]: TMD valid — designs/TMD/<filename>.yaml`
-- Invalid: `FINDING [SEC]: TMD file invalid — designs/TMD/<filename>.yaml [HIGH] (reason: <error message / JSON dump / placeholder / prose>)`
+A file is **valid** only if ALL of these are true:
+- It contains the YAML key `otmVersion:` on a non-comment line (not preceded by `#`)
+- It contains at least one of: `components:`, `threats:`, `dataFlows:`, `trustZones:`
+- The content is actual YAML, not an error message, not a JSON dump (starts with `{` or `{"`)
+  and not a placeholder (contains `<PROJECT_NAME>` or `<description>`)
 
-Then compare the list of TMD files against the `## Architectural components` table in the
-task context (from structure.md). For each deployable service component that has no TMD file:
+If the file is just comments + a line starting with `{` or `{"`, it is a JSON dump — invalid.
+
+Valid: `PASS [SEC]: TMD valid — designs/TMD/<filename>.yaml`
+Invalid: `FINDING [SEC]: TMD file invalid — designs/TMD/<filename>.yaml [HIGH] (reason: <error message / JSON dump / placeholder / prose / only comments>)`
+
+Then compare the TMD files against the `## Architectural components` table in the task context
+(from structure.md). Only look at rows where the **Type** column is `deployable service`.
+Do NOT expect TMDs for rows with Type = `test suite`, `infrastructure`, `external`, or
+`infrastructure + test fixtures`.
+
+For each `deployable service` component with no TMD file:
 ```
 FINDING [SEC]: No threat model found for component — <component-name> [MEDIUM]
 ```
