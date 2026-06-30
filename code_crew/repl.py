@@ -3215,17 +3215,18 @@ def _run_explore(target: str, console: Console) -> None:
                 + yaml_text + "\n",
                 encoding="utf-8",
             )
-            console.print(f"[green]✓[/green] Written [dim]designs/TMD/{tmd_file.name}[/dim]")
-            _convert_tmd(tmd_file, tmd_dir, console)
+            _rel = tmd_file.relative_to(root) if tmd_file.is_relative_to(root) else tmd_file.name
+            console.print(f"[green]✓[/green] Written [dim]{_rel}[/dim]")
+            _convert_tmd(tmd_file, tmd_dir, root, console)
 
         except Exception as exc:
             console.print(f"[yellow]  OTM build failed for {project['id']}: {exc}[/yellow]")
 
 
-def _convert_tmd(tmd_file: Path, tmd_dir: Path, console: Console) -> None:
+def _convert_tmd(tmd_file: Path, tmd_dir: Path, root: Path, console: Console) -> None:
     """Convert an OTM YAML to the tool format configured in THREAT_MODELING_TOOL."""
-    import subprocess as _sp
     import shutil as _shutil
+    import subprocess as _sp
 
     tool = os.environ.get("THREAT_MODELING_TOOL", "").lower().strip()
     if not tool or tool == "otm":
@@ -3234,20 +3235,20 @@ def _convert_tmd(tmd_file: Path, tmd_dir: Path, console: Console) -> None:
     out_dir_env = os.environ.get("THREAT_MODELING_OUTPUT_DIR", "").strip()
     out_dir = Path(out_dir_env) if out_dir_env else tmd_dir
 
+    def _rel(p: Path) -> str:
+        try:
+            return str(p.relative_to(root))
+        except ValueError:
+            return p.name
+
     if tool == "threat-dragon":
-        script = tmd_dir / "scripts" / "otm_to_threat_dragon.py"
-        if not script.exists():
-            console.print(f"[dim]  (threat-dragon: no script at designs/TMD/scripts/otm_to_threat_dragon.py — skipping)[/dim]")
-            return
         out_file = out_dir / (tmd_file.stem + ".threat-dragon.json")
-        result = _sp.run(
-            [sys.executable, str(script), str(tmd_file), "-o", str(out_file)],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            console.print(f"[green]✓[/green] Threat Dragon [dim]designs/TMD/{out_file.name}[/dim]")
-        else:
-            console.print(f"[yellow]  Threat Dragon conversion failed: {result.stderr.strip()[:200]}[/yellow]")
+        try:
+            from shared.threat_model_export import otm_to_threat_dragon
+            otm_to_threat_dragon(tmd_file, out_file)
+            console.print(f"[green]✓[/green] Threat Dragon [dim]{_rel(out_file)}[/dim]")
+        except Exception as exc:
+            console.print(f"[yellow]  Threat Dragon conversion failed: {exc}[/yellow]")
 
     elif tool == "irius-risk":
         if not _shutil.which("startleft"):
@@ -3260,7 +3261,7 @@ def _convert_tmd(tmd_file: Path, tmd_dir: Path, console: Console) -> None:
             capture_output=True, text=True,
         )
         if result.returncode == 0:
-            console.print(f"[green]✓[/green] IriusRisk XML [dim]designs/TMD/{out_file.name}[/dim]")
+            console.print(f"[green]✓[/green] IriusRisk XML [dim]{_rel(out_file)}[/dim]")
         else:
             console.print(f"[yellow]  IriusRisk conversion failed: {result.stderr.strip()[:200]}[/yellow]")
 
