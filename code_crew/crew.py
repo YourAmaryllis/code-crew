@@ -1128,19 +1128,21 @@ def build_otm_build_task(project: dict, inventory: dict) -> Crew:
 
     ctx = "\n\n".join(ctx_lines)
 
+    architect = agents["architect"]
+    architect.max_iter = 30  # 7 sections × ~4 tool calls each; more than default 15
+
     t = Task(
         name="explore_otm_build",
         description=f"{ctx}\n\n{tc['explore_otm_build'].description}",
         expected_output=tc["explore_otm_build"].expected_output,
-        agent=agents["architect"],
+        agent=architect,
     )
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
         return Crew(
-            agents=[agents["architect"]],
+            agents=[architect],
             tasks=[t],
-            process=Process.hierarchical,
-            manager_llm=get_llm_for_tier("fast"),
+            process=Process.sequential,
             verbose=True,
         )
 
