@@ -31,67 +31,63 @@ INFO [ARCH]: Component identified — <name> (<directory>)
 
 ---
 
-**Step 2 — SAD decomposition drift check.**
+**Step 2 — ADR coverage check (do this before reading any source files).**
 
 **IMPORTANT: You MUST complete this step and output at least one PASS or FINDING line.**
 
-Use `workspace_reader` to read `designs/SAD/SAD-3-Decomposition-View.md`, focusing on
-section 3.2 (Element Catalog table). Then use `list_directory` on `.` (the project root,
-relative path) to confirm which component directories exist.
+Use `workspace_reader` with `list_directory` on `designs/ADR/`. Do NOT read individual ADR
+files — only check what titles exist in the filenames.
 
-For each SAD component in the Element Catalog, check if its code directory exists:
-- Directory exists and purpose matches structure.md: `PASS [ARCH]: SAD component <name> present at <directory> — aligned with SAD`
-- Directory exists but purpose seems mismatched: `FINDING [ARCH]: SAD drift — <component> purpose mismatch — <file>`
+Look for ADR coverage of these decisions:
+- HTTP framework (gin, echo, gorilla/mux, chi) → check for ADR with Go/HTTP/framework in name
+- Database driver or ORM → check for ADR with postgres/database/ORM in name
+- Auth mechanism (JWT, mTLS, Auth0) → check for ADR with auth/mTLS/Auth0 in name
+- Cloud deployment target (ECS, Lambda, Kubernetes) → check for ADR with ECS/cloud/deploy in name
+
+For each decision covered: `PASS [ARCH]: ADR covers <decision> — <filename>`
+For each decision with no matching ADR: `FINDING [ARCH]: No ADR for <decision>`
+If `designs/ADR/` does not exist: `INFO [ARCH]: No ADR directory found — ADR coverage check skipped`
+
+---
+
+**Step 3 — SAD decomposition drift check.**
+
+**IMPORTANT: You MUST complete this step and output at least one PASS or FINDING line.**
+
+Read `designs/SAD/SAD-3-Decomposition-View.md`. Then use `list_directory` on `.` (relative
+path) to confirm which directories exist.
+
+For each SAD component in its Element Catalog:
+- Directory exists and matches structure.md: `PASS [ARCH]: SAD component <name> present at <directory> — aligned with SAD`
 - Directory not found: `FINDING [ARCH]: SAD component missing from code — <component> (<expected directory>)`
+- External actors (no expected code directory): `INFO [ARCH]: External actor in SAD — <name> (no code expected)`
 
 For each component in structure.md NOT in the SAD:
 - `INFO [ARCH]: Component not in SAD — <name> (may be newer than SAD)`
 
-If no SAD file exists at `designs/SAD/SAD-3-Decomposition-View.md`:
-```
-INFO [ARCH]: No SAD found in designs/SAD/ — SAD drift check skipped
-```
+If SAD file does not exist: `INFO [ARCH]: No SAD found in designs/SAD/ — SAD drift check skipped`
 
 ---
 
-**Step 3 — Layer dependency check (one component only).**
+**Step 4 — Layer dependency check (one component, 2 file reads).**
 
 **IMPORTANT: You MUST complete this step and output at least one PASS or FINDING line.**
 
-Pick the most critical deployable service from Step 1 (prefer one with handlers + services
-+ models layers). For that one component:
-1. List its `internal/` directory structure (1 tool call)
-2. Read **1 handler file** and **1 service file** (2 tool calls)
-3. Check:
-   - Handlers import services (not the reverse)
-   - Services do not import from handlers
-   - Handler contains parsing + service call, not raw business logic
+Pick `portal/backend` as the component to check (it has clear handler/service layering).
 
-Output format:
-- Correct layering: `PASS [ARCH]: Layer dependency rules met — <component> handler calls service, no reverse import`
-- Violation found: `FINDING [ARCH]: Layer violation — <detail> — <file>`
+Read `portal/backend/internal/api/handlers.go` (or the first `.go` file in that directory
+if handlers.go does not exist). Then read `portal/backend/internal/services/dataset.go`
+(or the first `.go` file in `portal/backend/internal/services/`).
 
-If you cannot read the files (too many reads used in Step 2): output
-`INFO [ARCH]: Layer dependency check skipped — file read budget exhausted`
+Check:
+- Handler imports services (not the reverse)?
+- Service file does NOT import from handlers?
+- Handler is mostly parsing + service call (not raw business logic)?
 
----
-
-**Step 4 — ADR coverage check (index only).**
-
-**IMPORTANT: You MUST complete this step and output at least one PASS or FINDING line.**
-
-Use `workspace_reader` with `list_directory` on `designs/ADR/`. Do **not** read individual
-ADRs — only check what titles exist in the filenames.
-
-Look for ADR coverage of these decisions (visible from prior steps):
-- HTTP framework choice (e.g. gin, echo, gorilla/mux)
-- Database driver or ORM
-- Auth mechanism (JWT, mTLS, Auth0)
-- Cloud deployment target (ECS, Lambda, Kubernetes)
-
-For each decision visible in the code with no matching ADR title: `FINDING [ARCH]: No ADR for <decision>`
-For each that is covered: `PASS [ARCH]: ADR covers <decision>`
-If `designs/ADR/` does not exist: `INFO [ARCH]: No ADR directory found — ADR coverage check skipped`
+Output:
+- Correct layering: `PASS [ARCH]: Layer dependency rules met — portal handler calls service, no reverse import`
+- Violation: `FINDING [ARCH]: Layer violation — <detail> — <file>`
+- If files not found: `INFO [ARCH]: Layer dependency check — files not found, check skipped`
 
 ---
 

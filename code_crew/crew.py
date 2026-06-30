@@ -610,6 +610,74 @@ _DOMAIN_TASK_AGENTS: dict[str, str] = {
 }
 
 
+def _precheck_security(project_root: str) -> str:
+    """Pre-validate TMD files and scan for hardcoded secrets in Python.
+    Returns a context block injected into the security scan task."""
+    import re as _re
+    root = Path(project_root) if project_root else Path.cwd()
+    lines: list[str] = ["## Pre-computed security facts (Python check — treat as authoritative)\n"]
+
+    # TMD validation
+    tmd_dir = root / "designs" / "TMD"
+    if tmd_dir.exists():
+        lines.append("### TMD file validation")
+        for f in sorted(tmd_dir.glob("*.yaml")):
+            content = f.read_text(errors="replace")
+            content_lines = content.splitlines()
+            has_otm_key = any(
+                ln.strip().startswith("otmVersion:") and not ln.strip().startswith("#")
+                for ln in content_lines
+            )
+            has_sections = any(
+                k in content for k in ("components:", "threats:", "dataFlows:", "trustZones:")
+            )
+            json_dump_line = next(
+                (ln.strip() for ln in content_lines
+                 if ln.strip().startswith("{") and not ln.strip().startswith("#")), None
+            )
+            if json_dump_line:
+                reason = f"JSON dump (line starts with `{json_dump_line[:30]}`)"
+                lines.append(f"- designs/TMD/{f.name}: **INVALID** — {reason}")
+            elif not has_otm_key:
+                lines.append(f"- designs/TMD/{f.name}: **INVALID** — missing `otmVersion:` as YAML key (only found in comment)")
+            elif not has_sections:
+                lines.append(f"- designs/TMD/{f.name}: **INVALID** — missing components/threats/dataFlows/trustZones")
+            else:
+                lines.append(f"- designs/TMD/{f.name}: VALID")
+    else:
+        lines.append("### TMD file validation\n- designs/TMD/ does not exist — no threat models found")
+
+    # Hardcoded secrets scan
+    lines.append("\n### Hardcoded secrets scan")
+    secret_pat = _re.compile(
+        r'(secret|password|api_key|apikey|private_key)\s*[=:]\s*["\'][^"\']{8,}["\']',
+        _re.IGNORECASE,
+    )
+    scan_dirs = [root / "portal" / "backend", root / "healthcare-calculator", root / "attestation"]
+    findings: list[str] = []
+    for scan_dir in scan_dirs:
+        if not scan_dir.exists():
+            continue
+        for src in scan_dir.rglob("*.go"):
+            if any(p in src.parts for p in ("vendor", "node_modules", ".git")):
+                continue
+            try:
+                for i, line in enumerate(src.read_text(errors="replace").splitlines(), 1):
+                    if secret_pat.search(line):
+                        rel = src.relative_to(root)
+                        severity = "LOW" if src.name.endswith("_test.go") else "HIGH"
+                        snippet = line.strip()[:80]
+                        findings.append(f"- {rel}:{i}: `{snippet}` [{severity}]")
+            except OSError:
+                pass
+    if findings:
+        lines.extend(findings)
+    else:
+        lines.append("- No hardcoded secrets found in scanned Go source files")
+
+    return "\n".join(lines)
+
+
 def build_verify_crew(project_root: str = "") -> Crew:
     """Build and return a sequential 5-task verification crew."""
     tools = _make_tools(code_path=project_root)
@@ -621,6 +689,7 @@ def build_verify_crew(project_root: str = "") -> Crew:
     stacks = os.environ.get("CODE_CREW_STACKS", "")
     arch = os.environ.get("ARCHITECTURE_STYLE", "")
     compliance = os.environ.get("CODE_CREW_COMPLIANCE", "")
+    security_facts = _precheck_security(project_root)
     ctx = (
         f"## Verification context\n\n"
         f"**Project root**: {project_root or '.'}\n"
@@ -636,18 +705,19 @@ def build_verify_crew(project_root: str = "") -> Crew:
     if skills:
         ctx = skills + "\n\n" + ctx
 
-    def _vtask(name: str, context_tasks: list | None = None) -> Task:
+    def _vtask(name: str, context_tasks: list | None = None, extra_ctx: str = "") -> Task:
         agent_key = _VERIFY_TASK_AGENTS[name]
+        task_ctx = f"{ctx}\n\n{extra_ctx}\n\n" if extra_ctx else f"{ctx}\n\n"
         return Task(
             name=name,
-            description=f"{ctx}\n\n{tc[name].description}",
+            description=f"{task_ctx}{tc[name].description}",
             expected_output=tc[name].expected_output,
             agent=agents[agent_key],
             context=context_tasks or [],
         )
 
     arch_scan   = _vtask("verify_arch_scan")
-    sec_scan    = _vtask("verify_security_scan")
+    sec_scan    = _vtask("verify_security_scan", extra_ctx=security_facts)
     comp_scan   = _vtask("verify_compliance_scan")
     domain_scan = _vtask("verify_domain_scan")
     chief_rev   = _vtask("verify_chief_review",    [arch_scan, sec_scan, comp_scan, domain_scan])
