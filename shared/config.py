@@ -119,6 +119,10 @@ _ENV_MAP: dict[str, object] = {
     "nvidia": {
         "api_key": "NVIDIA_API_KEY",
     },
+    "threat_modeling": {
+        "tool": "THREAT_MODELING_TOOL",
+        "output_dir": "THREAT_MODELING_OUTPUT_DIR",
+    },
 }
 
 

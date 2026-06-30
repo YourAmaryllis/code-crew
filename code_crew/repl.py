@@ -3216,9 +3216,59 @@ def _run_explore(target: str, console: Console) -> None:
                 encoding="utf-8",
             )
             console.print(f"[green]✓[/green] Written [dim]designs/TMD/{tmd_file.name}[/dim]")
+            _convert_tmd(tmd_file, tmd_dir, console)
 
         except Exception as exc:
             console.print(f"[yellow]  OTM build failed for {project['id']}: {exc}[/yellow]")
+
+
+def _convert_tmd(tmd_file: Path, tmd_dir: Path, console: Console) -> None:
+    """Convert an OTM YAML to the tool format configured in THREAT_MODELING_TOOL."""
+    import subprocess as _sp
+    import shutil as _shutil
+
+    tool = os.environ.get("THREAT_MODELING_TOOL", "").lower().strip()
+    if not tool or tool == "otm":
+        return
+
+    out_dir_env = os.environ.get("THREAT_MODELING_OUTPUT_DIR", "").strip()
+    out_dir = Path(out_dir_env) if out_dir_env else tmd_dir
+
+    if tool == "threat-dragon":
+        script = tmd_dir / "scripts" / "otm_to_threat_dragon.py"
+        if not script.exists():
+            console.print(f"[dim]  (threat-dragon: no script at designs/TMD/scripts/otm_to_threat_dragon.py — skipping)[/dim]")
+            return
+        out_file = out_dir / (tmd_file.stem + ".threat-dragon.json")
+        result = _sp.run(
+            [sys.executable, str(script), str(tmd_file), "-o", str(out_file)],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            console.print(f"[green]✓[/green] Threat Dragon [dim]designs/TMD/{out_file.name}[/dim]")
+        else:
+            console.print(f"[yellow]  Threat Dragon conversion failed: {result.stderr.strip()[:200]}[/yellow]")
+
+    elif tool == "irius-risk":
+        if not _shutil.which("startleft"):
+            console.print("[yellow]  irius-risk: startleft not found — run: pip install startleft[/yellow]")
+            return
+        out_file = out_dir / (tmd_file.stem + ".iriusrisk.xml")
+        result = _sp.run(
+            ["startleft", "parse", "--type", "OTM", "--output-type", "IRIUSRISK",
+             "--output-file", str(out_file), str(tmd_file)],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            console.print(f"[green]✓[/green] IriusRisk XML [dim]designs/TMD/{out_file.name}[/dim]")
+        else:
+            console.print(f"[yellow]  IriusRisk conversion failed: {result.stderr.strip()[:200]}[/yellow]")
+
+    elif tool == "microsoft-tmmt":
+        console.print("[dim]  microsoft-tmmt (.tm7) conversion not yet supported — OTM YAML only.[/dim]")
+
+    else:
+        console.print(f"[yellow]  Unknown threat_modeling.tool: {tool!r} — expected threat-dragon, irius-risk, or microsoft-tmmt[/yellow]")
 
 
 def _run_fix(console: Console) -> None:

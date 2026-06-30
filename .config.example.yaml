@@ -171,6 +171,21 @@ issue_tracker:
 #   doc_standard: openapi   # openapi (only supported value today)
 
 # ─────────────────────────────────────────────
+# Threat modeling tool
+# OTM YAML (designs/TMD/*.yaml) is always generated as the primary format.
+# Set a tool to also generate a converted output after /explore.
+#
+# threat-dragon: runs designs/TMD/scripts/otm_to_threat_dragon.py if present
+#                → writes designs/TMD/<name>.threat-dragon.json
+# irius-risk:    runs StartLeft CLI (pip install startleft)
+#                → writes designs/TMD/<name>.iriusrisk.xml
+# microsoft-tmmt: not yet supported (OTM YAML only)
+# ─────────────────────────────────────────────
+# threat_modeling:
+#   tool: threat-dragon    # threat-dragon | irius-risk | microsoft-tmmt
+#   output_dir: ""         # optional override (default: same dir as OTM YAML)
+
+# ─────────────────────────────────────────────
 # Domain modeling
 # ─────────────────────────────────────────────
 # domain:
