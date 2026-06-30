@@ -610,6 +610,59 @@ _DOMAIN_TASK_AGENTS: dict[str, str] = {
 }
 
 
+def _parse_arch_components(root: "Path") -> list[tuple[str, str, str]]:
+    """Parse ## Architectural components table from structure.md.
+    Returns list of (name, directory, type) tuples."""
+    import re as _re
+    structure_path = root / ".code-crew" / "structure.md"
+    if not structure_path.exists():
+        return []
+    text = structure_path.read_text(errors="replace")
+    # Find the ## Architectural components section
+    section_m = _re.search(r"## Architectural components.*?\n(.*?)(?=\n## |\Z)", text, _re.DOTALL)
+    if not section_m:
+        return []
+    section = section_m.group(1)
+    # Parse markdown table rows: | name | `dir/` | type | notes |
+    row_pat = _re.compile(r"^\|\s*([^|]+?)\s*\|\s*`?([^|`]+?)`?\s*\|\s*([^|]+?)\s*\|", _re.MULTILINE)
+    results = []
+    for m in row_pat.finditer(section):
+        name = m.group(1).strip()
+        directory = m.group(2).strip().rstrip("/")
+        typ = m.group(3).strip().lower()
+        if name.lower() in ("sad component", "---", "name"):
+            continue
+        results.append((name, directory, typ))
+    return results
+
+
+def _validate_tmd(f: "Path") -> tuple[bool, str]:
+    """Check if a TMD YAML file is valid OTM. Returns (is_valid, reason)."""
+    try:
+        content = f.read_text(errors="replace")
+    except OSError:
+        return False, "file unreadable"
+    content_lines = content.splitlines()
+    json_line = next(
+        (ln.strip() for ln in content_lines
+         if ln.strip().startswith("{") and not ln.strip().startswith("#")), None
+    )
+    if json_line:
+        return False, f"JSON dump (starts with `{json_line[:30]}`)"
+    has_otm_key = any(
+        ln.strip().startswith("otmVersion:") and not ln.strip().startswith("#")
+        for ln in content_lines
+    )
+    if not has_otm_key:
+        return False, "missing `otmVersion:` as YAML key (only found in comment or absent)"
+    has_sections = any(
+        k in content for k in ("components:", "threats:", "dataFlows:", "trustZones:")
+    )
+    if not has_sections:
+        return False, "missing components/threats/dataFlows/trustZones sections"
+    return True, "valid"
+
+
 def _precheck_security(project_root: str) -> str:
     """Pre-validate TMD files and scan for hardcoded secrets in Python.
     Returns a context block injected into the security scan task."""
@@ -617,35 +670,39 @@ def _precheck_security(project_root: str) -> str:
     root = Path(project_root) if project_root else Path.cwd()
     lines: list[str] = ["## Pre-computed security facts (Python check — treat as authoritative)\n"]
 
-    # TMD validation
+    # TMD file validation
     tmd_dir = root / "designs" / "TMD"
+    tmd_results: dict[str, tuple[bool, str]] = {}
     if tmd_dir.exists():
         lines.append("### TMD file validation")
         for f in sorted(tmd_dir.glob("*.yaml")):
-            content = f.read_text(errors="replace")
-            content_lines = content.splitlines()
-            has_otm_key = any(
-                ln.strip().startswith("otmVersion:") and not ln.strip().startswith("#")
-                for ln in content_lines
-            )
-            has_sections = any(
-                k in content for k in ("components:", "threats:", "dataFlows:", "trustZones:")
-            )
-            json_dump_line = next(
-                (ln.strip() for ln in content_lines
-                 if ln.strip().startswith("{") and not ln.strip().startswith("#")), None
-            )
-            if json_dump_line:
-                reason = f"JSON dump (line starts with `{json_dump_line[:30]}`)"
-                lines.append(f"- designs/TMD/{f.name}: **INVALID** — {reason}")
-            elif not has_otm_key:
-                lines.append(f"- designs/TMD/{f.name}: **INVALID** — missing `otmVersion:` as YAML key (only found in comment)")
-            elif not has_sections:
-                lines.append(f"- designs/TMD/{f.name}: **INVALID** — missing components/threats/dataFlows/trustZones")
-            else:
-                lines.append(f"- designs/TMD/{f.name}: VALID")
+            valid, reason = _validate_tmd(f)
+            tmd_results[f.name] = (valid, reason)
+            status = "VALID" if valid else f"**INVALID** — {reason}"
+            lines.append(f"- designs/TMD/{f.name}: {status}")
     else:
         lines.append("### TMD file validation\n- designs/TMD/ does not exist — no threat models found")
+
+    # Component → TMD mapping for deployable services
+    components = _parse_arch_components(root)
+    deployable = [(name, d, t) for name, d, t in components if t == "deployable service"]
+    if deployable and tmd_dir.exists():
+        lines.append("\n### Component TMD coverage (deployable services only)")
+        for name, _dir, _typ in deployable:
+            # Normalise name to expected TMD filename: lowercase, spaces/special→hyphens
+            slug = _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+            match = next(
+                (fname for fname in tmd_results
+                 if slug in fname.lower() or fname.lower().replace(".yaml", "") in slug), None
+            )
+            if match:
+                valid, reason = tmd_results[match]
+                if valid:
+                    lines.append(f"- {name}: TMD VALID — designs/TMD/{match}")
+                else:
+                    lines.append(f"- {name}: TMD INVALID — designs/TMD/{match} ({reason})")
+            else:
+                lines.append(f"- {name}: NO TMD FILE FOUND — no matching file in designs/TMD/")
 
     # Hardcoded secrets scan
     lines.append("\n### Hardcoded secrets scan")
@@ -655,6 +712,7 @@ def _precheck_security(project_root: str) -> str:
     )
     scan_dirs = [root / "portal" / "backend", root / "healthcare-calculator", root / "attestation"]
     findings: list[str] = []
+    seen_findings: set[str] = set()
     for scan_dir in scan_dirs:
         if not scan_dir.exists():
             continue
@@ -666,8 +724,11 @@ def _precheck_security(project_root: str) -> str:
                     if secret_pat.search(line):
                         rel = src.relative_to(root)
                         severity = "LOW" if src.name.endswith("_test.go") else "HIGH"
-                        snippet = line.strip()[:80]
-                        findings.append(f"- {rel}:{i}: `{snippet}` [{severity}]")
+                        key = f"{rel}:{i}"
+                        if key not in seen_findings:
+                            seen_findings.add(key)
+                            snippet = line.strip()[:80]
+                            findings.append(f"- {rel}:{i}: `{snippet}` [{severity}]")
             except OSError:
                 pass
     if findings:
@@ -685,52 +746,38 @@ def _precheck_architecture(project_root: str) -> str:
     root = Path(project_root) if project_root else Path.cwd()
     lines: list[str] = ["## Pre-computed architecture facts (Python check — treat as authoritative)\n"]
 
-    # SAD component vs code directory check
+    # SAD vs structure.md comparison — use structure.md as ground truth, SAD as reference
     sad_file = root / "designs" / "SAD" / "SAD-3-Decomposition-View.md"
+    components = _parse_arch_components(root)
     lines.append("### SAD decomposition drift")
     if not sad_file.exists():
-        lines.append("- SAD-3-Decomposition-View.md not found — SAD drift check skipped")
+        lines.append("- designs/SAD/SAD-3-Decomposition-View.md not found — SAD drift check skipped")
+    elif not components:
+        lines.append("- structure.md has no ## Architectural components table — SAD drift check skipped")
     else:
         sad_text = sad_file.read_text(errors="replace")
-        # Extract table rows: | Component name | description |
-        row_pat = _re.compile(r"^\|\s*([^|]+?)\s*\|", _re.MULTILINE)
-        # Known external actors that have no code directory
-        external_actors = {"data owner", "data user", "data seller", "external"}
-        # Extract component names from the SAD (skip header/separator rows)
-        components_checked: set[str] = set()
-        for m in row_pat.finditer(sad_text):
-            name = m.group(1).strip()
-            if name.lower() in ("component", "element", "name", "---", ""):
+        sad_lower = sad_text.lower()
+        external_types = {"test suite", "infrastructure", "infrastructure + test fixtures", "external"}
+        for name, directory, typ in components:
+            if typ in external_types:
+                lines.append(f"- {name} ({typ}): not a deployable service — SAD entry not expected")
                 continue
-            if name.startswith("-") or name.startswith("|"):
-                continue
-            if name in components_checked:
-                continue
-            components_checked.add(name)
-            name_lower = name.lower()
-            if any(actor in name_lower for actor in external_actors):
-                lines.append(f"- {name}: EXTERNAL ACTOR (no code directory expected)")
-                continue
-            # Map common SAD names to directories
-            dir_hints = {
-                "portal": "portal",
-                "container": "attestation",
-                "instrumentation": "attestation",
-                "fhir": "fhir_proxy",
-                "healthcare": "healthcare-calculator",
-                "panome": "panome",
-                "s3 proxy": "s3-proxy",
-                "attestation": "attestation",
-            }
-            matched_dir = next(
-                (d for k, d in dir_hints.items() if k in name_lower), None
-            )
-            if matched_dir:
-                exists = (root / matched_dir).exists()
-                status = "EXISTS" if exists else "MISSING"
-                lines.append(f"- {name} → {matched_dir}/: {status}")
-            else:
-                lines.append(f"- {name}: directory mapping unknown")
+            code_exists = (root / directory).exists() if directory else False
+            name_in_sad = name.lower() in sad_lower or directory.lower().replace("-", " ") in sad_lower
+            if code_exists and name_in_sad:
+                lines.append(f"- {name} → {directory}/: EXISTS in code and in SAD")
+            elif code_exists and not name_in_sad:
+                lines.append(f"- {name} → {directory}/: EXISTS in code but NOT IN SAD (newer than SAD)")
+            elif not code_exists:
+                lines.append(f"- {name} → {directory}/: directory MISSING from code")
+
+        # SAD-referenced services not in structure.md (use known top-level service keywords)
+        top_level_sad = {"s3 proxy", "s3proxy"}
+        for keyword in top_level_sad:
+            if keyword in sad_lower:
+                found_in_structure = any(keyword in name.lower() or keyword in d.lower() for name, d, _ in components)
+                if not found_in_structure:
+                    lines.append(f"- '{keyword}' referenced in SAD but not in structure.md — may be missing from code")
 
     # ADR coverage check
     adr_dir = root / "designs" / "ADR"
@@ -739,7 +786,6 @@ def _precheck_architecture(project_root: str) -> str:
         lines.append("- designs/ADR/ not found — ADR coverage check skipped")
     else:
         adr_files = [f.name for f in adr_dir.iterdir() if f.suffix == ".md"]
-        adr_lower = " ".join(adr_files).lower()
         decisions = {
             "HTTP framework (Go)": ["go", "golang", "gin", "echo", "gorilla", "chi", "entrypoint"],
             "Auth mechanism": ["auth", "mtls", "jwt", "keycloak", "okta"],

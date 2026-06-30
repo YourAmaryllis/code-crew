@@ -19,18 +19,16 @@ for those steps. Report the pre-computed results directly.**
 
 **Step 1 — Report TMD validation results.**
 
-Your task context includes `## Pre-computed security facts (Python check — treat as authoritative)`
-with a `### TMD file validation` section. Read those results and output one line per file:
+Your context has `## Pre-computed security facts` with TWO subsections to use:
 
-- If the entry says VALID: `PASS [SEC]: TMD valid — <path>`
-- If the entry says INVALID: `FINDING [SEC]: TMD file invalid — <path> [HIGH] (reason: <reason from context>)`
+**From `### TMD file validation`** — output one line per file:
+- Entry says VALID: `PASS [SEC]: TMD valid — <path>`
+- Entry says INVALID: `FINDING [SEC]: TMD file invalid — <path> [HIGH] (reason: <reason from context>)`
 
-Then check the `## Architectural components` table in your context (from structure.md).
-Only rows where Type = `deployable service` require a TMD.
-Do NOT flag rows with Type = `test suite`, `infrastructure`, `external`, or `infrastructure + test fixtures`.
-
-For each deployable-service component with no TMD entry in the pre-computed facts:
-`FINDING [SEC]: No threat model found for component — <component-name> [MEDIUM]`
+**From `### Component TMD coverage (deployable services only)`** — output one line per component:
+- Entry says "TMD VALID": `PASS [SEC]: Threat model present and valid — <component name>`
+- Entry says "TMD INVALID": `FINDING [SEC]: Threat model invalid for component — <component name> [HIGH]`
+- Entry says "NO TMD FILE FOUND": `FINDING [SEC]: No threat model found for component — <component name> [MEDIUM]`
 
 If `designs/TMD/` does not exist: `FINDING [SEC]: No threat models found [HIGH]`
 

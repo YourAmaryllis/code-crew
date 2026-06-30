@@ -32,10 +32,11 @@ INFO [ARCH]: Component identified — <name> (<directory>)
 Your context includes `## Pre-computed architecture facts` → `### SAD decomposition drift`.
 For each entry:
 
-- `EXISTS`: `PASS [ARCH]: SAD component <name> present at <directory> — aligned with SAD`
-- `MISSING`: `FINDING [ARCH]: SAD component missing from code — <name> (directory not found)`
-- `EXTERNAL ACTOR`: `INFO [ARCH]: External actor in SAD — <name> (no code directory expected)`
-- `directory mapping unknown`: `INFO [ARCH]: SAD component directory unmapped — <name>`
+- `EXISTS in code and in SAD`: `PASS [ARCH]: SAD component <name> present at <directory> — aligned with SAD`
+- `EXISTS in code but NOT IN SAD`: `INFO [ARCH]: Component not in SAD — <name> (newer than SAD)`
+- `directory MISSING from code`: `FINDING [ARCH]: Code directory missing — <name> (<directory> not found)`
+- `not a deployable service`: `INFO [ARCH]: Non-deployable entry — <name> (type: <type>)`
+- `referenced in SAD but not in structure.md`: `FINDING [ARCH]: SAD references <keyword> not found in code`
 - "SAD drift check skipped": `INFO [ARCH]: No SAD found — SAD drift check skipped`
 
 ---
