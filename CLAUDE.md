@@ -15,6 +15,8 @@ ops/            # Ops crew: infrastructure, release, monitoring
   knowledge/    #   OKF agent + task definitions
 shared/         # Shared OKF loader, Bedrock LLM factory, CrewAI tools
 scripts/        # Utility scripts (OKF conversion, etc.)
+docs/
+  decisions/    #   Architecture decision records for code-crew itself (not for agents)
 ```
 
 ## Key principles
@@ -23,6 +25,30 @@ scripts/        # Utility scripts (OKF conversion, etc.)
 - **designs/ in your platform repo** — add as a git submodule so design doc changes appear in your PR diff
 - **IAM auth only** — Bedrock uses instance profile / AWS_PROFILE, never hardcoded keys
 - **Human review gate** — crew output is for human review; agents never push to main, apply Terraform, or promote to production autonomously
+
+## Knowledge files — no project-specific content
+
+**This rule is mandatory and has caused repeated bugs. Read it before editing any file under `*/knowledge/`.**
+
+Knowledge files (`*/knowledge/agents/*.md`, `*/knowledge/tasks/*.md`, `*/knowledge/prompts/*.md`) are generic — they ship with the tool and apply to any user's project. They must never contain:
+
+- **Company or product names** — no "LooporaData", "Panome", "portal", "attestation", "fhir_proxy", or any other project-specific service name
+- **Hardcoded file paths** — no `designs/SAD/SAD-3-Decomposition-View.md`, `portal/backend/internal/api/`, or any path that only exists in one project
+- **Hardcoded directory structures** — no example tables listing specific services; use `<service>`, `<dir>`, `<component>` placeholders
+- **Project-specific compliance assumptions** — no "HIPAA confirmed in `designs/SOP/...`"
+
+**When referring to design documents:** say "the system architecture doc (SAD)" or "the ADD docs" — never a specific path like `designs/SAD/` or `designs/ADD/`. The agent reads the filesystem and finds the actual files.
+
+**When referring to infrastructure:** say "the infrastructure directory (Terraform, CDK, etc.)" — never `ops/` or any project-specific directory name.
+
+**When referring to source files by name:** use stack-agnostic descriptions, not language-specific filenames:
+- Wrong: "`go.mod`", "`main.go`", "`cmd/server/main.go`", "`index.ts`"
+- Right: "the dependency manifest", "the service entry point"
+- If you need a language example, list multiple: "`go.mod` / `package.json` / `requirements.txt`"
+
+**Examples in task templates** must use generic placeholders: `<service>/internal/api/<handler>`, not `portal/backend/internal/api/register_validation.go`.
+
+**The LooporaData platform repo (`fhir_proxy`, `portal`, `designs/`, `ops/`) is a test project — nothing from it belongs in knowledge files.** If you find yourself typing any of those names, stop and generalise.
 
 ## Quick start
 
@@ -115,10 +141,12 @@ sprint_planning_check → architecture_review → scaffold_code → scaffold_tes
   (each gate failure retries implementation + devops_coordination)
 → release_notes
 → [staging loop] promote_staging → staging_verification
-  (retries on smoke failure; escalates to human after max_retries)
+  (agents use async_job tool: type=gh_actions for workflows, type=ecs for direct updates,
+   type=shell for BDD suites — returns RUN_HANDLE: line, flow suspends)
+  (REPL polls via /loop or /resume; resumes when job completes)
 → launch_decision   (Release Engineer go/no-go; LAUNCH BLOCKED retries or escalates)
 → [human gate: workflow_dispatch / GitLab manual job → production]
-→ smoke_test
+→ smoke_test   (same async_job pattern)
 ```
 
 ## Execution model: manager-worker
@@ -136,7 +164,10 @@ To move a task between modes, edit the `MANAGED_TASKS` frozenset in `crew.py`.
 
 ## Design decisions
 
-- `knowledge/decisions/CREW-001-fullstack-engineer.md` — SDLC role alignment + full-stack engineer rationale
+Decision docs live in `docs/decisions/` — these are about code-crew itself, not knowledge for agents.
+
+- `docs/decisions/CREW-001-fullstack-engineer.md` — SDLC role alignment + full-stack engineer rationale
+- `docs/decisions/CREW-002-async-flow-loop.md` — async wait points for deploy and BDD phases (`/loop` pattern)
 
 ## Git push
 

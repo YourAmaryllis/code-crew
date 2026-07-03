@@ -488,7 +488,12 @@ class TicketFlow:
     # ------------------------------------------------------------------
 
     def run(self) -> TicketState:
-        """Execute the full flow. Blocks until done, failed, or human gives up."""
+        """Execute the full flow. Blocks until done, failed, or human gives up.
+
+        Raises StagingHandedOff when a CI task returns a run handle asynchronously
+        instead of completing inline. The caller (REPL) catches this, saves flow
+        state, and polls via /loop or /resume.
+        """
         try:
             self._linear_phase()
             self._bdd_cycle()
@@ -496,12 +501,18 @@ class TicketFlow:
             self._run_task("release_notes")
             self._staging_loop()
             self._production_gate()
-            self._run_task("smoke_test")
+            smoke_out = self._run_task("smoke_test")
+            handle = _extract_run_handle(smoke_out)
+            if handle:
+                raise StagingHandedOff(phase="smoke_test", run_handle=handle)
             self.state.status = "passed"
             _delete_checkpoint(self.state.jira_key)
         except _FlowFailed as exc:
             self.state.status = "failed"
             self.state.current_task = f"FAILED: {exc}"
+        except StagingHandedOff:
+            self.state.status = "suspended"
+            raise  # propagate to REPL
         self._emit()
         return self.state
 
@@ -667,10 +678,21 @@ class TicketFlow:
         """
         Promote to staging → run BDD smoke → loop if smoke fails.
         Escalates to human after max_retries, then re-promotes.
+
+        If either task returns a RUN_HANDLE: line the CI job was kicked off
+        asynchronously — raise StagingHandedOff so the REPL can suspend and
+        poll rather than blocking here.
         """
         while True:
-            self._run_task("promote_staging")
+            promote_out = self._run_task("promote_staging")
+            handle = _extract_run_handle(promote_out)
+            if handle:
+                raise StagingHandedOff(phase="promote_staging", run_handle=handle)
+
             verif_out = self._run_task("staging_verification")
+            handle = _extract_run_handle(verif_out)
+            if handle:
+                raise StagingHandedOff(phase="staging_verification", run_handle=handle)
 
             upper = verif_out.upper()
             if "STAGING VERIFIED" in upper:
@@ -1012,6 +1034,19 @@ class _FlowFailed(Exception):
     pass
 
 
+class StagingHandedOff(Exception):
+    """Raised when a CI task returns a run handle instead of completing inline.
+
+    The REPL catches this, serialises the handle to .code-crew/flow-state.json, and
+    schedules periodic polls via /loop or /resume. On poll success the flow resumes
+    from its checkpoint with the CI result injected as a synthetic task output.
+    """
+    def __init__(self, phase: str, run_handle: dict) -> None:
+        self.phase = phase
+        self.run_handle = run_handle
+        super().__init__(f"flow suspended at {phase!r} — run handle returned")
+
+
 def _is_impl_done(output: str) -> bool:
     """Return True only if the agent explicitly confirmed IMPLEMENTATION COMPLETE."""
     if not output or output.startswith("INCOMPLETE:") or output.startswith("SKIPPED:"):
@@ -1108,6 +1143,18 @@ def _extract_summary(output: str, max_lines: int = 8, max_len: int = 120) -> str
 # ---------------------------------------------------------------------------
 # Checkpoint helpers
 # ---------------------------------------------------------------------------
+
+def _extract_run_handle(output: str) -> dict | None:
+    """Parse a RUN_HANDLE: {…} line from task output. Returns the dict or None."""
+    import re
+    m = re.search(r"RUN_HANDLE:\s*(\{[^\n]+\})", output)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(1))
+    except Exception:
+        return None
+
 
 def _checkpoint_path(jira_key: str) -> Path:
     return Path.cwd() / ".code-crew" / "checkpoints" / f"{jira_key}.json"

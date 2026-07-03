@@ -18,7 +18,9 @@ code-crew issue PROJ-123      # direct
 | Command | What it does |
 |---------|-------------|
 | `init` / `/init` | Scaffold `.code-crew/config.yaml` and auto-detect project settings |
-| `explore [path]` / `/explore [path]` | Scan project, detect stacks + build/test/lint commands, generate OTM threat model skeleton |
+| `explore [path]` / `/explore [path]` | Scan project, detect stacks + build/test/lint commands, identify OTM project scopes, build semantic code index |
+| `/index [path]` | Build or rebuild the semantic code search index (auto-run by `/explore`; rebuild after large refactors) |
+| `threat [project-id]` / `/threat [project-id]` | Generate or refresh OTM threat models (all scopes, or one by id) + Threat Dragon JSON |
 | `issue <KEY>` / `/issue <KEY>` | **Implementation**: full SDLC crew from sprint planning → DoD → staging |
 | `sprint <name>` / `/sprint <name>` | Run all tickets in a sprint (parallel where safe) |
 | `design <KEY>` / `/design <KEY>` | **Pre-implementation**: architect + security + compliance → creates ADD/ADR in designs/ |
@@ -32,6 +34,9 @@ code-crew issue PROJ-123      # direct
 | `/skill install <url\|user/repo>` | Install skill(s) from a GitHub repo or raw URL |
 | `/skill <name>` | Activate a skill (`terse`, `strict`, `explain`, `dry-run`) |
 | `/skill off [name]` | Deactivate one or all skills |
+| `/loop` | Poll a suspended async job (deploy, BDD suite, ECS update…); resumes the flow on success |
+| `/resume` | Same as `/loop` — manual trigger for a suspended flow |
+| `/resume abort` | Clear suspended flow state (e.g. after a failed deploy) |
 | `/status` | Show active runs |
 | `/profile <name>` | Switch config profile live |
 | `/session [new\|use\|list]` | Manage conversation sessions — history persists across restarts, resume any past session |

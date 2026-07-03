@@ -21,8 +21,10 @@ from shared.bedrock import get_llm_for_tier
 from shared.okf_loader import load_bundle_agents, load_bundle_tasks
 from shared.tools import (
     ApiSpecTool,
+    AsyncJobTool,
     AskHumanTool,
     BDDTestRunnerTool,
+    CodeIndexTool,
     DoDCheckerTool,
     FigmaReaderTool,
     JiraSprintListTool,
@@ -78,7 +80,9 @@ def _make_tools(code_path: str = "", relay=None, jira_key: str = "") -> dict:
     return {
         "knowledge_reader": KnowledgeReaderTool(),
         "workspace_reader": WorkspaceReaderTool(),
+        "code_index": CodeIndexTool(),
         "api_spec": ApiSpecTool(),
+        "async_job": AsyncJobTool(),
         "dod_checker": DoDCheckerTool(),
         "figma_reader": FigmaReaderTool(),
         "jira_view": JiraViewTool(),
@@ -98,7 +102,9 @@ def build_agents(tools: dict) -> dict:
 
     kr = tools["knowledge_reader"]
     ws = tools["workspace_reader"]
+    ci = tools["code_index"]
     ap = tools["api_spec"]
+    cs = tools["async_job"]
     jv = tools["jira_view"]
     sh = tools["platform_shell"]
     pr = tools["python_repl"]
@@ -123,13 +129,13 @@ def build_agents(tools: dict) -> dict:
 
     return {
         "scrum_master":      _agent("scrum_master",      [kr, dc, jv, mm]),
-        "architect":         _agent("architect",         [kr, ws, jv, sh, ah]),
-        "engineer":          _agent("engineer",          [kr, ws, ap, jv, sh, pr, ah], max_iter=25),
-        "qa_lead":           _agent("qa_lead",           [kr, ws, jv, sh, br, pr, ah]),
+        "architect":         _agent("architect",         [kr, ws, ci, jv, sh, ah]),
+        "engineer":          _agent("engineer",          [kr, ws, ci, ap, jv, sh, pr, ah], max_iter=25),
+        "qa_lead":           _agent("qa_lead",           [kr, ws, jv, sh, br, pr, ah, cs]),
         "security_lead":      _agent("security_lead",      [kr, ws, sh, pr], max_iter=25),
         "compliance_officer": _agent("compliance_officer", [kr, ws, jv], max_iter=20),
         "product_owner":     _agent("product_owner",     [kr, jv]),
-        "devops_lead":       _agent("devops_lead",       [kr, ws, jv, sh, pr]),
+        "devops_lead":       _agent("devops_lead",       [kr, ws, jv, sh, pr, cs]),
         "release_engineer":  _agent("release_engineer",  [kr, ws, jv, sh]),
         "ux_lead":           _agent("ux_lead",           [fr, kr, ws, ah]),
     }
@@ -154,6 +160,29 @@ def _make_guardrail(signal: str, extra: str = ""):
         if extra:
             msg += f" {extra}"
         return False, msg
+    return guardrail
+
+
+def _make_ci_guardrail(success_signal: str, fail_signal: str = ""):
+    """Guardrail for CI tasks: accepts success_signal, fail_signal, or RUN_HANDLE: (async path)."""
+    def guardrail(output) -> tuple[bool, str]:
+        text = output.raw if hasattr(output, "raw") else str(output)
+        if success_signal in text:
+            return True, ""
+        if fail_signal and fail_signal in text:
+            return True, ""
+        if "RUN_HANDLE:" in text:
+            return True, ""
+        if "INCOMPLETE:" in text:
+            return False, (
+                f"Worker reported INCOMPLETE. Send them back to resolve the blocker. "
+                f"Required: '{success_signal}', '{fail_signal}', or a RUN_HANDLE: JSON line."
+            )
+        return False, (
+            f"Output missing the required completion signal. Expected '{success_signal}', "
+            f"'{fail_signal}', or a RUN_HANDLE: {{...}} line (async CI path). "
+            "Send the worker back to complete the work or trigger the CI run and emit RUN_HANDLE."
+        )
     return guardrail
 
 
@@ -208,8 +237,8 @@ def build_tasks(agents: dict, sprint_input: dict, tasks_dir: Path | None = None)
     _devops_complete = _make_guardrail("DEVOPS COMPLETE", extra="'NO CHANGES NEEDED' is also accepted.")
     _bdd_approved    = _make_guardrail("BDD APPROVED")
     _release_done    = _make_guardrail("RELEASE NOTE COMPLETE")
-    _staging_done    = _make_guardrail("STAGING VERIFIED",  extra="'STAGING FAILED' is also accepted — it means the check ran.")
-    _smoke_done      = _make_guardrail("SMOKE PASSED",      extra="'SMOKE FAILED' is also accepted — it means the check ran.")
+    _staging_done    = _make_ci_guardrail("STAGING VERIFIED",  fail_signal="STAGING FAILED")
+    _smoke_done      = _make_ci_guardrail("SMOKE PASSED",      fail_signal="SMOKE FAILED")
 
     sprint_planning  = task("sprint_planning_check", "scrum_master")
     arch_review      = task("architecture_review",   "architect",      [sprint_planning])
@@ -273,7 +302,7 @@ MANAGED_TASKS = frozenset({
     "staging_verification",
     "smoke_test",
 })
-_STANDARD_MANAGER_TASKS = frozenset({"implementation"})
+_STANDARD_MANAGER_TASKS = frozenset({"implementation", "threat_gate"})
 
 
 def _build_manager_agent(task_name: str) -> Agent:
@@ -1086,20 +1115,81 @@ def build_otm_scope_task(inventory: dict) -> Crew:
         )
 
 
-def build_otm_build_task(project: dict, inventory: dict) -> Crew:
-    """Return a hierarchical Crew that generates a complete OTM YAML for one project scope.
+_MAX_PRE_READ_BYTES = 3_000   # cap per file to keep context manageable
+_MAX_PRE_READ_FILES = 4       # max files to pre-inject per project
+_MAX_TERRAFORM_LINES = 60     # lines of terraform grep output to inject
 
-    Uses a fast manager LLM to guide the Architect agent section-by-section,
-    directing it to read key source files via workspace_reader before each section.
+
+def _pre_read(path: str, root: "Path | None" = None) -> str:
+    """Read a file relative to root (or cwd), capped at _MAX_PRE_READ_BYTES."""
+    import pathlib
+    base = root or pathlib.Path.cwd()
+    try:
+        full = (base / path).resolve()
+        content = full.read_text(encoding="utf-8", errors="replace")
+        if len(content) > _MAX_PRE_READ_BYTES:
+            content = content[:_MAX_PRE_READ_BYTES] + "\n... (truncated)"
+        return content
+    except Exception:
+        return ""
+
+
+def _terraform_grep(component_dirs: list[str], root: "Path | None" = None) -> str:
+    """Grep ops/ Terraform for any reference to the component directories.
+
+    Returns a compact summary so agents don't burn API calls searching Terraform.
     """
-    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
-    agents = build_agents(_make_tools())
+    import subprocess, pathlib, re
+    base = root or pathlib.Path.cwd()
+    ops_dir = base / "ops"
+    if not ops_dir.exists():
+        return ""
 
+    # Build patterns from component directory names (handles fhir_proxy → fhir/proxy, fhir-proxy)
+    patterns = []
+    for d in component_dirs:
+        patterns += [d, d.replace("_", "-"), d.replace("_", "/")]
+    pattern = "|".join(set(patterns))
+
+    try:
+        result = subprocess.run(
+            ["grep", "-rn", "--include=*.tf", "-E", pattern, str(ops_dir)],
+            capture_output=True, text=True, timeout=10,
+        )
+        lines = result.stdout.splitlines()
+        # Deduplicate and trim noise (long data lines, etc.)
+        seen, out = set(), []
+        for line in lines:
+            key = re.sub(r'^\S+:\d+:', '', line).strip()
+            if key and key not in seen and len(key) < 200:
+                seen.add(key)
+                out.append(line)
+        return "\n".join(out[:_MAX_TERRAFORM_LINES])
+    except Exception:
+        return ""
+
+
+def _build_threat_context(project: dict, inventory: dict, revision_feedback: str = "") -> str:
+    """Build the shared context string injected into threat crew tasks.
+
+    Pre-reads key files and runs a Terraform grep so agents spend tool calls on
+    analysis, not rediscovering the same facts over and over.
+    """
+    import pathlib
     stacks = inventory.get("stacks", [])
     structure = _load_project_structure()
+    root = pathlib.Path.cwd()
 
     ctx_lines = [
-        f"## OTM project scope\n\n"
+        # This banner is FIRST so the agent reads it before any investigation.
+        "## !! READ THIS BEFORE TAKING ANY ACTION !!\n\n"
+        "This context block already contains pre-scanned file contents and Terraform grep output.\n"
+        "**Do NOT call workspace_reader or platform_shell to read or search for anything listed below.**\n"
+        "Doing so wastes an iteration and risks hitting max_iter before the OTM is produced.\n"
+        "Scroll to the 'Pre-scanned files' and 'Terraform deployment references' sections now.\n"
+        "Only read files that are NOT already present in this context.",
+
+        f"## Project scope\n\n"
         f"**Project id**: {project['id']}\n"
         f"**Project name**: {project['name']}\n"
         f"**Description**: {project['description']}\n\n"
@@ -1109,39 +1199,193 @@ def build_otm_build_task(project: dict, inventory: dict) -> Crew:
 
     if inventory.get("infra_modules"):
         ctx_lines.append(
-            "**Infrastructure modules (Terraform ops/modules/)**: "
+            "**Infrastructure modules**: "
             + ", ".join(inventory["infra_modules"])
         )
 
-    if inventory.get("key_files"):
-        by_type: dict[str, list[str]] = {}
-        for f in inventory["key_files"]:
-            kind = f.get("type", "other")
-            by_type.setdefault(kind, []).append(f["path"])
-        lines = ["## Key files to read (use workspace_reader on each before the relevant section)\n"]
-        for kind, paths in by_type.items():
-            lines.append(f"**{kind}**:\n" + "\n".join(f"- {p}" for p in paths))
-        ctx_lines.append("\n".join(lines))
+    # ── Pre-read key files and inject content ────────────────────────────────
+    # Filter to files belonging to THIS project's component directories, then
+    # pre-read and inject so agents don't burn tool calls re-reading them.
+    # Prefer dependency-manifests first; cap at _MAX_PRE_READ_FILES total.
+    component_prefixes = tuple(c + "/" for c in project.get("components", []))
+    pre_read_sections: list[str] = []
+    key_files = inventory.get("key_files", [])
+    # Sort: dependency-manifest before entry-point; skip terraform-module files
+    # (Terraform info is already covered by the grep section below).
+    _type_order = {"dependency-manifest": 0, "entry-point": 1}
+    sorted_kfs = sorted(
+        [kf for kf in key_files if kf.get("type") in _type_order],
+        key=lambda k: _type_order[k.get("type", "entry-point")]
+    )
+    for kf in sorted_kfs:
+        if len(pre_read_sections) >= _MAX_PRE_READ_FILES:
+            break
+        path = kf.get("path", "")
+        ftype = kf.get("type", "")
+        # Skip files that belong to other projects (filter by component directory)
+        if component_prefixes and not path.startswith(component_prefixes):
+            continue
+        content = _pre_read(path, root)
+        if content:
+            pre_read_sections.append(f"### `{path}` ({ftype})\n```\n{content}\n```")
+        # skip files that can't be read — not worth an empty stub entry
+
+    if pre_read_sections:
+        ctx_lines.append(
+            "## Pre-scanned files (do NOT re-read these with workspace_reader)\n\n"
+            + "\n\n".join(pre_read_sections)
+        )
+
+    # ── Terraform deployment references ──────────────────────────────────────
+    # Use grep output stored by /explore if available; fall back to running grep now.
+    # Either way the agent gets the raw lines — no fragile parsing needed.
+    stored_grep = project.get("terraform_grep")  # set by _enrich_project_terraform
+    tf_grep = stored_grep if stored_grep is not None else _terraform_grep(project["components"], root)
+
+    if tf_grep:
+        ctx_lines.append(
+            "## Terraform deployment references (pre-scanned — do NOT re-grep ops/)\n\n"
+            "Every Terraform line mentioning this service's components. "
+            "Read these to determine the Terraform key, CPU/memory, ALB path, and env vars.\n\n"
+            f"```\n{tf_grep}\n```"
+        )
+    else:
+        ctx_lines.append(
+            "## Terraform deployment references\n\n"
+            "No explicit Terraform resource found for this service. "
+            "Default deployment: **AWS ECS Fargate** (inferred from `ecs-deployment` stack). "
+            "Do not search ops/ for this service."
+        )
 
     if structure:
         ctx_lines.append(f"## Project structure\n\n{structure}")
 
-    ctx = "\n\n".join(ctx_lines)
+    if revision_feedback:
+        ctx_lines.append(
+            f"## Manager revision feedback (address ALL items before producing the OTM)\n\n"
+            f"{revision_feedback}"
+        )
 
+    return "\n\n".join(ctx_lines)
+
+
+def build_threat_model_crew(project: dict, inventory: dict, revision_feedback: str = "") -> Crew:
+    """Hierarchical crew: Security Lead (manager_agent) drives Architect (worker) to produce OTM.
+
+    Security Lead asks architectural questions; Architect reads source files and reports.
+    Together they work through the four OWASP TMP phases and produce a complete OTM YAML.
+    """
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    ac = load_bundle_agents(_KNOWLEDGE / "agents")
+    tools = _make_tools()
+    agents = build_agents(tools)
+
+    ctx = _build_threat_context(project, inventory, revision_feedback)
+
+    # Worker: Architect reads the codebase and answers Security Lead's questions
     architect = agents["architect"]
-    architect.max_iter = 30  # 7 sections × ~4 tool calls each; more than default 15
+    architect.max_iter = 35  # threat crew needs more iterations: trust zone phase + 4 OWASP phases + OTM production
 
-    t = Task(
-        name="explore_otm_build",
-        description=f"{ctx}\n\n{tc['explore_otm_build'].description}",
-        expected_output=tc["explore_otm_build"].expected_output,
+    worker_task = Task(
+        name="threat_build",
+        description=f"{ctx}\n\n{tc['threat_build'].description}",
+        expected_output=tc["threat_build"].expected_output,
         agent=architect,
+        # No guardrail: the manager (Security Lead) decides when the work is done.
+        # The revision loop in _run_threat handles missing/incomplete OTM output.
     )
+
+    # Manager agent: Security Lead — drives the conversation through TM phases
+    security_lead_def = ac["security_lead"]
+    security_lead_manager = Agent(
+        role=security_lead_def.role,
+        goal=security_lead_def.goal,
+        backstory=(
+            security_lead_def.backstory
+            + "\n\n---\n\n"
+            + tc["threat_model"].description
+        ),
+        llm=get_llm_for_tier("powerful"),
+        verbose=True,
+    )
+
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
         return Crew(
             agents=[architect],
-            tasks=[t],
+            tasks=[worker_task],
+            manager_agent=security_lead_manager,
+            process=Process.hierarchical,
+            verbose=True,
+        )
+
+
+def build_threat_patch_crew(project: dict, otm_text: str, revision_feedback: str) -> Crew:
+    """Sequential crew: Architect patches specific gaps in an existing OTM YAML.
+
+    Used for revisions — lighter than the full hierarchical re-run. The Architect
+    only reads the files needed to fill the specific gaps the manager identified.
+    """
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    agents = build_agents(_make_tools())
+
+    ctx = (
+        f"## Project\n\n"
+        f"**Project id**: {project['id']}\n"
+        f"**Project name**: {project['name']}\n\n"
+        f"## Manager revision feedback (fix ALL of these)\n\n"
+        f"{revision_feedback}\n\n"
+        f"## Existing OTM YAML to patch\n\n"
+        f"```yaml\n{otm_text}\n```"
+    )
+
+    architect = agents["architect"]
+    architect.max_iter = 20
+
+    patch_task = Task(
+        name="threat_patch",
+        description=f"{ctx}\n\n{tc['threat_patch'].description}",
+        expected_output=tc["threat_patch"].expected_output,
+        agent=architect,
+    )
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        return Crew(
+            agents=[architect],
+            tasks=[patch_task],
+            process=Process.sequential,
+            verbose=True,
+        )
+
+
+def build_threat_gate_crew(project: dict, otm_text: str, stacks: list[str]) -> Crew:
+    """Sequential crew: Manager reviews the OTM and either approves or lists gaps."""
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    agents = build_agents(_make_tools())
+
+    compliance = os.environ.get("CODE_CREW_COMPLIANCE", "")
+    gate_ctx = (
+        f"**Project**: {project['name']} ({project['id']})\n"
+        f"**Active stacks**: {', '.join(stacks)}\n"
+        f"**Compliance**: {compliance or 'not specified'}\n\n"
+        f"## OTM produced by Security Lead + Architect\n\n"
+        f"```yaml\n{otm_text}\n```"
+    )
+
+    manager_agent = _build_manager_agent("threat_gate")
+    gate_task = Task(
+        name="threat_gate",
+        description=f"{gate_ctx}\n\n{tc['threat_gate'].description}",
+        expected_output=tc["threat_gate"].expected_output,
+        agent=manager_agent,
+    )
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        return Crew(
+            agents=[manager_agent],
+            tasks=[gate_task],
             process=Process.sequential,
             verbose=True,
         )

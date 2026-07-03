@@ -1,4 +1,10 @@
-# code-crew Roadmap
+# PLAN-001: code-crew Roadmap
+
+**Status:** Active
+**Date:** 2026-06-26 (updated 2026-07-03)
+**Related:**
+- [SAD-001: code-crew system architecture](../sad/SAD-001-code-crew.md)
+- [ADD-001: Virtual AI Development Team](../add/ADD-001-Virtual-AI-Development-Team.md)
 
 Current date: 2026-06-26. Items marked ✅ are done. Items without a mark are pending.
 
@@ -291,7 +297,7 @@ verify_arch_scan → verify_security_scan → verify_compliance_scan
 ### Two modes
 
 **Mode A — `/domain design <KEY>`**
-Given a Jira/Linear ticket (or free-text requirement), agents collaboratively build a domain model and write it to `designs/DMD/<service>.md` + a Mermaid diagram.
+Given an issue tracker ticket (or free-text requirement), agents collaboratively build a domain model and write it to `designs/DMD/<service>.md` + a Mermaid diagram.
 
 **Mode B — `/domain extract [path]`**
 Engineer scans existing source code (models, DB schema, migration files) and reverse-engineers a domain model. Output goes to the same `designs/DMD/` location. Useful for legacy codebases with no existing documentation.
@@ -315,7 +321,7 @@ Methodology = OKF `.md` file in `knowledge/functions/domain-methodologies/`. New
 Event storming runs as a Python-level multi-phase loop (same pattern as DesignFlow):
 
 **Phase 1 — Flow Discovery**
-`domain_flow_discovery` task: Architect + Product Owner identify distinct business flows / subdomains (e.g. "User Registration", "Order Fulfilment", "Payment"). Agent batches 3–5 SME questions per HumanRelay call. Output: ordered list of named flows.
+`domain_flow_discovery` task: Architect + Product Owner identify distinct business flows / subdomains. Agent batches 3–5 SME questions per HumanRelay call. Output: ordered list of named flows.
 
 **Phase 2 — Per-flow event storming (loop)**
 For each flow identified in Phase 1, run `domain_event_storming` task:

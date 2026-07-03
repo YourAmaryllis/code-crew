@@ -1,6 +1,11 @@
-# Decision: openclaude — Not Adopted
+# EVAL-002: openclaude — Evaluation
 
+**Status:** Not adopted
 **Date:** 2026-06-19
+**Related:**
+- [EVAL-001: code-crew vs gstack](EVAL-001-gstack.md)
+- [SAD-001: code-crew system architecture](../sad/SAD-001-code-crew.md)
+
 **Decision:** Not adopted. No further evaluation planned unless scope changes materially.
 
 ---
@@ -27,7 +32,7 @@ The code-crew REPL (`code_crew/repl.py`) handles the terminal UI: profile loadin
 
 **The existing REPL does what we need.** `code_crew/repl.py` with prompt_toolkit handles slash commands, streaming output, profile selection, and ANSI rendering. The specific problems it has had (cursor flicker, verbose CrewAI output, ContextVar propagation) were all resolved without replacing the framework. There is no remaining UX gap that openclaude fills.
 
-**Different target user.** openclaude is designed for developers who want to use multiple AI providers from one CLI — it solves provider lock-in. code-crew is Bedrock-only by design (IAM auth, consolidated billing, Bedrock Guardrails, no API key sprawl). The provider-agnostic positioning of openclaude is not a feature we want.
+**Different target user.** openclaude is designed for developers who want to use multiple AI providers from one CLI — it solves provider lock-in. code-crew is Bedrock-first by design (IAM auth, consolidated billing, Bedrock Guardrails, no API key sprawl). The provider-agnostic positioning of openclaude is not a feature we want.
 
 ---
 
@@ -36,10 +41,3 @@ The code-crew REPL (`code_crew/repl.py`) handles the terminal UI: profile loadin
 If code-crew ever needs to support multiple LLM providers simultaneously (e.g. routing some agents to OpenAI, others to Bedrock), openclaude's provider abstraction layer becomes relevant — but that's a CrewAI `LLM` configuration problem, not a REPL problem.
 
 If the requirements-crew or post-launch-crew needs a conversational interface that is closer to a general-purpose AI assistant than a pipeline runner, openclaude's chat-first design might be a better fit than extending the current REPL. At that point, a fresh evaluation is warranted.
-
----
-
-## Related
-
-- [code-crew design doc](code-crew.md)
-- [comparison-gstack](comparison-gstack.md) — gstack also integrates with openclaude via ACP; relevant if gstack adoption is reconsidered

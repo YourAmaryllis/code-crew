@@ -42,8 +42,15 @@ From the engineer's output, find "New infrastructure requirements". Extract ever
 
 If the engineer stated "No new infrastructure requirements" — skip Steps 3–4 and go to Step 5.
 
-**Step 3 — Check existing infrastructure** (`workspace_reader`).
-Read the relevant infrastructure files (Terraform modules, CDK stacks, Helm values, etc.) before making changes. Verify what already exists to avoid duplicates.
+**Step 3 — Identify new env vars / secrets in the changed code.**
+Before reading infrastructure files, use `search_ast` to enumerate exactly what the code now requires:
+- Go: `search_ast pattern="os.Getenv($KEY)" language="go" path="<service>"` — lists every env var read
+- TypeScript: `search_ast pattern="process.env[$KEY]" language="typescript"` or `search_ast pattern="process.env.$KEY" language="typescript"`
+
+Cross-reference this list against the FILES CHANGED block to identify which env vars are new in this PR.
+
+**Step 3b — Check existing infrastructure** (`workspace_reader`).
+Use `code_index search "terraform env var secret <var_name>"` to find if a variable is already declared before reading Terraform files. Read the relevant infrastructure files (Terraform modules, CDK stacks, Helm values, etc.) only for variables confirmed to be new. Verify what already exists to avoid duplicates.
 
 **Step 4 — Apply infrastructure changes.**
 Use whichever infra tool is configured (from Step 1) to apply the changes to the dev environment:
@@ -64,7 +71,8 @@ Use the deployment tool configured for this project (from Step 1):
 - **Vercel**: `vercel deploy --env dev`
 - **Custom script**: run the project's deploy script with the dev target
 
-When using a CI pipeline: you do not need to wait for it to complete here. Note the branch pushed and that the pipeline is now running.
+When using a CI pipeline: push the branch and stop — do NOT use `async_job` to trigger or wait here.
+`async_job` is for staging/production promotion only. Dev CI runs automatically from the push.
 
 **Step 6 — Report.**
 

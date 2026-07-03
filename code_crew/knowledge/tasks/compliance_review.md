@@ -66,6 +66,13 @@ If a CRD applies to this feature:
 
 **Step 5 — Audit evidence check**
 
+Use `code_index` to verify compliance controls are present in code before flagging gaps:
+- PHI/PII handling: `code_index search "PHI audit log access security event"` — confirms logging exists
+- Data retention / right-to-erasure: `code_index search "delete purge retention expiry TTL user data"`
+- Encryption at rest: `code_index search "KMS encryption key data at rest"`
+- Access control: `code_index search "role permission authorization check ownership"`
+
+Then verify non-code evidence:
 - Jira ACs trace to compliance requirements (or flag gap)
 - CI artefacts include test results and dependency scan for this PR
 - If CFR Part 11 active: change control record exists for this change

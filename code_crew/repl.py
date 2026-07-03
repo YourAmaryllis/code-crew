@@ -13,7 +13,9 @@ Slash commands:
   /retry                        — force retry the stuck flow
   /abort [KEY]                  — abort a run
   /audit                        — full codebase audit: arch + security + compliance → report + optional issue creation
-  /explore [path]               — scan platform dir tree, save as agent context
+  /explore [path]               — scan platform dir tree, identify OTM projects, save as agent context
+  /index [path]                 — build or rebuild the semantic code search index (auto-run by /explore)
+  /threat [project-id]          — generate or refresh OTM threat models (all projects, or one by id)
   /mcp list|connect|disconnect|status  — manage MCP server connections
   /skills                       — list available/active skills
   /skill install <url|user/repo> — install skill(s) from GitHub repo or raw URL
@@ -24,6 +26,9 @@ Slash commands:
   /session new [name]           — start a new session (default name: <project>-<date>)
   /session use <name>           — resume an existing session
   /session list                 — list all sessions for this project
+  /loop                         — poll suspended CI run; resume flow on success
+  /resume                       — same as /loop (manual trigger)
+  /resume abort                 — clear suspended flow state
   /fix                          — install all missing tools
   /history                      — show past runs this session
   /context [KEY]                — show agent Q&A log; export to .code-crew/decisions/
@@ -283,9 +288,12 @@ def _quieten_crewai_verbosity() -> None:
         def handle_tool_usage_started(
             self, tool_name: str, tool_args="", run_attempts=None
         ) -> None:
+            from datetime import datetime as _dt
             label = _tool_label(tool_name, tool_args)
             if label:
-                self.console.print(label)
+                ts = _dt.now().strftime("%H:%M:%S")
+                # Inject timestamp inside the leading [dim] tag so it renders at the same dim level
+                self.console.print(label.replace("[dim]", f"[dim]{ts}  ", 1))
             from shared.log import SessionLogger as _SL
             _SL.get().log_tool_call(tool_name, tool_args)
 
@@ -311,12 +319,14 @@ def _quieten_crewai_verbosity() -> None:
             self, task_id: str, agent_role: str, status: str = "completed",
             task_name=None,
         ) -> None:
+            from datetime import datetime as _dt
+            ts = _dt.now().strftime("%H:%M:%S")
             raw = (task_name or task_id or "").strip()
             name = raw.split("\n")[0].replace("_", " ").strip()[:60]
             if status == "completed":
-                self.console.print(f"  [dim green]✓ {name}[/dim green]")
+                self.console.print(f"  [dim]{ts}[/dim]  [dim green]✓ {name}[/dim green]")
             elif status in ("failed", "error"):
-                self.console.print(f"  [red]✗ {name}[/red]")
+                self.console.print(f"  [dim]{ts}[/dim]  [red]✗ {name}[/red]")
 
         # ── Crew lifecycle ────────────────────────────────────────────────
 
@@ -573,7 +583,8 @@ def main() -> None:
     _bootstrap(profile=args.profile)
 
     from shared.log import SessionLogger as _SessionLogger
-    _SessionLogger.get().setup()
+    _sl = _SessionLogger.get()
+    _sl.setup()
 
     # setup_langfuse() MUST run before any crewai import.
     # crewai/events/event_listener.py creates the EventListener singleton at
@@ -593,6 +604,8 @@ def main() -> None:
     _clear_screen()
     banner_console = Console(force_terminal=True, highlight=False)
     _print_startup_banner(banner_console, summary)
+    if _sl.enabled:
+        banner_console.print(f"[dim]  logging → {_sl.log_path}[/dim]")
     if not summary.git_ok:
         banner_console.print(
             "\n[yellow]No git repo detected. Run [bold]/init[/bold] to scaffold "
@@ -817,11 +830,22 @@ def _handle_slash(line: str, state: ReplState, ui: SprintUI, executor: ThreadPoo
         key = parts[1].upper() if len(parts) > 1 else ""
         _abort(key, state, console)
 
+    elif cmd in ("/loop", "/resume"):
+        if cmd == "/resume" and len(parts) > 1 and parts[1].lower() == "abort":
+            _clear_flow_state()
+            console.print("[yellow]Suspended flow cleared.[/yellow]")
+        else:
+            _handle_loop_tick(state, ui, executor, console)
+
     elif cmd == "/fix":
         _run_fix(console)
 
     elif cmd == "/audit":
         _start_verify(console)
+
+    elif cmd == "/index":
+        target = parts[1] if len(parts) > 1 else ""
+        _run_index(target, console)
 
     elif cmd == "/domain":
         _handle_domain(parts[1:], console)
@@ -829,6 +853,10 @@ def _handle_slash(line: str, state: ReplState, ui: SprintUI, executor: ThreadPoo
     elif cmd == "/explore":
         target = parts[1] if len(parts) > 1 else ""
         _run_explore(target, console)
+
+    elif cmd == "/threat":
+        target = parts[1] if len(parts) > 1 else ""
+        _run_threat(target, console)
 
     elif cmd == "/history":
         if state.history:
@@ -1287,8 +1315,28 @@ def _start_ticket(
     )
 
     def run_and_cleanup():
+        from code_crew.flow import StagingHandedOff
+        from datetime import datetime, timezone
         try:
             flow.run()
+        except StagingHandedOff as exc:
+            _save_flow_state({
+                "jira_key": key,
+                "phase": exc.phase,
+                "run_handle": exc.run_handle,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "poll_interval": _POLL_INTERVALS.get(exc.phase, 60),
+                "attempt": 1,
+                "max_attempts": max_retries,
+                "context": {
+                    "code_path": flow_state.code_path,
+                    "max_retries": max_retries,
+                },
+            })
+            console.print(
+                f"\n[yellow]  {key}: {exc.phase} kicked off — flow suspended.[/yellow]\n"
+                f"[dim]  Use /loop or /resume to poll status and continue.[/dim]"
+            )
         finally:
             state.remove(key)
 
@@ -1427,13 +1475,269 @@ def _start_ticket_from_object(ticket, max_retries, code_path, state, ui, executo
     )
 
     def run_and_cleanup():
+        from code_crew.flow import StagingHandedOff
+        from datetime import datetime, timezone
         try:
             flow.run()
+        except StagingHandedOff as exc:
+            _save_flow_state({
+                "jira_key": ticket.key,
+                "phase": exc.phase,
+                "run_handle": exc.run_handle,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "poll_interval": _POLL_INTERVALS.get(exc.phase, 60),
+                "attempt": 1,
+                "max_attempts": max_retries,
+                "context": {
+                    "code_path": code_path,
+                    "max_retries": max_retries,
+                },
+            })
+            console.print(
+                f"\n[yellow]  {ticket.key}: {exc.phase} kicked off — flow suspended.[/yellow]\n"
+                f"[dim]  Use /loop or /resume to poll status and continue.[/dim]"
+            )
         finally:
             state.remove(ticket.key)
 
     future = executor.submit(run_and_cleanup)
     state.add(ticket.key, flow, future)
+
+
+# ---------------------------------------------------------------------------
+# Async CI flow state — /loop and /resume
+# ---------------------------------------------------------------------------
+
+_POLL_INTERVALS: dict[str, int] = {
+    "promote_staging":    60,
+    "staging_verification": 120,
+    "smoke_test":         60,
+}
+
+_PHASE_SUCCESS_SIGNALS: dict[str, str] = {
+    "promote_staging":    "STAGING DEPLOYED",
+    "staging_verification": "STAGING VERIFIED",
+    "smoke_test":         "SMOKE PASSED",
+}
+
+
+def _save_flow_state(state: dict) -> None:
+    import json as _json
+    path = Path.cwd() / ".code-crew" / "flow-state.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(_json.dumps(state, indent=2), encoding="utf-8")
+
+
+def _load_flow_state() -> dict | None:
+    import json as _json
+    path = Path.cwd() / ".code-crew" / "flow-state.json"
+    if not path.exists():
+        return None
+    try:
+        return _json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _clear_flow_state() -> None:
+    (Path.cwd() / ".code-crew" / "flow-state.json").unlink(missing_ok=True)
+
+
+def _poll_ci_run(run_handle: dict) -> dict:
+    """Poll any job handle (gh_actions, shell, ecs). Delegates to AsyncJobTool."""
+    import json as _json
+    from shared.tools.async_job import AsyncJobTool as _AsyncJobTool
+    raw = _AsyncJobTool()._run(operation="poll", handle=run_handle)
+    try:
+        return _json.loads(raw)
+    except Exception:
+        return {"status": "unknown", "error": raw[:200]}
+
+
+def _inject_checkpoint_output(jira_key: str, phase: str, output: str) -> None:
+    """Write a synthetic task output into the checkpoint so the flow replays it on resume."""
+    import json as _json
+    from code_crew.flow import _checkpoint_path
+    path = _checkpoint_path(jira_key)
+    existing: dict = {}
+    if path.exists():
+        try:
+            existing = _json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    existing[phase] = output
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_json.dumps(existing), encoding="utf-8")
+
+
+def _handle_loop_tick(
+    repl_state: "ReplState",
+    ui: "SprintUI",
+    executor: "ThreadPoolExecutor",
+    console: "Console",
+) -> None:
+    """Poll the suspended CI run and resume the flow on success."""
+    flow_state = _load_flow_state()
+    if not flow_state:
+        console.print("[dim]No suspended flow.[/dim]")
+        return
+
+    phase = flow_state.get("phase", "")
+    jira_key = flow_state.get("jira_key", "?")
+    run_handle = flow_state.get("run_handle", {})
+    attempt = flow_state.get("attempt", 1)
+    max_attempts = flow_state.get("max_attempts", 3)
+
+    run_id = run_handle.get("run_id", "?")
+    console.print(f"[dim]Polling {phase} (run {run_id}) for {jira_key}…[/dim]")
+
+    result = _poll_ci_run(run_handle)
+    status = result.get("status", "unknown")
+    url = result.get("url", "")
+    url_str = f" — {url}" if url else ""
+
+    if status in ("pending", "running"):
+        label = "queued" if status == "pending" else "running"
+        console.print(f"[dim]  {phase}: {label}{url_str}[/dim]")
+        return
+
+    if status == "success":
+        console.print(f"[green]  {phase}: success{url_str}[/green]")
+        _resume_from_flow_state(flow_state, result, repl_state, ui, executor, console)
+        return
+
+    # Failure
+    console.print(f"[red]  {phase}: {status}{url_str}[/red]")
+    if attempt >= max_attempts:
+        console.print(f"[red]  Max attempts ({max_attempts}) reached — manual intervention required.[/red]")
+        console.print(f"[dim]  Run /resume abort to clear state, or fix CI and /resume to retry.[/dim]")
+    else:
+        flow_state["attempt"] = attempt + 1
+        _save_flow_state(flow_state)
+        console.print(
+            f"[dim]  Attempt {attempt}/{max_attempts} failed — "
+            f"state saved. Run /resume again after CI is retriggered.[/dim]"
+        )
+
+
+def _resume_from_flow_state(
+    flow_state: dict,
+    ci_result: dict,
+    repl_state: "ReplState",
+    ui: "SprintUI",
+    executor: "ThreadPoolExecutor",
+    console: "Console",
+) -> None:
+    """Resume a suspended TicketFlow after a CI run completes successfully."""
+    jira_key = flow_state["jira_key"]
+    phase = flow_state["phase"]
+    run_handle = flow_state["run_handle"]
+    context = flow_state.get("context", {})
+    run_id = run_handle.get("run_id", "")
+    url = ci_result.get("url", "")
+
+    signal = _PHASE_SUCCESS_SIGNALS.get(phase)
+    if not signal:
+        console.print(f"[red]Unknown phase in flow state: {phase!r}[/red]")
+        return
+
+    synthetic = f"{signal} — CI run {run_id} succeeded.{' URL: ' + url if url else ''}"
+    _inject_checkpoint_output(jira_key, phase, synthetic)
+
+    if phase == "smoke_test":
+        _clear_flow_state()
+        console.print(f"[bold green]{jira_key}: flow complete — smoke test passed.[/bold green]")
+        return
+
+    _clear_flow_state()
+    console.print(f"[dim]Resuming {jira_key} from checkpoint (after {phase})…[/dim]")
+    _start_ticket_resumed(jira_key, context, repl_state, ui, executor, console)
+
+
+def _start_ticket_resumed(
+    jira_key: str,
+    context: dict,
+    repl_state: "ReplState",
+    ui: "SprintUI",
+    executor: "ThreadPoolExecutor",
+    console: "Console",
+) -> None:
+    """Re-start a TicketFlow from its checkpoint after async CI completion."""
+    from code_crew.flow import TicketFlow, TicketState, _load_checkpoint
+    from shared.issue_tracker import IssueTrackerClient, TrackerError, MissingFieldError
+    from shared.user_memory import UserMemory
+
+    max_retries = context.get("max_retries", 3)
+    code_path = context.get("code_path", str(Path.cwd()))
+
+    checkpoint = _load_checkpoint(jira_key)
+    if not checkpoint:
+        console.print(f"[red]No checkpoint found for {jira_key} — cannot resume.[/red]")
+        return
+
+    console.print(f"[dim]Fetching {jira_key}…[/dim]")
+    try:
+        ticket = IssueTrackerClient().get_ticket(jira_key)
+    except (MissingFieldError, TrackerError) as exc:
+        console.print(f"[yellow]{exc} — resuming without fresh ticket context[/yellow]")
+        ticket = None
+
+    memory = UserMemory()
+    terms = [jira_key] + (ticket.acceptance_criteria if ticket else [])
+    user_context = memory.format_for_context(jira_key=jira_key, terms=terms)
+
+    flow_state = TicketState(
+        jira_key=jira_key,
+        max_retries=max_retries,
+        code_path=code_path,
+    )
+    flow_state.task_outputs = checkpoint
+    flow_state.__dict__.update({
+        "story":               ticket.story if ticket else "",
+        "acceptance_criteria": ticket.acceptance_criteria if ticket else [],
+        "sprint_goal":         ticket.sprint_goal if ticket else "",
+        "figma_url":           getattr(ticket, "figma_url", "") if ticket else "",
+        "html_design_ref":     getattr(ticket, "html_design_ref", "") if ticket else "",
+        "add_refs":            getattr(ticket, "add_refs", []) if ticket else [],
+        "comment_context":     getattr(ticket, "comment_context", "") if ticket else "",
+        "user_context":        user_context,
+    })
+
+    flow = TicketFlow(
+        flow_state,
+        on_status=ui.update,
+        on_task_complete=_task_complete_callback(ui, repl_state.session, flow_state.task_outputs),
+    )
+
+    def run_and_cleanup():
+        from code_crew.flow import StagingHandedOff
+        from datetime import datetime, timezone
+        try:
+            flow.run()
+        except StagingHandedOff as exc:
+            _save_flow_state({
+                "jira_key": jira_key,
+                "phase": exc.phase,
+                "run_handle": exc.run_handle,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "poll_interval": _POLL_INTERVALS.get(exc.phase, 60),
+                "attempt": 1,
+                "max_attempts": max_retries,
+                "context": {
+                    "code_path": code_path,
+                    "max_retries": max_retries,
+                },
+            })
+            console.print(
+                f"\n[yellow]  {jira_key}: {exc.phase} kicked off — flow suspended.[/yellow]\n"
+                f"[dim]  Use /loop or /resume to poll status and continue.[/dim]"
+            )
+        finally:
+            repl_state.remove(jira_key)
+
+    future = executor.submit(run_and_cleanup)
+    repl_state.add(jira_key, flow, future)
+    console.print(f"[green]Resumed {jira_key}[/green] (max retries: {max_retries})")
 
 
 # ---------------------------------------------------------------------------
@@ -2613,6 +2917,29 @@ def _start_domain_extract(path: str, console: Console) -> None:
         console.print("\n[yellow]Extract may be incomplete — check agent output above.[/yellow]")
 
 
+def _run_index(target: str, console: Console) -> None:
+    """Build or rebuild the semantic code search index for a project directory."""
+    from pathlib import Path as _Path
+    from shared.tools.code_index import build_index
+
+    root = _Path(target).resolve() if target else _Path.cwd()
+    if not root.exists():
+        console.print(f"[red]Path not found: {target}[/red]")
+        return
+
+    model = os.environ.get("CODE_INDEX_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    console.print(f"\n[dim]Building code index for [bold]{root.name}[/bold] (model: {model})…[/dim]")
+    console.print("[dim]First run downloads the embedding model (~45MB). Subsequent runs are fast.[/dim]")
+
+    try:
+        result = build_index(root)
+        console.print(f"[green]✓[/green] {result}")
+    except Exception as exc:
+        console.print(f"[yellow]Code index failed: {exc}[/yellow]")
+        console.print("[dim]Agents can still use workspace_reader search. "
+                      "Install sentence-transformers for non-default models.[/dim]")
+
+
 def _run_explore(target: str, console: Console) -> None:
     """
     Scan the project directory, detect tech stacks, optionally generate a
@@ -3046,19 +3373,12 @@ def _run_explore(target: str, console: Console) -> None:
 
     svc_dirs = svc_dirs_scan
 
-    # --- OTM threat model generation ---
+    # --- Component inventory + OTM scope ---
     designs_dir = root / "designs"
-    if not designs_dir.exists():
-        console.print(
-            "\n[dim]No designs/ directory found — skipping threat model generation.\n"
-            "Add designs/ as a submodule: git submodule add <designs-repo> designs[/dim]"
-        )
-        return
+    tmd_dir = (designs_dir / "TMD") if designs_dir.exists() else None
+    if tmd_dir:
+        tmd_dir.mkdir(exist_ok=True)
 
-    tmd_dir = designs_dir / "TMD"
-    tmd_dir.mkdir(exist_ok=True)
-
-    # --- Enhanced inventory scan ---
     console.print("\n[dim]Building component inventory…[/dim]")
 
     # Sub-executables: cmd/ sub-dirs within each svc_dir
@@ -3162,7 +3482,10 @@ def _run_explore(target: str, console: Console) -> None:
         if line.startswith("PROJECT:"):
             if current_proj:
                 projects.append(current_proj)
-            proj_id = line.split(":", 1)[1].strip()
+            # Normalise to lowercase kebab-case (model sometimes omits hyphens)
+            import re as _re_scope
+            raw_id = line.split(":", 1)[1].strip()
+            proj_id = _re_scope.sub(r"[^a-z0-9]+", "-", raw_id.lower()).strip("-")
             current_proj = {
                 "id": proj_id,
                 "name": proj_id.replace("-", " ").title(),
@@ -3176,56 +3499,68 @@ def _run_explore(target: str, console: Console) -> None:
     if current_proj:
         projects.append(current_proj)
 
+    # Deduplicate by id (model sometimes repeats PROJECT blocks in its output)
+    seen_ids: set[str] = set()
+    projects = [p for p in projects if p["id"] not in seen_ids and not seen_ids.add(p["id"])]  # type: ignore[func-returns-value]
+
     if not projects:
         console.print("[yellow]No project blocks parsed from scope output — skipping OTM generation.[/yellow]")
         return
 
-    console.print(f"\n[bold]OTM projects:[/bold] {', '.join(p['id'] for p in projects)}")
+    console.print(f"\n[bold]OTM projects identified:[/bold] {', '.join(p['id'] for p in projects)}")
 
-    # --- Phase 3b: Generate full OTM YAML per project ---
-    console.print("\n[dim]Phase 3b — Generating OTM threat models…[/dim]")
-    from code_crew.crew import build_otm_build_task
-    import re as _re
+    # --- Enrich projects with Terraform deployment facts ---
+    # Run Python-side grep so /threat never needs to search ops/ at all.
+    _enrich_project_terraform(projects, root)
 
-    today = datetime.date.today().isoformat()
+    # --- Save inventory for /threat ---
+    import json as _json
+    out_dir = root / ".code-crew"
+    out_dir.mkdir(exist_ok=True)
+    inv_path = out_dir / "inventory.json"
+    inv_path.write_text(
+        _json.dumps({
+            "generated_at": datetime.date.today().isoformat(),
+            "root": str(root),
+            "projects": projects,
+            "inventory": inventory,
+        }, indent=2),
+        encoding="utf-8",
+    )
 
-    for project in projects:
-        tmd_file = tmd_dir / f"{project['id']}.yaml"
-        console.print(f"\n[dim]  Building OTM for [bold]{project['id']}[/bold]…[/dim]")
-        try:
-            build_crew = build_otm_build_task(project, inventory)
-            build_output = build_crew.kickoff().raw
+    # --- Build semantic code index ---
+    console.print("\n[dim]Building semantic code index…[/dim]")
+    try:
+        from shared.tools.code_index import build_index as _build_index
+        _idx_result = _build_index(root)
+        console.print(f"[green]✓[/green] Code index: {_idx_result}")
+    except Exception as _idx_exc:
+        console.print(f"[dim]Code index skipped: {_idx_exc}[/dim]")
+        console.print("[dim]Run /index to build manually, or /fix to install missing deps.[/dim]")
 
-            # Strip model artifacts before extracting YAML.
-            # NVIDIA models sometimes emit <|python_tag|>{...} tool-call blobs
-            # or <|tool_call|> tokens in the output instead of (or before) YAML.
-            clean_output = _re.sub(r"<\|[^|>]+\|>[^\n]*\n?", "", build_output)
-
-            # Extract YAML: between first 'otmVersion:' and 'OTM BUILD COMPLETE'
-            yaml_match = _re.search(r"(otmVersion:.*?)(?:OTM BUILD COMPLETE|```\s*$)", clean_output, _re.DOTALL)
-            if yaml_match:
-                yaml_text = yaml_match.group(1).strip()
+    # --- OTM coverage report ---
+    if tmd_dir:
+        import yaml as _yaml
+        console.print()
+        for proj in projects:
+            tmd_file = tmd_dir / f"{proj['id']}.yaml"
+            td_file = tmd_dir / f"{proj['id']}.threat-dragon.json"
+            if tmd_file.exists():
+                try:
+                    d = _yaml.safe_load(tmd_file.read_text(encoding="utf-8"))
+                    n_threats = len(d.get("threats", []))
+                    mtime = datetime.date.fromtimestamp(tmd_file.stat().st_mtime).isoformat()
+                    td_status = "[green]✓[/green] threat-dragon" if td_file.exists() else "[yellow]no threat-dragon[/yellow]"
+                    console.print(
+                        f"  [green]✓[/green] [bold]{proj['id']}[/bold]"
+                        f"  [dim]{mtime}, {n_threats} threats[/dim]  {td_status}"
+                    )
+                except Exception:
+                    console.print(f"  [yellow]![/yellow] [bold]{proj['id']}[/bold]  [yellow]invalid YAML[/yellow]")
             else:
-                yaml_text = clean_output.split("OTM BUILD COMPLETE")[0].strip()
-                yaml_text = _re.sub(r"^```ya?ml\s*\n?", "", yaml_text, flags=_re.MULTILINE)
-                yaml_text = _re.sub(r"^```\s*$", "", yaml_text, flags=_re.MULTILINE).strip()
-
-            if not yaml_text or "otmVersion:" not in yaml_text:
-                console.print(f"[yellow]  No valid OTM YAML extracted for {project['id']} — skipping.[/yellow]")
-                continue
-
-            tmd_file.write_text(
-                f"# OpenThreatModel v0.2.0 — generated by /explore on {today}\n"
-                f"# Project: {project['name']}\n\n"
-                + yaml_text + "\n",
-                encoding="utf-8",
-            )
-            _rel = tmd_file.relative_to(root) if tmd_file.is_relative_to(root) else tmd_file.name
-            console.print(f"[green]✓[/green] Written [dim]{_rel}[/dim]")
-            _convert_tmd(tmd_file, tmd_dir, root, console)
-
-        except Exception as exc:
-            console.print(f"[yellow]  OTM build failed for {project['id']}: {exc}[/yellow]")
+                console.print(f"  [dim]–[/dim] [bold]{proj['id']}[/bold]  [dim]not yet generated[/dim]")
+        console.print()
+    console.print("[dim]Run [bold]/threat[/bold] to generate or refresh threat models.[/dim]")
 
 
 def _convert_tmd(tmd_file: Path, tmd_dir: Path, root: Path, console: Console) -> None:
@@ -3277,6 +3612,356 @@ def _convert_tmd(tmd_file: Path, tmd_dir: Path, root: Path, console: Console) ->
         console.print(f"[yellow]  Unknown threat_modeling.tool: {tool!r} — expected threat-dragon, irius-risk, or microsoft-tmmt[/yellow]")
 
 
+def _enrich_project_terraform(projects: list[dict], root: "Path") -> None:
+    """Store raw Terraform grep output per project in inventory.
+
+    Stores the raw deduplicated grep output so /threat can inject it directly
+    without running any searches at threat-model time. Fragile regex extraction
+    is intentionally avoided — the agent reads the raw output and understands it.
+    Runs silently — failure is non-fatal.
+    """
+    import subprocess, re as _re
+
+    ops_dir = root / "ops"
+    if not ops_dir.exists():
+        return
+
+    root_str = str(root) + "/"
+    _MAX_TF_LINES = 80
+
+    for project in projects:
+        proj_id = project.get("id", "")
+        if not proj_id:
+            continue
+
+        # Derive search terms from the project ID (always a kebab-case slug).
+        # Components are human-readable names from the scope agent ("FHIR Proxy"),
+        # not directory names — so we use the project ID instead.
+        # Try underscore, hyphen, and slash variants: "fhir-proxy" → fhir-proxy|fhir_proxy|fhir/proxy
+        base = proj_id
+        variants: set[str] = {
+            base,
+            base.replace("-", "_"),
+            base.replace("-", "/"),
+        }
+        pattern = "|".join(_re.escape(v) for v in sorted(variants))
+
+        try:
+            result = subprocess.run(
+                ["grep", "-rn", "--include=*.tf", "-E", pattern, str(ops_dir)],
+                capture_output=True, text=True, timeout=10,
+            )
+        except Exception:
+            continue
+
+        raw = result.stdout.strip()
+        if not raw:
+            project["terraform_grep"] = None
+            continue
+
+        # Deduplicate and strip absolute path prefix; cap at _MAX_TF_LINES
+        seen: set[str] = set()
+        out_lines: list[str] = []
+        for line in raw.splitlines():
+            rel = line.replace(root_str, "")
+            # Strip column-number prefix noise; keep the unique content
+            content = _re.sub(r"^\S+:\d+:", "", rel).strip()
+            if content and content not in seen and len(content) < 200:
+                seen.add(content)
+                out_lines.append(rel)
+            if len(out_lines) >= _MAX_TF_LINES:
+                break
+
+        project["terraform_grep"] = "\n".join(out_lines)
+
+
+def _run_threat(target: str, console: Console) -> None:
+    """Generate or refresh OTM threat models for the current platform repo.
+
+    Reads the component inventory saved by /explore. If no inventory exists,
+    prompts the user to run /explore first. Accepts an optional project id to
+    target a single project; without one, generates all identified projects.
+    """
+    import datetime
+    import json as _json
+    import re as _re
+    import yaml as _yaml
+
+    # Resolve root and optional project-id filter.
+    # Treat target as a directory path only when it looks like one (contains /
+    # or starts with . or ~). A bare word like "panome" is a project-id filter,
+    # not a path — even if a directory of that name happens to exist.
+    _looks_like_path = target and (
+        "/" in target or target.startswith(".") or target.startswith("~")
+    )
+    _target_path = Path(target).expanduser() if _looks_like_path else None
+    if _target_path and _target_path.is_dir():
+        root = _target_path.resolve()
+        filter_id = ""
+    else:
+        root = Path.cwd().resolve()
+        filter_id = target.strip().lstrip("/") if target else ""
+
+    # Load inventory saved by /explore
+    inv_path = root / ".code-crew" / "inventory.json"
+    if not inv_path.exists():
+        console.print("[yellow]No inventory found. Run [bold]/explore[/bold] first to identify components.[/yellow]")
+        return
+
+    inv_data = _json.loads(inv_path.read_text(encoding="utf-8"))
+    projects: list[dict] = inv_data.get("projects", [])
+    inventory: dict = inv_data.get("inventory", {})
+
+    if not projects:
+        console.print("[yellow]Inventory is empty. Run [bold]/explore[/bold] to re-scan.[/yellow]")
+        return
+
+    if filter_id:
+        matched = [p for p in projects if p["id"] == filter_id]
+        if not matched:
+            ids = ", ".join(p["id"] for p in projects)
+            console.print(f"[yellow]Project '{filter_id}' not found. Known projects: {ids}[/yellow]")
+            return
+        projects = matched
+
+    designs_dir = root / "designs"
+    if not designs_dir.exists():
+        console.print(
+            "[yellow]No designs/ directory found.\n"
+            "Add designs/ as a submodule: git submodule add <designs-repo> designs[/yellow]"
+        )
+        return
+
+    tmd_dir = designs_dir / "TMD"
+    tmd_dir.mkdir(exist_ok=True)
+
+    from code_crew.crew import build_threat_model_crew, build_threat_patch_crew, build_threat_gate_crew
+    from crewai import Task, Crew, Process, Agent
+
+    today = datetime.date.today().isoformat()
+    _run_start = datetime.datetime.now()
+    stacks = inventory.get("stacks", [])
+    _max_revisions = 3
+    _max_lint_retries = 2
+
+    console.print(f"\n[bold]Threat modeling:[/bold] {', '.join(p['id'] for p in projects)}\n")
+
+    for project in projects:
+        tmd_file = tmd_dir / f"{project['id']}.yaml"
+        revision_feedback = ""
+        _last_yaml = ""  # keep the best OTM seen so far for patch revisions
+
+        for _revision in range(_max_revisions + 1):
+            if _revision == 0:
+                console.print(f"[dim]  [bold]{project['id']}[/bold] — Security Lead + Architect collaborating…[/dim]")
+            else:
+                console.print(
+                    f"[dim]  [bold]{project['id']}[/bold] — revision {_revision}/{_max_revisions} "
+                    f"— patching {len(revision_feedback.splitlines())} manager gap(s)…[/dim]"
+                )
+
+            try:
+                # ── Phase 1: full hierarchical crew on first pass; targeted patch on revisions ──
+                # Use patch crew only when we have a valid base OTM to patch. If _last_yaml is
+                # empty (no YAML was produced yet) always re-run the full crew — the patch crew
+                # with an empty OTM gets confused and searches the filesystem for its own instructions.
+                if _revision == 0 or not _last_yaml:
+                    model_crew = build_threat_model_crew(project, inventory, revision_feedback)
+                else:
+                    model_crew = build_threat_patch_crew(project, _last_yaml, revision_feedback)
+                crew_result = model_crew.kickoff()
+                build_output = crew_result.raw
+
+                # In Process.hierarchical the manager writes the FINAL ANSWER in prose.
+                # The actual OTM YAML may be in the worker task's output instead — check both.
+                candidate_outputs = [build_output]
+                if hasattr(model_crew, "tasks") and model_crew.tasks:
+                    for _t in model_crew.tasks:
+                        if _t.output and str(_t.output.raw or "").strip():
+                            candidate_outputs.append(str(_t.output.raw))
+
+                def _extract_from(text: str) -> str:
+                    cleaned = _re.sub(r"<\|[^|>]+\|>[^\n]*\n?", "", text)
+                    m = _re.search(
+                        r"(otmVersion:.*?)(?:OTM BUILD COMPLETE|```\s*$)", cleaned, _re.DOTALL
+                    )
+                    if m:
+                        return m.group(1).strip()
+                    candidate = cleaned.split("OTM BUILD COMPLETE")[0].strip()
+                    candidate = _re.sub(r"^```ya?ml\s*\n?", "", candidate, flags=_re.MULTILINE)
+                    candidate = _re.sub(r"^```\s*$", "", candidate, flags=_re.MULTILINE).strip()
+                    return candidate if "otmVersion:" in candidate else ""
+
+                yaml_text = ""
+                for _candidate in candidate_outputs:
+                    yaml_text = _extract_from(_candidate)
+                    if yaml_text:
+                        break
+
+                # Strip NVIDIA/LLaMA model artifacts for the final clean_output used downstream
+                clean_output = _re.sub(r"<\|[^|>]+\|>[^\n]*\n?", "", build_output)
+
+                if not yaml_text or "otmVersion:" not in yaml_text:
+                    # Agent may have written the file via shell instead of outputting text.
+                    # Only use the disk file if the agent wrote it THIS run (mtime after run start).
+                    _disk_ok = False
+                    if tmd_file.exists():
+                        import os as _os
+                        _mtime = datetime.datetime.fromtimestamp(_os.path.getmtime(tmd_file))
+                        _disk_content = tmd_file.read_text(encoding="utf-8")
+                        if _mtime > _run_start and "otmVersion:" in _disk_content:
+                            _disk_ok = True
+                    if _disk_ok:
+                        console.print(f"[dim]  No YAML in response — reading from disk (agent wrote directly)[/dim]")
+                        yaml_text = _disk_content
+                        # Strip our own file header if present
+                        yaml_text = _re.sub(r"^#[^\n]*\n", "", yaml_text, flags=_re.MULTILINE).strip()
+                    else:
+                        # Log a snippet of what the manager actually returned to aid diagnosis
+                        _preview = (build_output or "").strip()[:300].replace("\n", "↵")
+                        console.print(
+                            f"[yellow]  No valid OTM YAML extracted for {project['id']} "
+                            f"on attempt {_revision + 1} — retrying.[/yellow]\n"
+                            f"[dim]  Manager output preview: {_preview}[/dim]"
+                        )
+                        # Carry the previous attempt's established content forward so the
+                        # Architect does not re-read files and re-discover zones from scratch.
+                        _prev_content = (build_output or "").strip()[:3000]
+                        revision_feedback = (
+                            "## Established context from previous attempt\n\n"
+                            "The previous attempt produced the analysis below but did NOT output OTM YAML.\n"
+                            "The trust zones, component boundaries, and findings below are already established — "
+                            "do NOT re-read source files, Terraform, or design docs to re-discover them.\n\n"
+                            f"{_prev_content}\n\n"
+                            "## What to do now\n\n"
+                            "Proceed directly to Phase 1b (component inventory using the zones above) and then "
+                            "produce the complete OTM YAML as plain text in your response. "
+                            "End with OTM BUILD COMPLETE. Do NOT write any files to disk."
+                        )
+                        continue
+
+                # ── Lint → AI-fix loop ────────────────────────────────────────────────
+                # Only re-trigger the AI fix when the same error (same line/column)
+                # persists — a different error means the fix changed something, so stop.
+                _prev_err_mark: tuple | None = None
+                for _lint_attempt in range(_max_lint_retries + 1):
+                    try:
+                        _yaml.safe_load(yaml_text)
+                        break
+                    except _yaml.YAMLError as _ye:
+                        _mark = _ye.problem_mark
+                        _err_key = (_mark.line, _mark.column) if _mark else str(_ye)
+
+                        if _lint_attempt > 0 and _err_key != _prev_err_mark:
+                            # Error shifted — fix changed the YAML; stop here to avoid
+                            # chasing a moving target
+                            console.print(
+                                f"[dim]  Lint error shifted after fix (now line {_mark.line + 1 if _mark else '?'}) "
+                                f"— stopping lint loop.[/dim]"
+                            )
+                            break
+
+                        if _lint_attempt == _max_lint_retries:
+                            console.print(
+                                f"[yellow]  OTM YAML for {project['id']} still invalid after "
+                                f"{_max_lint_retries} fix attempts — same error persists.[/yellow]"
+                            )
+                            yaml_text = ""
+                            break
+
+                        _prev_err_mark = _err_key
+                        _line = _mark.line + 1 if _mark else "?"
+                        console.print(f"[dim]  Lint error at line {_line}: {_ye.problem} — asking architect to fix…[/dim]")
+                        from code_crew.crew import build_agents, _make_tools
+                        _fix_task = Task(
+                            name=f"fix_otm_yaml_{project['id']}",
+                            description=(
+                                f"The OTM YAML for project '{project['id']}' has a YAML syntax error:\n\n"
+                                f"  Line {_line}: {_ye.problem}\n\n"
+                                f"Here is the invalid YAML:\n\n```yaml\n{yaml_text}\n```\n\n"
+                                "Output the fully corrected YAML. Do not truncate. "
+                                "End with OTM BUILD COMPLETE.\n\n"
+                                "CRITICAL: Write the YAML as plain text. Do NOT call any tools."
+                            ),
+                            expected_output="Complete valid OTM YAML. Ends with OTM BUILD COMPLETE.",
+                            agent=build_agents(_make_tools())["architect"],
+                        )
+                        _fix_crew = Crew(
+                            agents=[_fix_task.agent], tasks=[_fix_task],
+                            process=Process.sequential, verbose=True,
+                        )
+                        _fix_out = _re.sub(r"<\|[^|>]+\|>[^\n]*\n?", "", _fix_crew.kickoff().raw)
+                        _fx = _re.search(
+                            r"(otmVersion:.*?)(?:OTM BUILD COMPLETE|```\s*$)", _fix_out, _re.DOTALL
+                        )
+                        yaml_text = _fx.group(1).strip() if _fx else _fix_out.split("OTM BUILD COMPLETE")[0].strip()
+
+                if not yaml_text:
+                    if _revision < _max_revisions:
+                        revision_feedback = (
+                            "The OTM YAML produced contained YAML syntax errors that could not be auto-fixed. "
+                            "Pay careful attention to YAML structure — ensure every risk block has "
+                            "explicit `likelihood:` and `impact:` keys, not bare scalars."
+                        )
+                        continue
+                    console.print(f"[yellow]  Skipping {project['id']} — YAML could not be fixed.[/yellow]")
+                    break
+
+                # Save the best valid OTM seen so far for patch revisions.
+                # Only set this AFTER lint succeeds so _last_yaml is always valid YAML.
+                _last_yaml = yaml_text
+
+                # ── Phase 2: Manager gate ─────────────────────────────────────────────
+                console.print(f"[dim]  [bold]{project['id']}[/bold] — manager reviewing completeness…[/dim]")
+                gate_crew = build_threat_gate_crew(project, yaml_text, stacks)
+                gate_output = gate_crew.kickoff().raw
+
+                if "THREAT MODEL APPROVED" in gate_output:
+                    residual = gate_output.split("THREAT MODEL APPROVED", 1)[1].strip()
+                    tmd_file.write_text(
+                        f"# OpenThreatModel v0.2.0 — generated by /threat on {today}\n"
+                        f"# Project: {project['name']}\n\n"
+                        + yaml_text + "\n",
+                        encoding="utf-8",
+                    )
+                    _rel = tmd_file.relative_to(root) if tmd_file.is_relative_to(root) else tmd_file.name
+                    console.print(f"[green]✓[/green] [bold]{project['id']}[/bold] approved. Written [dim]{_rel}[/dim]")
+                    if residual:
+                        console.print(f"[dim]  Residual risk: {residual.strip()[:300]}[/dim]")
+                    _convert_tmd(tmd_file, tmd_dir, root, console)
+                    break  # done for this project
+
+                elif "NEEDS REVISION" in gate_output and _revision < _max_revisions:
+                    gaps = gate_output.split("NEEDS REVISION", 1)[1].strip()
+                    console.print(
+                        f"[yellow]  Manager sent {project['id']} back for revision:[/yellow]\n"
+                        f"  [dim]{gaps[:400]}[/dim]"
+                    )
+                    revision_feedback = gaps
+                    # loop: re-run model crew with the manager's feedback injected
+
+                else:
+                    # max revisions reached or unexpected gate output — write best effort
+                    console.print(
+                        f"[yellow]  {project['id']}: max revisions reached or gate inconclusive — "
+                        f"writing best-effort OTM.[/yellow]"
+                    )
+                    tmd_file.write_text(
+                        f"# OpenThreatModel v0.2.0 — generated by /threat on {today} [UNREVIEWED]\n"
+                        f"# Project: {project['name']}\n\n"
+                        + yaml_text + "\n",
+                        encoding="utf-8",
+                    )
+                    _rel = tmd_file.relative_to(root) if tmd_file.is_relative_to(root) else tmd_file.name
+                    console.print(f"[dim]  Written (unreviewed): {_rel}[/dim]")
+                    _convert_tmd(tmd_file, tmd_dir, root, console)
+                    break
+
+            except Exception as exc:
+                console.print(f"[yellow]  OTM build failed for {project['id']}: {exc}[/yellow]")
+                break
+
+
 def _run_fix(console: Console) -> None:
     """Install all missing tools using the fix hints from startup checks."""
     import subprocess
@@ -3291,7 +3976,7 @@ def _run_fix(console: Console) -> None:
         _init_designs_dir(Path.cwd(), console)
         failed = [c for c in failed if c.name != "designs"]
 
-    _RUNNABLE = ("brew install", "pip install", "go install", "npm install", "npm i")
+    _RUNNABLE = ("brew install", "pip install", "go install", "npm install", "npm i", "cargo install")
     to_run = [(c.name, c.fix.split("#")[0].strip()) for c in failed
               if any(c.fix.startswith(p) for p in _RUNNABLE)]
 
@@ -3303,7 +3988,10 @@ def _run_fix(console: Console) -> None:
     console.print(f"[bold]Installing {len(to_run)} missing tool(s)...[/bold]")
     for name, cmd in to_run:
         console.print(f"\n[dim]→ {cmd}[/dim]")
-        result = subprocess.run(cmd.split())
+        # shell=True so && and | work correctly (brew install gh && gh auth login,
+        # curl ... | sh, etc.). Commands come from _cli_install_hints(), not user
+        # input, so shell injection is not a concern.
+        result = subprocess.run(cmd, shell=True)
         if result.returncode == 0:
             console.print(f"  [green]✓[/green] {name}")
         else:

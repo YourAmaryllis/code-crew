@@ -123,6 +123,10 @@ _ENV_MAP: dict[str, object] = {
         "tool": "THREAT_MODELING_TOOL",
         "output_dir": "THREAT_MODELING_OUTPUT_DIR",
     },
+    "semantic_search": {
+        "embedding_model": "CODE_INDEX_EMBEDDING_MODEL",
+        "index_path": "CODE_INDEX_PATH",
+    },
 }
 
 

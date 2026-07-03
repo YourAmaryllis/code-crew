@@ -32,28 +32,32 @@ Use `jira_view` to load the ticket and understand what changed.
 
 **Step 2 — OWASP check**
 
+Use `search_ast` and `code_index` for each category — do not read whole files to find patterns.
+
 If `owasp` stack is active: apply the full ASVS L2 checklist from the loaded `owasp` document.
 
-Baseline (always): for each of the 10 categories, state PASS or FAIL with specific evidence
-(file, line, pattern found):
+Baseline (always): for each category below, run the suggested tool call and state PASS or FAIL with specific evidence (file:line from tool output):
 
-1. **Injection** — parameterized queries; no string concat in SQL; XSS prevention in output
-2. **Broken Authentication** — per-platform patterns; no custom auth; no client-side credential storage
-3. **Sensitive Data Exposure** — no PII/PHI in logs, errors, or responses beyond requirement; HTTPS enforced
-4. **XML/XXE** — external data parsed safely; no DTD processing
-5. **Broken Access Control** — ownership checked on every write; no IDOR; role checks present
-6. **Security Misconfiguration** — no debug flags or permissive CORS in production; env vars documented
-7. **Vulnerable Components** — new dependencies checked for CVEs
-8. **Insecure Deserialization** — no `pickle`, `eval`, `exec` on untrusted input
-9. **Insufficient Logging** — auth failures, access denials, data writes logged
-10. **SSRF** — new HTTP client code restricts target URLs
+1. **Injection** — `code_index search "raw SQL string concatenation query fmt.Sprintf"` + `search_ast pattern='fmt.Sprintf($FMT, $$$)' language="go"` for format-string SQL
+2. **Broken Authentication** — `code_index search "auth middleware JWT token validation"` + `search_ast pattern="jwt.Parse($TOKEN, $$$)" language="go"`
+3. **Sensitive Data Exposure** — `code_index search "PHI PII log response leak sensitive data"`; `search_ast pattern='log.Printf($FMT, $$$)' language="go"` to spot log calls near auth handlers
+4. **XML/XXE** — `code_index search "XML parse DTD external entity processing"`
+5. **Broken Access Control** — `code_index search "ownership check IDOR role permission write"`
+6. **Security Misconfiguration** — `code_index search "DEBUG CORS AllowAll wildcard insecure config"`
+7. **Vulnerable Components** — read the dependency manifest (`go.mod`, `package.json`) — this is the one file read that is always justified
+8. **Insecure Deserialization** — `code_index search "pickle eval exec deserialise untrusted input"`
+9. **Insufficient Logging** — `code_index search "auth failure access denied audit log security event"`
+10. **SSRF** — `code_index search "HTTP client external URL fetch outbound request"`
 
 **Step 3 — Cryptography check**
 
 If `fips-140-3` active: apply the full FIPS checklist from the loaded `fips-140-3` document.
 
-Always check: no MD5/SHA-1 for security-sensitive uses; no insecure RNG for tokens/keys;
-TLS 1.2+ only; secrets not hardcoded.
+Always check:
+- `code_index search "MD5 SHA1 DES RC4 weak hash"` — weak algorithms
+- `code_index search "crypto random token key generation"` — insecure RNG
+- `search_ast pattern="tls.Config{$$$}" language="go"` — confirm TLS 1.2+ config present
+- `code_index search "hardcoded secret password key credential"` — secrets in code
 
 **Step 4 — OTM threat model update**
 

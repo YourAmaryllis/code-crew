@@ -42,8 +42,14 @@ Do not begin implementation without understanding the ADD. No ADD = flag as bloc
 The QA Lead's finalized Gherkin scenarios define the contract. Identify unit-level test cases
 implied by each BDD scenario. Write test stubs before writing production code.
 
-**Step 3 — Survey existing code** (`workspace_reader`).
-Read comparable handlers, service functions, and React components. Match established patterns exactly.
+**Step 3 — Survey existing code.**
+Use `code_index search` first to find comparable patterns by meaning — this is faster than listing directories:
+- `code_index search "HTTP handler validation middleware"` → find how existing handlers are structured
+- `code_index search "React form component error state"` → find UI patterns to match
+- `code_index search "database query repository pattern"` → find data access conventions
+- `code_index search "unit test table-driven"` → find test patterns for this language
+
+Then use `search_ast` to confirm structural patterns (e.g. `search_ast pattern="$ROUTER.HandleFunc($PATH, $HANDLER)" language="go"` to see all registered routes). Only `read_file` specific files identified by these searches. Match established patterns exactly.
 
 **Step 4 — Branch.**
 Check whether a branch for this ticket already exists: `git branch -a | grep <JIRA-KEY>`.
@@ -97,8 +103,8 @@ Format:
 ```
 New infrastructure requirements:
 - Env var: SECONDARY_DB_URL (non-sensitive)
-- Secret: /platform/<env>/portal/api-key (via Secrets Manager)
-- IAM: s3:GetObject on dev-platform-datasets/*
+- Secret: /<service>/<env>/api-key (via Secrets Manager)
+- IAM: s3:GetObject on <bucket-prefix>/*
 ```
 If none: state "No new infrastructure requirements."
 
@@ -106,10 +112,9 @@ If none: state "No new infrastructure requirements."
 Before the completion signal, list every file you created or modified:
 ```
 FILES CHANGED:
-- portal/backend/internal/api/register_validation.go  (created)
-- portal/backend/internal/api/register_validation_test.go  (created)
-- portal/backend/internal/ard/data_dictionary.go  (created)
-- integration/features/data_dictionary_steps_test.go  (created)
+- <service>/internal/api/handler.go  (created)
+- <service>/internal/api/handler_test.go  (created)
+- integration/features/<feature>_steps_test.go  (created)
 ```
 This is consumed by the manager to verify completeness, and by the code reviewer to know
 which files to read. Include BDD step definition files. Do not list vendor/, node_modules/,

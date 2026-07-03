@@ -150,14 +150,16 @@ def test_read_file_truncates_at_200_lines(workspace):
     assert result.count("// line") == 200
 
 
-def test_search_truncates_at_50_matches(workspace):
-    # 60 Go files each matching the pattern
+def test_search_truncates_at_max_files(workspace):
+    # 20 Go files each matching the pattern; result is capped at _MAX_FILES_IN_RESULT files
+    from shared.tools.workspace_reader import _MAX_FILES_IN_RESULT
     src = workspace / "src"
     src.mkdir()
-    for i in range(60):
+    for i in range(20):
         (src / f"f{i}.go").write_text("package src\n// FINDME\n")
     t = WorkspaceReaderTool()
     with patch("shared.tools.workspace_reader._code_path", return_value=workspace):
         result = t._run(operation="search", pattern="FINDME", glob="**/*.go")
-    assert "10 more matches truncated" in result
-    assert result.count("FINDME") == 50
+    # Should show truncation notice and exactly _MAX_FILES_IN_RESULT file sections
+    assert "more files matched" in result
+    assert result.count("=== ") == _MAX_FILES_IN_RESULT

@@ -1,12 +1,15 @@
 ---
 type: CrewAI Task
 title: Promote to Staging
-description: DevOps promotes the verified dev image to staging and waits for ECS stabilisation
+description: DevOps triggers the staging promotion CI run and returns a run handle for async polling
 tags: [devops, staging, promotion, ecs, ecr, cicd, phase-21]
 agent: devops_lead
 expected_output: >
+  RUN_HANDLE: {"type": "gh_actions", "run_id": <id>, "workflow": "<file>", "repo": "<owner/repo>"}
+  on the last line when the CI run is triggered asynchronously, OR
   STAGING DEPLOYED — image sha, ECS service name, staging URL, and confirmation that
-  the service reached a stable state. OR INCOMPLETE: <reason> if the pipeline failed.
+  the service reached a stable state, if the pipeline completes inline.
+  INCOMPLETE: <reason> if the pipeline could not be triggered.
 ---
 
 Promote the implementation from dev to the staging environment.
@@ -22,38 +25,37 @@ git rev-parse --short HEAD
 Use `knowledge_reader` to load `github` or `gitlab` (whichever the platform uses).
 Check for a `.github/` directory or `.gitlab-ci.yml` in `workspace_reader` to confirm.
 
-**Step 3 — Trigger staging promotion.**
-Using the CI/CD stack conventions, trigger the `promote-staging` workflow/pipeline:
+**Step 3 — Trigger staging promotion (fire-and-return).**
+Using the `async_job` tool, kick off the staging promotion:
 
-For GitHub Actions:
-```bash
-gh workflow run promote-staging.yml \
-  --field image_sha=<sha> \
-  --field service=<ecs-service-name>
-
-# Wait for the run to complete
-gh run watch $(gh run list --workflow=promote-staging.yml --limit=1 --json databaseId -q '.[0].databaseId')
+**Option A — GHA workflow:**
+```
+async_job(operation="start", type="gh_actions",
+          params={"workflow": "promote-staging.yml", "ref": "<branch>",
+                  "inputs": {"image_sha": "<sha>", "service": "<ecs-service>"}})
 ```
 
-For GitLab CI, use the pipeline trigger API (see `gitlab` stack doc).
-
-**Step 4 — Confirm stabilisation.**
-After the workflow completes, verify ECS reports the service as RUNNING:
-```bash
-aws ecs describe-services --cluster staging --services <service> \
-  --query 'services[0].{status:status,running:runningCount,desired:desiredCount}'
+**Option B — ECS direct update:**
+```
+async_job(operation="start", type="ecs",
+          params={"cluster": "staging", "service": "<ecs-service>", "image": "<ecr-uri>:<tag>"})
 ```
 
-Expected: `status: ACTIVE`, `running == desired`.
+Do NOT use `gh run watch` or wait for completion inline — the REPL polls via /loop.
 
-**Step 5 — Output the staging URL.**
-Retrieve the staging load balancer DNS from the ECS service or from Terraform outputs:
-```bash
-aws elbv2 describe-load-balancers --names staging-alb \
-  --query 'LoadBalancers[0].DNSName' --output text
+**Step 4 — Output the run handle.**
+After `async_job` returns, emit the handle on its own line at the end of your response:
+
+```
+RUN_HANDLE: {<handle dict returned by async_job>}
 ```
 
-**Completion signal — mandatory.**
-End with exactly:
-- `STAGING DEPLOYED` — service stable, URL confirmed
-- `INCOMPLETE: <reason>` — pipeline failed or service did not stabilise
+**If the trigger fails** (`async_job` returns an error), output:
+```
+INCOMPLETE: <reason> — could not trigger staging promotion
+```
+
+**Inline completion (optional).**
+If the platform has no `promote-staging.yml` workflow and you must deploy directly
+(e.g. `aws ecs update-service` + wait), you may complete inline. In that case confirm
+the service reached a stable state and end with `STAGING DEPLOYED`.

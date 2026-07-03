@@ -16,30 +16,33 @@ will be merged into the final report — you do not need to check those.
 
 ---
 
-**Step 1 — OWASP Top 10 spot-check (2 file reads).**
+**Step 1 — OWASP Top 10 spot-check.**
 
-Use `list_directory` on `portal/backend/internal/api/` to find a handler file.
-Read that handler file. Then read one auth-related file from the same directory or
-`portal/backend/internal/auth0mgmt/`.
+Use `search_ast` and `code_index` — do not list directories or read whole files to find patterns.
+Each check is one targeted tool call:
 
-From the two files, check and output one line per item:
-- **A01 Broken Access Control**: auth middleware or auth check present?
+- **A01 Broken Access Control** — `code_index search "auth middleware authorization JWT check"`
   → `PASS [SEC]: A01 Broken Access Control — auth checks present in handlers`
   → or `FINDING [SEC]: A01 Broken Access Control — no auth middleware found [HIGH]`
-- **A02 Cryptographic Failures**: no MD5/SHA1/DES/RC4 in crypto usage?
-  → `PASS [SEC]: A02 Cryptographic Failures — no weak crypto in reviewed files`
+
+- **A02 Cryptographic Failures** — `code_index search "MD5 SHA1 DES RC4 weak crypto hash"`
+  → `PASS [SEC]: A02 Cryptographic Failures — no weak crypto found`
   → or `FINDING [SEC]: A02 Cryptographic Failures — weak algorithm found [HIGH]`
-- **A03 Injection**: no raw SQL string concatenation?
-  → `PASS [SEC]: A03 Injection — no raw SQL injection pattern in reviewed files`
+
+- **A03 Injection** — `code_index search "raw SQL string concatenation query builder"`; for Go also
+  `search_ast pattern='fmt.Sprintf("%" + $FRAG, $$$)' language="go"` to catch format-string SQL
+  → `PASS [SEC]: A03 Injection — no raw SQL injection pattern found`
   → or `FINDING [SEC]: A03 Injection — SQL string concatenation found [HIGH]`
-- **A05 Security Misconfiguration**: no DEBUG=True or open CORS(*)?
-  → `PASS [SEC]: A05 Security Misconfiguration — no insecure config in reviewed files`
+
+- **A05 Security Misconfiguration** — `code_index search "DEBUG CORS AllowAll open wildcard config"`
+  → `PASS [SEC]: A05 Security Misconfiguration — no insecure config found`
   → or `FINDING [SEC]: A05 Security Misconfiguration — insecure config found [MEDIUM]`
-- **A09 Logging Failures**: auth events have log statements?
+
+- **A09 Logging Failures** — `code_index search "auth event log security audit failure"`
   → `PASS [SEC]: A09 Logging Failures — auth events logged`
   → or `FINDING [SEC]: A09 Logging Failures — auth events not logged [MEDIUM]`
 
-If a file is not found: `INFO [SEC]: OWASP check — <file> not found, check skipped`
+If `code_index` returns no results (index not built): fall back to `workspace_reader search` with the same keywords.
 Unchecked items: `INFO [SEC]: <item> — not checked within scope`
 
 ---

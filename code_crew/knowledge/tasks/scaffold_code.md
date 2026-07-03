@@ -11,7 +11,11 @@ Read the Jira ticket (`jira_view`) first and identify which stack(s) this story 
 Also use `workspace_reader` to read `.code-crew/structure.md`. The `## Project commands` section has the exact build command for this project — use it to verify scaffolded code compiles, rather than assuming any particular tool.
 
 **FIRST — check what already exists.**
-Before creating any file, use workspace_reader (list_dir or read_file) to check if the target path already exists.
+Use `code_index search` to find similar existing code patterns before touching the filesystem — it is faster than listing directories and surfaces the best template to scaffold from:
+- `code_index search "<feature> handler service"` → find the nearest existing equivalent
+- `code_index search "directory layout <service>"` → understand where files should live
+
+Then confirm the exact target path does not already exist with `workspace_reader list_dir`.
 
 - If the feature's directories and files already exist: output a manifest listing them as "existing — no change needed", then STOP. Do NOT overwrite or recreate existing code.
 - Only create stubs for paths that genuinely do not exist yet.

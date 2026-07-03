@@ -77,14 +77,13 @@ def run_checks(code_path: Path | None = None) -> StartupSummary:
             fix=install_hint if not found else "",
         ))
 
+    checks.append(_check_ast_grep())
     checks.append(_check_langfuse())
     checks.append(_check_designs_dir(root))
 
-    # langfuse and designs are optional — don't count as errors/warnings
-    warnings = sum(
-        1 for c in checks
-        if not c.ok and c.name not in ("git repo", "langfuse", "designs")
-    )
+    # ast-grep, langfuse, and designs are optional — don't count as errors/warnings
+    _OPTIONAL = {"git repo", "langfuse", "designs", "ast-grep"}
+    warnings = sum(1 for c in checks if not c.ok and c.name not in _OPTIONAL)
     errors = sum(1 for c in checks if not c.ok and c.name == "git repo")
 
     return StartupSummary(
@@ -310,30 +309,69 @@ def _designs_path() -> Path | None:
 
 
 def _cli_install_hints() -> dict[str, str]:
+    """Return {cli: install_command} using the best available installer for this platform.
+
+    Priority:
+      1. Cross-platform package managers (pip, go install, cargo install, npm i -g) — always first
+         because they work everywhere the underlying runtime is present.
+      2. brew — used for tools with no better cross-platform installer, only when brew is on PATH.
+      3. URL hint — shown for tools that need a manual/GUI installer; /fix won't auto-run these
+         but they appear in the startup table so the user knows what to do.
+    """
+    import sys
+    _brew = shutil.which("brew") is not None
+    _on_mac = sys.platform == "darwin"
+
+    def _brew_or(brew_pkg: str, fallback: str) -> str:
+        return f"brew install {brew_pkg}" if _brew else fallback
+
     return {
-        "gh": "brew install gh && gh auth login",
-        "go": "brew install go",
-        "golangci-lint": "brew install golangci-lint",
-        "godog": "go install github.com/cucumber/godog/cmd/godog@latest",
-        "node": "brew install node",
-        "npm": "brew install node",
-        "npx": "brew install node",
-        "python3": "brew install python",
-        "ruff": "pip install ruff",
-        "terraform": "brew install terraform",
-        "tfsec": "brew install tfsec",
-        "checkov": "pip install checkov",
-        "aws": "brew install awscli",
+        # ── Always cross-platform (pip) ────────────────────────────────────────
+        "ruff":       "pip install ruff",
+        "checkov":    "pip install checkov",
         "pre-commit": "pip install pre-commit",
+        "aws":        "pip install awscli",
+        # ── Always cross-platform (go install — Go must already be present) ────
+        "golangci-lint": "go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest",
+        "godog":         "go install github.com/cucumber/godog/cmd/godog@latest",
+        "tfsec":         "go install github.com/aquasecurity/tfsec/cmd/tfsec@latest",
+        "jira":          "go install github.com/ankitpokhrel/jira-cli/cmd/jira@latest",
+        "glab":          "go install gitlab.com/gitlab-org/cli/cmd/glab@main && glab auth login",
+        # ── Always cross-platform (npm) ────────────────────────────────────────
+        "cdk":    "npm i -g aws-cdk",
         "linear": "npm i -g @linear/linear && linear auth login",
-        "jira": "brew install jira-cli",
-        "docker": "brew install --cask docker",
-        "glab": "brew install glab && glab auth login",
-        "cdk": "npm i -g aws-cdk",
-        "pulumi": "brew install pulumi",
-        "fly": "brew install flyctl",
         "vercel": "npm i -g vercel",
+        # ── Prefer brew; cargo install as universal fallback ───────────────────
+        "ast-grep": "brew install ast-grep" if _brew else "cargo install ast-grep",
+        # ── Prefer brew; reasonable cross-platform fallback ───────────────────
+        "gh":    _brew_or("gh", "go install github.com/cli/cli/v2/cmd/gh@latest") + " && gh auth login",
+        "pulumi": _brew_or("pulumi", "curl -fsSL https://get.pulumi.com | sh"),
+        "fly":    _brew_or("flyctl", "curl -L https://fly.io/install.sh | sh"),
+        # ── brew or URL hint (no reliable single-command cross-platform path) ──
+        "go":      _brew_or("go",      "# https://go.dev/dl/"),
+        "node":    _brew_or("node",    "# https://nodejs.org/en/download/"),
+        "npm":     _brew_or("node",    "# https://nodejs.org/en/download/"),
+        "npx":     _brew_or("node",    "# https://nodejs.org/en/download/"),
+        "python3": _brew_or("python",  "# https://www.python.org/downloads/"),
+        "terraform": _brew_or("terraform", "# https://developer.hashicorp.com/terraform/install"),
+        "docker":  (
+            "brew install --cask docker" if _on_mac and _brew
+            else _brew_or("docker", "# https://docs.docker.com/get-docker/")
+        ),
     }
+
+
+def _check_ast_grep() -> CheckResult:
+    """Check for ast-grep CLI (structural code search). Optional — agents fall back to grep."""
+    for binary in ("ast-grep", "sg"):
+        path = shutil.which(binary)
+        if path:
+            return CheckResult("ast-grep", True, path, "")
+    hint = _cli_install_hints().get("ast-grep", "cargo install ast-grep")
+    return CheckResult(
+        "ast-grep", False, "",
+        f"{hint}  # enables structural AST search for engineer/architect agents",
+    )
 
 
 def _check_designs_dir(root: Path) -> CheckResult:

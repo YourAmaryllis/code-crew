@@ -1,6 +1,12 @@
-# code-crew vs gstack
+# EVAL-001: code-crew vs gstack
 
+**Status:** Accepted
 **Date:** 2026-06-19
+**Related:**
+- [ADR-001: CrewAI Multi-Agent Architecture](../adr/ADR-001-CrewAI-Multi-Agent-Architecture.md)
+- [SAD-001: code-crew system architecture](../sad/SAD-001-code-crew.md)
+
+---
 
 gstack (github.com/garrytan/gstack, 111k stars) is the most-starred open-source AI development toolchain as of mid-2026. It's worth understanding precisely because it solves an adjacent problem with a fundamentally different architecture.
 

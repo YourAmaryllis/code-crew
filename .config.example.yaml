@@ -171,6 +171,36 @@ issue_tracker:
 #   doc_standard: openapi   # openapi (only supported value today)
 
 # ─────────────────────────────────────────────
+# Semantic code search (ChromaDB + local embeddings)
+#
+# Runs fully locally — no API key, no server.
+# The index is built automatically by /explore and stored in
+# .code-crew/code-index/ inside the project root.
+# Rebuild manually at any time with: /index
+#
+# Embedding models:
+#
+#   all-MiniLM-L6-v2  (DEFAULT — no extra deps)
+#     Fast, ~45MB ONNX model bundled with chromadb. Good for general code search.
+#
+#   flax-sentence-embeddings/st-codesearch-distilroberta-base
+#     Code-search optimised; finds functions and APIs by intent. ~130MB.
+#     Requires: pip install sentence-transformers
+#
+#   microsoft/codebert-base
+#     Code-aware BERT model; best for typed/statically-analysed codebases. ~500MB.
+#     Requires: pip install sentence-transformers
+#
+#   all-mpnet-base-v2
+#     High-quality general-purpose model; better recall than MiniLM, slower. ~420MB.
+#     Requires: pip install sentence-transformers
+#
+# ─────────────────────────────────────────────
+# semantic_search:
+#   embedding_model: all-MiniLM-L6-v2
+#   index_path: ""   # default: <project-root>/.code-crew/code-index/
+
+# ─────────────────────────────────────────────
 # Threat modeling tool
 # OTM YAML (designs/TMD/*.yaml) is always generated as the primary format.
 # Set a tool to also generate a converted output after /explore.

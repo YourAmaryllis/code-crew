@@ -317,8 +317,8 @@ DISCOVERY_END: entry_points
 **Goal**: Map SAD decomposition components to actual code so that the security scan knows which
 components need threat models and the arch scan knows what should match the SAD.
 
-1. Use `workspace_reader` to read `designs/SAD/SAD-3-Decomposition-View.md` (the Element Catalog
-   table in section 3.2). If no SAD exists, use the service directories discovered in Step 2.
+1. Use `workspace_reader` to find and read the decomposition view in the SAD directory (the Element
+   Catalog table). If no SAD exists, use the service directories discovered in Step 2.
 2. For each SAD component: identify the corresponding code directory/directories in the project.
 3. Note any code services that do not appear in the SAD (they may be newer than the SAD).
 4. Note any SAD components with no corresponding code directory (possible gap or renamed).
@@ -330,17 +330,14 @@ DISCOVERY_BEGIN: architectural_components
 ## Architectural components
 
 Derived from SAD decomposition view and current code structure.
-SAD source: `designs/SAD/SAD-3-Decomposition-View.md`
 
 | SAD Component | Code directory | Type | Notes |
 |---------------|----------------|------|-------|
-| LooporaData Portal | `portal/` | deployable service | ... |
-| Container Instrumentation Pipeline | `attestation/` | deployable service | worker + server |
+| <component name> | `<dir>/` | deployable service | <notes> |
 | ...  | | | |
 
 **In code but not in SAD** (newer than SAD or not yet documented):
-- `healthcare-calculator/` — Healthcare pricing calculator service
-- `panome/` — MCP-based data discovery service
+- `<dir>/` — <one-line description>
 
 **In SAD but not in code** (removed, renamed, or not yet implemented):
 - (list if any)
@@ -391,8 +388,8 @@ DISCOVERY_BEGIN: compliance_standards
 ## Compliance standards
 
 **Detected and confirmed**:
-- HIPAA — confirmed in `designs/SOP/...` (PHI handling requirements)
-- SOC 2 — confirmed in `designs/SOP/...` (trust service criteria)
+- HIPAA — confirmed in `<file>` (PHI handling requirements)
+- SOC 2 — confirmed in `<file>` (trust service criteria)
 
 **Detected but unconfirmed** (found no clear keyword match after reading files):
 - (list any if applicable)

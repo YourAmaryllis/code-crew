@@ -1,8 +1,10 @@
 from shared.tools.api_spec_tool import ApiSpecTool
+from shared.tools.async_job import AsyncJobTool, CiStatusTool  # CiStatusTool is a backward-compat alias
 from shared.tools.ask_human import AskHumanTool
 from shared.tools.figma_reader import FigmaReaderTool
 from shared.tools.knowledge_reader import KnowledgeReaderTool
 from shared.tools.workspace_reader import WorkspaceReaderTool
+from shared.tools.code_index import CodeIndexTool
 from shared.tools.dod_checker import DoDCheckerTool
 from shared.tools.platform_shell import PlatformShellTool
 from shared.tools.python_repl import PythonREPLTool
@@ -15,10 +17,13 @@ SOPReaderTool = KnowledgeReaderTool
 
 __all__ = [
     "ApiSpecTool",
+    "AsyncJobTool",
+    "CiStatusTool",  # backward-compat alias
     "AskHumanTool",
     "FigmaReaderTool",
     "KnowledgeReaderTool",
     "WorkspaceReaderTool",
+    "CodeIndexTool",
     "SOPReaderTool",  # alias
     "DoDCheckerTool",
     "PlatformShellTool",

@@ -1,10 +1,11 @@
 """
-Langfuse telemetry via the official Langfuse Python SDK.
+Langfuse telemetry via the official Langfuse Python SDK (v4+).
 
-The SDK initialises its own OTel TracerProvider that pipes spans to Langfuse.
-Calling setup_langfuse() BEFORE any crewai import means CrewAI's own OTel spans
-flow to Langfuse automatically (CrewAI skips installing its own provider when it
-finds one already registered).
+The SDK registers its own OTel TracerProvider with a LangfuseSpanProcessor.
+Langfuse v4 only exports spans from known scopes ("langfuse-sdk",
+"opentelemetry.instrumentation.crewai", etc.) — spans from arbitrary scopes
+like "code-crew" are silently dropped by is_default_export_span. We therefore
+use _client._otel_tracer (scope: "langfuse-sdk") for all manually created spans.
 
 Required env vars:
     LANGFUSE_PUBLIC_KEY   pk-lf-…
@@ -97,7 +98,9 @@ def wire_crewai_events(crewai_event_bus) -> None:
         CrewKickoffFailedEvent,
     )
 
-    tracer = otel_trace.get_tracer("code-crew")
+    # _client._otel_tracer has scope "langfuse-sdk" and passes the v4 span filter.
+    # otel_trace.get_tracer("code-crew") is silently dropped — do not use it.
+    tracer = _client._otel_tracer
     _crew_spans: dict[str, object] = {}   # crew_name → root OTel Span
     _gen_spans: dict[str, object] = {}    # call_id   → generation OTel Span
 

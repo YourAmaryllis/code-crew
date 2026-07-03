@@ -1,7 +1,8 @@
-# Scan Design — `/init`, `/explore`, `/verify`
+# ADD-002: /init, /explore, and /verify Command Design
 
-**Status:** Current
-**Last updated:** 2026-06-27
+**Status:** Accepted
+**Date:** 2026-06-27
+**Related:** [SAD-001: code-crew system architecture](../sad/SAD-001-code-crew.md)
 
 ---
 
@@ -113,7 +114,7 @@ Six sequential LLM tasks — a different category of work entirely:
 
 `/verify` reads `structure.md` (from `/explore`) as context, but re-examines source files directly — it cannot rely on `/explore` having been run recently.
 
-REQUIRED findings trigger a REPL prompt to open Jira/Linear/GitHub Issues tickets for each.
+REQUIRED findings trigger a REPL prompt to open issue tracker tickets for each.
 
 ---
 

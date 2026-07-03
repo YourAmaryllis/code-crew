@@ -336,5 +336,46 @@ def memory_show(jira):
     click.echo(ctx if ctx else "No relevant memory entries found.")
 
 
+# ---------------------------------------------------------------------------
+# Explore
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.argument("path", default="", required=False)
+def explore(path):
+    """Scan the project, detect stacks and build/test commands, identify OTM scopes.
+
+    \b
+    Examples:
+      code-crew explore            # scan cwd
+      code-crew explore ../myapp   # scan another directory
+    """
+    from rich.console import Console
+    from code_crew.repl import _run_explore
+    _run_explore(path, Console())
+
+
+# ---------------------------------------------------------------------------
+# Threat
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.argument("target", default="", required=False)
+def threat(target):
+    """Generate or refresh OTM threat models for the current project.
+
+    Reads the component inventory saved by 'explore'. Pass an optional project
+    id to target a single scope; without one, generates all identified projects.
+
+    \b
+    Examples:
+      code-crew threat             # all projects in cwd
+      code-crew threat portal      # only the portal scope
+    """
+    from rich.console import Console
+    from code_crew.repl import _run_threat
+    _run_threat(target, Console())
+
+
 if __name__ == "__main__":
     cli()
