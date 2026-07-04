@@ -29,7 +29,8 @@ The manager's revision feedback is listed in the task context under
 
 The task context includes **pre-scanned files** and **Terraform deployment references**.
 Use those first. Only call `workspace_reader` or `platform_shell` for specific files that
-are not already in the context. Do NOT search `ops/` — Terraform information is pre-injected.
+are not already in the context. Do NOT search the infrastructure directory — Terraform
+information is already pre-injected into this context.
 If you search for something twice and find nothing, accept the default and note `# inferred`.
 
 For each gap:

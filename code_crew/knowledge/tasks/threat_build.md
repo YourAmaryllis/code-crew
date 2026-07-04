@@ -213,9 +213,9 @@ An existing `designs/TMD/<service>.yaml` may be in your context or available to 
 ## Pre-scanned context — do NOT re-read these
 
 The task context includes **pre-scanned files** (dependency manifests, entry points) and a
-**Terraform deployment references** block (grep of `ops/` for this service). Use this information
-directly — do NOT call `workspace_reader` or `platform_shell` to re-read files that are already
-in the context. Doing so wastes API calls and may trigger rate limits.
+**Terraform deployment references** block (grep of the infrastructure directory for this service).
+Use this information directly — do NOT call `workspace_reader` or `platform_shell` to re-read
+files that are already in the context. Doing so wastes API calls and may trigger rate limits.
 
 Only use `workspace_reader` or `platform_shell` for files NOT already present in the context.
 
@@ -264,9 +264,14 @@ MITIGATION: <name>
   mitigatedThreats: [T-XXX]
 ```
 
-Use `search_ast` and `code_index` to check whether each control is already implemented before assigning `state`. Only call `workspace_reader read_file` when a search finds a specific file that needs full context.
+**CRITICAL — do NOT call any tools (search_ast, code_index, workspace_reader, platform_shell) during Phase 3.** You already investigated the codebase in Phase 1 and Phase 2. Use only what is in your context to assign `state`:
+- If the Security Lead's context explicitly states a control is implemented (e.g. "mTLS confirmed in TF", "JWT validation in main.go"), assign `state: implemented`.
+- Otherwise assign `state: planned`. This is correct and does not require verification — planned mitigations are reviewed by the human afterwards.
+Tool calls during Phase 3 cause timeouts by consuming the remaining run budget.
 
 ### Part 2 — OTM YAML (immediately after all mitigations)
+
+**CRITICAL — do NOT call any tools when generating the OTM YAML.** Do NOT call `workspace_reader`, `platform_shell`, `knowledge_reader`, or any other tool. Do NOT search for "T-001", "OTM", "threat_model", "zones:", or any other pattern. Do NOT try to find an OTM template or example — the structure is defined below and in the Security Lead's message. Generate the YAML immediately from the data you already have in context. Tool calls at this stage will cause a timeout.
 
 After the last MITIGATION block, output the complete OTM YAML as plain text.
 Follow the structure provided by the Security Lead exactly.

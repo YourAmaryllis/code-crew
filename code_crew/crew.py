@@ -534,6 +534,64 @@ def _load_project_structure() -> str:
         return ""
 
 
+def _load_structure_sections(*headers: str) -> str:
+    """Extract named ## sections from structure.md plus the # title line.
+
+    Pass header names without the leading '## ' (e.g. 'Terraform infrastructure').
+    Sections not present in the file are silently omitted.
+    Pass no headers to get the full file.
+
+    Role presets (use these constants instead of hard-coding header lists):
+      STRUCTURE_SECURITY  — stacks, architecture, terraform, components, summary
+      STRUCTURE_DEVOPS    — stacks, CI/CD, terraform, commands, components
+      STRUCTURE_ENGINEER  — stacks, architecture, migration tool, commands, components
+    """
+    import re as _sre
+    full = _load_project_structure()
+    if not full or not headers:
+        return full
+    parts = _sre.split(r"^(?=## )", full, flags=_sre.MULTILINE)
+    result: list[str] = []
+    for part in parts:
+        stripped = part.strip()
+        if not stripped.startswith("## "):
+            result.append(part)
+            continue
+        for h in headers:
+            if stripped.startswith(f"## {h}"):
+                result.append(part)
+                break
+    return "\n\n".join(p.strip() for p in result if p.strip())
+
+
+STRUCTURE_SECURITY = (
+    "Detected stacks",
+    "Detected architecture",
+    "Terraform infrastructure",
+    "Architectural components",
+    "Project summary",
+    "Architect verification notes",
+)
+
+STRUCTURE_DEVOPS = (
+    "Detected stacks",
+    "CI/CD tooling",
+    "Terraform infrastructure",
+    "Project commands",
+    "Architectural components",
+)
+
+STRUCTURE_ENGINEER = (
+    "Detected stacks",
+    "Detected architecture",
+    "Detected migration tool",
+    "Project commands",
+    "Architectural components",
+    "Project summary",
+    "Architect verification notes",
+)
+
+
 def _skill_search_dirs() -> list[Path]:
     """Ordered skill search path: project → user → bundled."""
     return [
@@ -666,7 +724,7 @@ def build_drift_single_task(
 
 
 def _format_drift_context(drift_input: dict) -> str:
-    structure = _load_project_structure()
+    structure = _load_structure_sections(*STRUCTURE_DEVOPS)
     sections: list[str] = []
     skills = _load_active_skills()
     if skills:
@@ -905,7 +963,7 @@ def build_verify_crew(project_root: str = "") -> Crew:
     td = _KNOWLEDGE / "tasks"
     tc = load_bundle_tasks(td)
 
-    structure = _load_project_structure()
+    structure = _load_structure_sections(*STRUCTURE_SECURITY)
     stacks = os.environ.get("CODE_CREW_STACKS", "")
     arch = os.environ.get("ARCHITECTURE_STYLE", "")
     compliance = os.environ.get("CODE_CREW_COMPLIANCE", "")
@@ -1030,7 +1088,8 @@ def build_explore_single_task(explore_input: dict, extra_context: str = "") -> s
             ctx += f"- AWS profile: `{terraform['aws_profile']}`\n"
         modules = terraform.get("modules", [])
         if modules:
-            ctx += f"- Modules ({len(modules)} in `{terraform.get('modules_path', 'ops/modules')}/`): {', '.join(modules[:15])}"
+            modules_path = terraform.get("modules_path") or "infra/modules"
+            ctx += f"- Modules ({len(modules)} in `{modules_path}/`): {', '.join(modules[:15])}"
             if len(modules) > 15:
                 ctx += f" … +{len(modules) - 15} more"
             ctx += "\n"
@@ -1156,7 +1215,7 @@ def build_otm_scope_task(inventory: dict) -> Crew:
         lines.append("### Sub-executables (cmd/ entries)\n" +
                      "\n".join(f"- {e}" for e in inventory["cmd_entries"]))
     if inventory.get("infra_modules"):
-        lines.append("### Infrastructure modules (Terraform ops/modules/)\n" +
+        lines.append("### Infrastructure modules\n" +
                      "\n".join(f"- {m}" for m in inventory["infra_modules"]))
     if inventory.get("external_services"):
         lines.append("### External services detected in source\n" +
@@ -1200,15 +1259,31 @@ def _pre_read(path: str, root: "Path | None" = None) -> str:
         return ""
 
 
-def _terraform_grep(component_dirs: list[str], root: "Path | None" = None) -> str:
-    """Grep ops/ Terraform for any reference to the component directories.
+def _terraform_grep(
+    component_dirs: list[str],
+    root: "Path | None" = None,
+    infra_dir: str = "",
+) -> str:
+    """Grep the infrastructure directory for Terraform references to component dirs.
 
+    Uses infra_dir if supplied (value from inventory.json terraform.root).
+    Falls back to scanning common directory names.
     Returns a compact summary so agents don't burn API calls searching Terraform.
     """
     import subprocess, pathlib, re
     base = root or pathlib.Path.cwd()
-    ops_dir = base / "ops"
-    if not ops_dir.exists():
+    search_dir: "pathlib.Path | None" = None
+    if infra_dir:
+        candidate = base / infra_dir
+        if candidate.exists():
+            search_dir = candidate
+    if search_dir is None:
+        for name in ("infra", "terraform", "infrastructure", "ops"):
+            candidate = base / name
+            if candidate.exists() and any(candidate.rglob("*.tf")):
+                search_dir = candidate
+                break
+    if search_dir is None:
         return ""
 
     # Build patterns from component directory names (handles fhir_proxy → fhir/proxy, fhir-proxy)
@@ -1219,7 +1294,7 @@ def _terraform_grep(component_dirs: list[str], root: "Path | None" = None) -> st
 
     try:
         result = subprocess.run(
-            ["grep", "-rn", "--include=*.tf", "-E", pattern, str(ops_dir)],
+            ["grep", "-rn", "--include=*.tf", "-E", pattern, str(search_dir)],
             capture_output=True, text=True, timeout=10,
         )
         lines = result.stdout.splitlines()
@@ -1243,8 +1318,9 @@ def _build_threat_context(project: dict, inventory: dict, revision_feedback: str
     """
     import pathlib
     stacks = inventory.get("stacks", [])
-    structure = _load_project_structure()
+    structure = _load_structure_sections(*STRUCTURE_SECURITY)
     root = pathlib.Path.cwd()
+    tf_info = inventory.get("terraform", {})
 
     ctx_lines = [
         # This banner is FIRST so the agent reads it before any investigation.
@@ -1306,13 +1382,17 @@ def _build_threat_context(project: dict, inventory: dict, revision_feedback: str
     # Use grep output stored by /explore if available; fall back to running grep now.
     # Either way the agent gets the raw lines — no fragile parsing needed.
     stored_grep = project.get("terraform_grep")  # set by _enrich_project_terraform
-    tf_grep = stored_grep if stored_grep is not None else _terraform_grep(project["components"], root)
+    infra_root = tf_info.get("root", "")
+    tf_grep = stored_grep if stored_grep is not None else _terraform_grep(
+        project["components"], root, infra_dir=infra_root
+    )
 
     if tf_grep:
         ctx_lines.append(
-            "## Terraform deployment references (pre-scanned — do NOT re-grep ops/)\n\n"
+            "## Terraform deployment references (pre-scanned)\n\n"
             "Every Terraform line mentioning this service's components. "
-            "Read these to determine the Terraform key, CPU/memory, ALB path, and env vars.\n\n"
+            "Read these to determine the Terraform key, CPU/memory, ALB path, and env vars. "
+            "Do NOT re-search the infrastructure directory — this output is already complete.\n\n"
             f"```\n{tf_grep}\n```"
         )
     else:
@@ -1320,7 +1400,7 @@ def _build_threat_context(project: dict, inventory: dict, revision_feedback: str
             "## Terraform deployment references\n\n"
             "No explicit Terraform resource found for this service. "
             "Default deployment: **AWS ECS Fargate** (inferred from `ecs-deployment` stack). "
-            "Do not search ops/ for this service."
+            "Do not search the infrastructure directory — it was already scanned and found nothing."
         )
 
     if structure:

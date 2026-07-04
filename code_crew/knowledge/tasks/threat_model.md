@@ -41,7 +41,7 @@ Work through the four OWASP questions in order. Do not skip a phase.
 **Before asking the Architect to read anything**, read the task context. It contains:
 
 - **Pre-scanned files** — dependency manifests (`go.mod`, `package.json`) and entry point files already read by the system. Do NOT ask the Architect to re-read these; their content is already in context.
-- **Terraform deployment references** — grep output from `ops/` showing every Terraform line that mentions this service's components. Use this to determine CPU/memory, ALB paths, environment variables, and ECS task config. Do NOT ask the Architect to search or grep `ops/` for deployment information that is already present.
+- **Terraform deployment references** — grep output from the infrastructure directory showing every Terraform line that mentions this service's components. Use this to determine CPU/memory, ALB paths, environment variables, and deployment config. Do NOT ask the Architect to search the infrastructure directory — deployment information is already present in this context.
 
 If the Terraform section says "no explicit Terraform resource found", the service uses ECS Fargate with shared module defaults — treat it as `deployment: AWS ECS Fargate`.
 
@@ -199,11 +199,12 @@ Direct the Architect to do the following in a SINGLE response (no separate OTM d
 
 1. For each threat, generate a mitigation:
    - State the control that addresses the threat
-   - Check whether it is already implemented — use `search_ast` and `code_index` search
-     before reading files (e.g. `search_ast pattern="tls.Config{$$$}" language="go"`,
-     `code_index search "JWT token validation"`, `code_index search "audit log PHI access"`)
-   - If evidence found: `state: implemented`
-   - If planned but not yet in code: `state: planned`
+   - Assign `state: planned` unless you have explicit evidence of implementation already in the
+     context from Phases 1 and 2 (e.g. "mTLS confirmed", "JWT validation in main.go"). Do NOT
+     call tools to check implementation state — Phase 3 must not use tool calls; using them
+     burns the run budget and causes timeouts.
+   - If explicit evidence already in context: `state: implemented`
+   - Otherwise: `state: planned`
 
 2. Immediately after all mitigations, output the complete OTM YAML:
    - Include all zones, components, dataflows, threats, and mitigations in the YAML

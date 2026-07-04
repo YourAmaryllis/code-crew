@@ -3174,10 +3174,11 @@ def _run_explore(target: str, console: Console) -> None:
             )
 
         _mods = terraform_info.get("modules", [])
-        _mods_path = terraform_info.get("modules_path", "ops/modules")
+        _mods_path = terraform_info.get("modules_path", "")
         if _mods:
+            _mods_label = f"`{_mods_path}/`" if _mods_path else "infrastructure modules directory"
             _tf_parts.append(
-                f"\n### Modules (`{_mods_path}/`)\n\n"
+                f"\n### Modules ({_mods_label})\n\n"
                 + ", ".join(f"`{m}`" for m in _mods)
             )
 
@@ -3427,13 +3428,15 @@ def _run_explore(target: str, console: Console) -> None:
                 if sub.is_dir():
                     cmd_entries.append(f"{svc}/cmd/{sub.name}")
 
-    # Infrastructure modules from ops/modules/
+    # Infrastructure modules — use detected path from terraform_info
     infra_modules: list[str] = []
-    ops_modules = root / "ops" / "modules"
-    if ops_modules.is_dir():
-        for mod in sorted(ops_modules.iterdir()):
-            if mod.is_dir():
-                infra_modules.append(mod.name)
+    _modules_path = terraform_info.get("modules_path", "") if terraform_info else ""
+    if _modules_path:
+        _modules_dir = root / _modules_path
+        if _modules_dir.is_dir():
+            for mod in sorted(_modules_dir.iterdir()):
+                if mod.is_dir():
+                    infra_modules.append(mod.name)
 
     # Key files: build a reading list for the manager to direct the agent
     # (dependency manifests, entry points, Terraform module roots)
@@ -3468,13 +3471,14 @@ def _run_explore(target: str, console: Console) -> None:
                     break
 
     # Terraform module roots (one variables.tf or main.tf per module)
-    for mod_name in infra_modules:
-        mod_path = root / "ops" / "modules" / mod_name
-        for tf_file in ("main.tf", "variables.tf"):
-            p = mod_path / tf_file
-            if p.exists():
-                key_files.append({"type": "terraform-module", "path": str(p.relative_to(root))})
-                break
+    if _modules_path:
+        for mod_name in infra_modules:
+            mod_path = root / _modules_path / mod_name
+            for tf_file in ("main.tf", "variables.tf"):
+                p = mod_path / tf_file
+                if p.exists():
+                    key_files.append({"type": "terraform-module", "path": str(p.relative_to(root))})
+                    break
 
     inventory = {
         "svc_dirs": svc_dirs,
@@ -3482,6 +3486,7 @@ def _run_explore(target: str, console: Console) -> None:
         "infra_modules": infra_modules,
         "key_files": key_files,
         "stacks": stacks,
+        "terraform": terraform_info,
     }
 
     console.print(f"  Services: {', '.join(svc_dirs) or 'none'}")
@@ -3547,8 +3552,8 @@ def _run_explore(target: str, console: Console) -> None:
     console.print(f"\n[bold]OTM projects identified:[/bold] {', '.join(p['id'] for p in projects)}")
 
     # --- Enrich projects with Terraform deployment facts ---
-    # Run Python-side grep so /threat never needs to search ops/ at all.
-    _enrich_project_terraform(projects, root)
+    # Run Python-side grep so /threat never needs to search the infrastructure directory.
+    _enrich_project_terraform(projects, root, terraform_info)
 
     # --- Save inventory for /threat ---
     import json as _json
@@ -3649,18 +3654,36 @@ def _convert_tmd(tmd_file: Path, tmd_dir: Path, root: Path, console: Console) ->
         console.print(f"[yellow]  Unknown threat_modeling.tool: {tool!r} — expected threat-dragon, irius-risk, or microsoft-tmmt[/yellow]")
 
 
-def _enrich_project_terraform(projects: list[dict], root: "Path") -> None:
+def _enrich_project_terraform(
+    projects: list[dict],
+    root: "Path",
+    terraform_info: "dict | None" = None,
+) -> None:
     """Store raw Terraform grep output per project in inventory.
 
+    Uses the infrastructure directory detected by /explore (from terraform_info).
+    Falls back to scanning common directory names if terraform_info is absent.
     Stores the raw deduplicated grep output so /threat can inject it directly
-    without running any searches at threat-model time. Fragile regex extraction
-    is intentionally avoided — the agent reads the raw output and understands it.
+    without running any searches at threat-model time.
     Runs silently — failure is non-fatal.
     """
     import subprocess, re as _re
 
-    ops_dir = root / "ops"
-    if not ops_dir.exists():
+    # Resolve infra directory from explore results
+    infra_dir: "Path | None" = None
+    if terraform_info:
+        tf_root = terraform_info.get("root", "")
+        if tf_root:
+            candidate = root / tf_root
+            if candidate.exists():
+                infra_dir = candidate
+    if infra_dir is None:
+        for name in ("infra", "terraform", "infrastructure", "ops"):
+            candidate = root / name
+            if candidate.exists() and any(candidate.rglob("*.tf")):
+                infra_dir = candidate
+                break
+    if infra_dir is None:
         return
 
     root_str = str(root) + "/"
@@ -3685,7 +3708,7 @@ def _enrich_project_terraform(projects: list[dict], root: "Path") -> None:
 
         try:
             result = subprocess.run(
-                ["grep", "-rn", "--include=*.tf", "-E", pattern, str(ops_dir)],
+                ["grep", "-rn", "--include=*.tf", "-E", pattern, str(infra_dir)],
                 capture_output=True, text=True, timeout=10,
             )
         except Exception:
@@ -3781,7 +3804,10 @@ def _run_threat(target: str, console: Console) -> None:
     _max_revisions = 3
     _max_lint_retries = 2
     _proj_cfg = _read_project_yaml()
-    _max_run_minutes = int(_proj_cfg.get("flow", {}).get("max_run_minutes", 30))
+    _max_run_minutes = int(
+        _proj_cfg.get("threat", {}).get("timeout_minutes")
+        or _proj_cfg.get("flow", {}).get("max_run_minutes", 60)
+    )
     _timeout_secs = _max_run_minutes * 60 if _max_run_minutes > 0 else None
 
     console.print(f"\n[bold]Threat modeling:[/bold] {', '.join(p['id'] for p in projects)}\n")
