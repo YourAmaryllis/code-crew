@@ -23,6 +23,15 @@ they investigate and report back.
 to use `cat >`, `tee`, `echo >`, or any shell command that writes files. The Architect
 must output the final OTM YAML as plain text in their response — the caller handles writing.
 
+**CRITICAL: This is a FULL SERVICE threat model — not a feature change.** Do NOT ask for a
+Jira ticket number, story ID, or feature ADD. There is no "previous attempt" to recover — start
+fresh from the pre-scanned context and the codebase. Do NOT ask the Architect to search for
+Jira ticket patterns or look for feature documents.
+
+**CRITICAL: When delegating to the Architect, ALWAYS include the full data in the context.**
+Never say "we have established X" without actually embedding X. If you have established trust
+zones, paste the complete ZONE blocks into the context you send to the Architect.
+
 Work through the four OWASP questions in order. Do not skip a phase.
 
 ---
@@ -138,6 +147,10 @@ COMPONENT: <Proper descriptive name — what it IS and who uses it>
 
 ## Phase 2 — What can go wrong?
 
+**IMPORTANT: When delegating Phase 2 to the Architect**, include the complete zone and component
+list you established in Phase 1 directly in the delegation context. Do not reference them —
+paste them in full. The Architect does not remember the Phase 1 conversation.
+
 For each component, select the appropriate framework(s) and identify threats.
 
 **Framework selection** (apply all that match — do not limit to one):
@@ -169,37 +182,47 @@ If HIPAA/GDPR active, every PHI-handling component needs LINDDUN threats:
 
 ---
 
-## Phase 3 — What are we going to do about it?
+## Phase 3 — What are we going to do about it? (combined with OTM output)
 
-For each threat, identify the mitigation:
-- State the control that addresses the threat
-- Check whether it is already implemented — direct the Architect to use `search_ast` and `code_index` search before reading files (e.g. `search_ast pattern="tls.Config{$$$}" language="go"`, `code_index search "JWT token validation"`, `code_index search "audit log PHI access"`)
-- If evidence found: `state: implemented`
-- If planned but not yet in code: `state: planned`
-- Note residual risk (likelihood + impact AFTER mitigation is applied)
+**CRITICAL — DO NOT send a separate delegation for OTM generation after Phase 3.**
+Phase 3 and OTM YAML output are combined into a single Architect delegation. The Architect
+generates mitigations AND the complete OTM YAML in one response. Sending a second delegation
+to "assemble the OTM" requires re-embedding all data and causes NVIDIA timeouts — do NOT do it.
 
----
+**When delegating Phase 3+OTM to the Architect**, include the COMPLETE zones, components, AND
+threats you collected in Phases 1 and 2 directly in the delegation context.
+Do not write "THREATS: (as provided in the previous response)" — the Architect has no memory
+of previous responses. Paste every ZONE block, every COMPONENT block, and every THREAT block
+in full.
 
-## Phase 4 — Did we do a good enough job?
+Direct the Architect to do the following in a SINGLE response (no separate OTM delegation):
 
-Before writing the OTM, verify:
-- [ ] Every component has a proper name and deployment attribute
-- [ ] Every `private` and `data` zone component has at least one connection
-- [ ] Every standalone component has a documented reason
-- [ ] Every component has at least the minimum required threats for its type
-- [ ] Every PHI-handling component has LINDDUN threats (if HIPAA/GDPR active)
-- [ ] Every threat has a mitigation
-- [ ] Residual risks are documented
+1. For each threat, generate a mitigation:
+   - State the control that addresses the threat
+   - Check whether it is already implemented — use `search_ast` and `code_index` search
+     before reading files (e.g. `search_ast pattern="tls.Config{$$$}" language="go"`,
+     `code_index search "JWT token validation"`, `code_index search "audit log PHI access"`)
+   - If evidence found: `state: implemented`
+   - If planned but not yet in code: `state: planned`
 
-If any item is unchecked, direct the Architect to investigate further before producing the OTM.
+2. Immediately after all mitigations, output the complete OTM YAML:
+   - Include all zones, components, dataflows, threats, and mitigations in the YAML
+   - Every component MUST have a `trustZone` field
+   - End with exactly: `OTM BUILD COMPLETE`
+
+**Phase 4 checklist** — verify before accepting the Architect's OTM:
+- Every component has a proper name and deployment attribute
+- Every `private` and `data` zone component has at least one connection
+- Every standalone component has a documented reason
+- Every component has at least the minimum required threats for its type
+- Every threat has a mitigation
 
 ---
 
 ## Output
 
-Once all four phases are complete, produce the full OTM YAML followed by a residual risk summary.
-
-The residual risk summary (after the YAML) must answer:
+The Architect returns mitigations + OTM YAML in one Phase 3 response. Extract the OTM YAML
+from that response. Then produce a residual risk summary answering:
 - What is the highest-residual-risk area and why?
 - What planned mitigations, if not implemented, would most reduce residual risk?
 - Is there any unmitigated HIGH-likelihood + HIGH-impact threat? If so, it is a blocker.

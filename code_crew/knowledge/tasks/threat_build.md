@@ -70,8 +70,8 @@ Finds code by shape, not text. Zero false positives from comments or strings. Ex
 ### 3. `workspace_reader` with `read_file` — full file reads (use last)
 
 Only read a whole file when:
-- The dependency manifest (`go.mod`, `package.json`) — always read this, it's the most information-dense single file
-- The entry point (`main.go`, `cmd/*/main.go`) — always read; reveals connections and security controls
+- The **dependency manifest** for the project's stack — always read this; it reveals external SDK imports, database drivers, and auth libraries
+- The **service entry point** for the stack — always read; it reveals what the service connects to and its security controls
 - A specific file identified by `code_index` or `search_ast` that needs full context
 
 Do NOT read entire internal packages to find one pattern — search first.
@@ -80,9 +80,22 @@ Do NOT read entire internal packages to find one pattern — search first.
 
 ## How to investigate
 
+### Read the right files for the project's stack
+
+The active tech stacks in the task context tell you what the project uses. Use that to
+determine which files matter — you do not need explicit instructions to read specific filenames.
+For example: if `go-backend` is active, the dependency manifest is `go.mod`; if `typescript-react`
+is active, it is `package.json`. Read the **dependency manifest** and the **service entry point**
+for the stack, then read infrastructure files (Terraform, CDK, Helm) for the service.
+
+Use `code_index` and `search_ast` before reading whole files — one search call replaces
+reading 3–5 files.
+
 ### Trust zone analysis — output ZONE blocks only
 
 When the Security Lead asks for trust zones, output **only the ZONE blocks** — no narrative, no explanation, no bullet lists of actors or boundaries. This keeps the response compact and fast.
+
+**CRITICAL: For the Zone question ONLY — do NOT call `knowledge_reader`, `workspace_reader`, or `platform_shell`.** All needed context is already in your task context (pre-scanned files and Terraform references). Extra file reads expand the context unnecessarily and cause slow NVIDIA response times. Answer directly from what is already in context.
 
 Derive zones from the pre-scanned context already provided:
 - Infrastructure grep output → network placement, IAM roles, which services exist
@@ -106,32 +119,6 @@ ZONE: <name>
 - Operators/admins → own zone, separate from end users
 
 Do NOT read the dependency manifest, the service entry point, or search for "trust zone" text. Do NOT run `find`, `grep`, or `ls`.
-
----
-
-### When the Security Lead asks about a component or service:
-
-1. **Read the dependency manifest first** — the package manifest for the service's language stack (`go.mod`, `package.json`, `requirements.txt`, `pyproject.toml`, `pom.xml`, etc.). This reveals:
-   - External SDK imports (aws-sdk, anthropic, openai, auth0, stream-chat)
-   - Database drivers (postgres, mysql, redis)
-   - Auth libraries (jwt, oauth2, oidc)
-
-2. **Read the entry point** — the main server file for the stack (e.g. `cmd/*/main.go` for Go, `index.ts` / `server.ts` for Node, `main.py` / `app.py` for Python, `Application.java` for Spring). This reveals:
-   - What the service does (HTTP server, worker, Lambda handler, pipeline)
-   - What it connects to (database URLs, queue ARNs, external API clients)
-   - Existing security controls (TLS config, auth middleware, JWT validation)
-
-3. **Read relevant infrastructure modules** — Terraform, CDK, Pulumi, or Helm files for this service's compute, database, queue, and KMS resources. This reveals:
-   - Exact deployment type and runtime version
-   - Encryption settings (`storage_encrypted`, `kms_key_id`, in-transit TLS)
-   - Network placement (VPC subnet, security groups)
-
-4. **Check for existing security controls** — use `search_ast` and `code_index` before reading files:
-   - TLS: `search_ast pattern="tls.Config{$$$}" language="go"` (Go), `code_index search "TLS config certificate"` (any language)
-   - JWT: `search_ast pattern="jwt.Parse($TOKEN, $$$)" language="go"` (Go), `code_index search "JWT token verify decode"` (any)
-   - mTLS: `code_index search "mutual TLS client certificate verification"`
-   - Audit logging: `code_index search "audit log security event"` — faster than grepping log calls
-   - Input validation: `search_ast pattern="$V.Validate($$$)" language="go"` or `code_index search "request validation sanitise input"`
 
 ---
 
@@ -258,9 +245,30 @@ This rule exists because excessive tool calls exhaust API rate limits and extend
 
 ---
 
-## When directed to produce the final OTM
+## When directed to generate mitigations AND produce the OTM in one response
 
-Write the complete OTM YAML as plain text in your response.
+The Security Lead will ask you to do both in a **single response** — do NOT split into two replies:
+
+### Part 1 — Mitigations
+
+For each THREAT block in the context, output a MITIGATION block:
+```
+MITIGATION: <name>
+  id: M-XXX
+  name: <short name>
+  description: <control description>
+  risk:
+    likelihood: LOW|MEDIUM|HIGH   (residual — after mitigation)
+    impact: LOW|MEDIUM|HIGH
+  state: implemented|planned
+  mitigatedThreats: [T-XXX]
+```
+
+Use `search_ast` and `code_index` to check whether each control is already implemented before assigning `state`. Only call `workspace_reader read_file` when a search finds a specific file that needs full context.
+
+### Part 2 — OTM YAML (immediately after all mitigations)
+
+After the last MITIGATION block, output the complete OTM YAML as plain text.
 Follow the structure provided by the Security Lead exactly.
 
 **Every component MUST have a `trustZone` field set to a zone id that exists in the `trustZones` section.** A component without a `trustZone`, or with a `trustZone` that does not match a defined zone id, will cause the gate to reject the model. Cross-check every component against the zone list before writing the final OTM.
@@ -272,7 +280,7 @@ Follow the structure provided by the Security Lead exactly.
 - `description` fields almost always need quotes — they frequently contain colons
 - `likelihood` and `impact` must be written as `likelihood: HIGH` (key: value), never as bare `HIGH`
 
-End with exactly:
+End the entire response (after the YAML) with exactly:
 ```
 OTM BUILD COMPLETE
 ```

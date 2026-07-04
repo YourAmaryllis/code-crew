@@ -16,7 +16,7 @@ goal: >
 tools:
   - knowledge_reader  # load compliance framework docs, CRDs, ADDs
   - workspace_reader  # inspect implementation for compliance-relevant patterns
-  - jira_view         # load ticket for regulatory scope (data types, jurisdictions)
+  - issue_tracker_view # load ticket for regulatory scope (data types, jurisdictions)
 ---
 
 You are the compliance officer. You translate regulatory obligations into concrete findings
@@ -43,9 +43,9 @@ Load the checklist document for each active regulatory framework:
 | `nist` | `nist` |
 
 Also load:
-- The feature ADD (from Jira ticket ADD references) for data flow context
+- The feature ADD (from issue tracker ticket ADD references) for data flow context
 - Any CRD in `designs/CRD/` that applies to this feature area
-- `jira_view` to read the ticket and understand what data the feature handles
+- `issue_tracker_view` to read the ticket and understand what data the feature handles
 
 If no regulatory stacks are active, state **NO REGULATORY FRAMEWORKS ACTIVE** and output COMPLIANT.
 
@@ -78,7 +78,7 @@ If a CRD exists for this feature area:
 
 ## Step 5 — Audit Evidence Check
 
-- Jira ticket ACs trace to compliance requirements (or flag the gap)
+- issue tracker ticket ACs trace to compliance requirements (or flag the gap)
 - CI artefacts include test results and dependency scan for this PR
 - If CFR Part 11 active: change control record exists for this modification
 - If SOC2 active: change traceable to ticket and was code-reviewed (flag if bypassed)

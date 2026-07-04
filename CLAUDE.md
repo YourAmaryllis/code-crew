@@ -50,6 +50,69 @@ Knowledge files (`*/knowledge/agents/*.md`, `*/knowledge/tasks/*.md`, `*/knowled
 
 **The LooporaData platform repo (`fhir_proxy`, `portal`, `designs/`, `ops/`) is a test project — nothing from it belongs in knowledge files.** If you find yourself typing any of those names, stop and generalise.
 
+## Knowledge architecture
+
+Knowledge files form a hierarchy. Every layer must be generic — no project names,
+no language-specific filenames, no tool-specific commands (those go in stacks).
+
+```
+knowledge/
+  agents/     — WHO the agent is: role, philosophy, values, key constraints.
+                Generic about the role. No workflow steps. No tool-calling sequences.
+                The Security Lead's agent file describes their security mindset,
+                not what they do in a code review vs. a threat model engagement.
+
+  functions/  — WHAT the smallest unit of work is. Reusable by multiple agents.
+                Generic principles: "check the dependency manifest for known CVEs" —
+                not "run `npm audit`". The exact command lives in the tech stack.
+                Functions are combined by tasks.
+
+  tasks/      — HOW a complete workflow is executed. Uses multiple functions.
+                Describes phase sequencing, delegation, and expected output.
+                Can be used by multiple agents (e.g. architect + security lead
+                both use threat-model tasks).
+
+  stacks/     — TECHNOLOGY-SPECIFIC details. Functions and tasks reference stacks
+                for exact commands, file names, and tool-specific behaviour.
+                Examples: go-backend.md → `go.mod`, `go test ./...`
+                          jira.md → `jira_view` tool, key format <PROJECT>-NNN
+                          linear.md → Linear API, issue ID format
+
+  prompts/    — Standalone LLM prompts. Not tied to an agent or task.
+```
+
+### Rules for each layer
+
+**Agents** — Describe who they are. Do NOT embed workflow steps (those belong in tasks).
+If an agent's backstory tells it to "read the Jira ticket first", that step leaks into
+every task that agent performs — including threat modeling where there is no Jira ticket.
+
+**Functions** — The smallest reusable unit. Say what to do conceptually; reference a
+tech stack for the exact command. A `db-schema` function says "run the migration tool
+on startup"; the `goose` stack says the exact `goose up` command.
+
+**Tasks** — Chain functions for a specific workflow. The `threat_model` task uses
+threat-model functions. The `security_review` task uses security-code-review functions.
+Tasks load only the functions and stacks they actually need.
+
+**Stacks** — One file per technology or external tool. `jira.md` describes Jira-specific
+behaviour; `linear.md` describes Linear. Tasks and functions refer to "the issue tracker
+stack" generically; the loaded stack provides the actual commands.
+
+### Issue tracker support
+
+Issue tracking (Jira, Linear, GitHub Issues) is a **tech stack**, not an agent concern.
+Configure `issue_tracker.type` in `~/.code-crew/config.yaml` (`jira` | `linear` | `github`).
+Agent and function files must say "issue tracker" — never name a specific tool.
+Jira-specific commands (`jira_view`, key format) live in `stacks/jira.md` only.
+
+### What NOT to do
+
+- Do NOT put `go.mod`, `main.go`, or any language-specific filename in an agent file
+- Do NOT name a specific issue tracker (`Jira`, `Linear`) in agents or functions
+- Do NOT embed step-by-step workflow instructions in an agent's backstory
+- Do NOT put tech-stack commands in function files — reference the stack instead
+
 ## Quick start
 
 ```bash
@@ -113,8 +176,8 @@ Key settings:
 | `bedrock` | `model_id`, `region` | Bedrock model and region |
 | `aws` | `profile` | AWS profile (if not using instance profile or ECS role) |
 | `designs` | `path`, `dod_path` | Designs directory — auto-detected from `./designs/` if absent |
-| `issue_tracker` | `type`, `project_key`, `jira.*` | Jira or Linear |
-| `flow` | `max_retries` | Gate retry limit |
+| `issue_tracker` | `type`, `project_key` | Issue tracker: `jira`, `linear`, or `github` |
+| `flow` | `max_retries`, `max_run_minutes` | Gate retry limit; max crew run time (default 30 min) |
 
 Named profiles: `~/.code-crew/profiles/<name>.yaml` — switch with `/profile <name>` in REPL.
 

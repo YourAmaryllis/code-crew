@@ -1178,3 +1178,63 @@ def _load_checkpoint(jira_key: str) -> dict[str, str]:
 
 def _delete_checkpoint(jira_key: str) -> None:
     _checkpoint_path(jira_key).unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Drift flow
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DriftState:
+    project_root: str
+    status: Literal["running", "passed", "failed"] = "running"
+    task_outputs: dict[str, str] = field(default_factory=dict)
+
+
+class DriftFlow:
+    """
+    Resolves infrastructure drift between what the codebase expects
+    and what is currently deployed or configured.
+
+    Flow:
+      drift_assess  — survey Terraform, CI/CD, monitoring, and config for drift
+      drift_resolve — fix each identified drift item (skipped if no drift found)
+    """
+
+    def __init__(
+        self,
+        drift_input: dict,
+        on_task_complete: "SummaryCallback | None" = None,
+    ) -> None:
+        self.drift_input = drift_input
+        self._on_task_complete = on_task_complete or (lambda *_: None)
+        self.task_outputs: dict[str, str] = {}
+        self.state = DriftState(project_root=drift_input.get("project_root", ""))
+
+    def run(self) -> None:
+        try:
+            assess_out = self._execute("drift_assess")
+            self.task_outputs["drift_assess"] = assess_out
+            self._on_task_complete("drift", "drift_assess", _extract_summary(assess_out))
+
+            if "NO DRIFT DETECTED" in assess_out.upper():
+                self.state.status = "passed"
+                return
+
+            resolve_out = self._execute("drift_resolve")
+            self.task_outputs["drift_resolve"] = resolve_out
+            self._on_task_complete("drift", "drift_resolve", _extract_summary(resolve_out))
+            self.state.status = "passed"
+        except Exception:
+            self.state.status = "failed"
+            raise
+
+    def _execute(self, task_name: str) -> str:
+        from code_crew.crew import build_drift_single_task
+
+        extra = ""
+        for prev_task, prev_output in self.task_outputs.items():
+            if prev_output:
+                label = prev_task.replace("drift_", "").replace("_", " ").title()
+                extra += f"\n\n## Previous: {label}\n\n{prev_output[:3000]}"
+        return build_drift_single_task(task_name, self.drift_input, extra_context=extra)

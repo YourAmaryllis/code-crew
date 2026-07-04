@@ -236,6 +236,7 @@ issue_tracker:
 # ─────────────────────────────────────────────
 flow:
   max_retries: 3
+  max_run_minutes: 30          # max wall-clock minutes per crew run; 0 = no limit
   max_session_tokens: 500000   # ~$5-8 at Sonnet pricing; 0 = no limit
 
 # Build / test / lint commands — auto-detected by /explore, override here if needed.

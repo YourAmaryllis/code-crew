@@ -13,6 +13,7 @@ Slash commands:
   /retry                        — force retry the stuck flow
   /abort [KEY]                  — abort a run
   /audit                        — full codebase audit: arch + security + compliance → report + optional issue creation
+  /drift                        — assess and resolve infrastructure drift (Terraform, CI/CD, monitoring, config)
   /explore [path]               — scan platform dir tree, identify OTM projects, save as agent context
   /index [path]                 — build or rebuild the semantic code search index (auto-run by /explore)
   /threat [project-id]          — generate or refresh OTM threat models (all projects, or one by id)
@@ -842,6 +843,9 @@ def _handle_slash(line: str, state: ReplState, ui: SprintUI, executor: ThreadPoo
 
     elif cmd == "/audit":
         _start_verify(console)
+
+    elif cmd == "/drift":
+        _start_drift(console)
 
     elif cmd == "/index":
         target = parts[1] if len(parts) > 1 else ""
@@ -2465,6 +2469,39 @@ def _parse_finding_selection(answer: str, count: int) -> set[int] | None:
     return selected & set(range(1, count + 1))
 
 
+def _start_drift(console: Console) -> None:
+    """Assess and resolve infrastructure drift: Terraform, CI/CD, monitoring, config."""
+    from code_crew.flow import DriftFlow
+
+    console.print("\n[bold]Starting infrastructure drift assessment…[/bold]")
+    console.print("[dim]Categories: terraform · ci/cd · monitoring · config[/dim]\n")
+
+    drift_input: dict = {
+        "project_root": str(Path.cwd()),
+        "environments": ["dev", "staging", "prod"],
+        "categories": ["terraform", "cicd", "monitoring", "config"],
+    }
+
+    def on_task_complete(_key: str, task_name: str, summary: str) -> None:
+        console.print(f"[dim]  ✓ {task_name}: {summary[:120]}[/dim]")
+
+    flow = DriftFlow(drift_input, on_task_complete=on_task_complete)
+    try:
+        flow.run()
+        assess_out = flow.task_outputs.get("drift_assess", "")
+        if "NO DRIFT DETECTED" in assess_out.upper():
+            console.print("\n[bold green]No infrastructure drift detected.[/bold green]")
+        else:
+            resolve_out = flow.task_outputs.get("drift_resolve", "")
+            if "DRIFT RESOLVED" in resolve_out.upper():
+                console.print("\n[bold green]Drift resolution complete.[/bold green]")
+            else:
+                console.print("\n[bold yellow]Drift partially resolved — review output for items requiring manual intervention.[/bold yellow]")
+            console.print(resolve_out[:2000])
+    except Exception as exc:
+        console.print(f"\n[red]Drift flow error: {exc}[/red]")
+
+
 def _start_verify(console: Console) -> None:
     """Run the full verification audit, show summary, gate on human approval, open issues."""
     import re
@@ -3743,6 +3780,9 @@ def _run_threat(target: str, console: Console) -> None:
     stacks = inventory.get("stacks", [])
     _max_revisions = 3
     _max_lint_retries = 2
+    _proj_cfg = _read_project_yaml()
+    _max_run_minutes = int(_proj_cfg.get("flow", {}).get("max_run_minutes", 30))
+    _timeout_secs = _max_run_minutes * 60 if _max_run_minutes > 0 else None
 
     console.print(f"\n[bold]Threat modeling:[/bold] {', '.join(p['id'] for p in projects)}\n")
 
@@ -3769,7 +3809,34 @@ def _run_threat(target: str, console: Console) -> None:
                     model_crew = build_threat_model_crew(project, inventory, revision_feedback)
                 else:
                     model_crew = build_threat_patch_crew(project, _last_yaml, revision_feedback)
-                crew_result = model_crew.kickoff()
+
+                if _timeout_secs:
+                    from concurrent.futures import ThreadPoolExecutor as _TPE, TimeoutError as _TE
+                    import threading as _threading
+                    _crew_result_holder = [None]
+                    _crew_exc_holder = [None]
+
+                    def _run_crew():
+                        try:
+                            _crew_result_holder[0] = model_crew.kickoff()
+                        except Exception as _e:
+                            _crew_exc_holder[0] = _e
+
+                    _t = _threading.Thread(target=_run_crew, daemon=True)
+                    _t.start()
+                    _t.join(timeout=_timeout_secs)
+                    if _t.is_alive():
+                        # Thread still running — daemon=True means it dies with the process
+                        console.print(
+                            f"\n[bold red]  ✗ Run exceeded {_max_run_minutes}-minute limit "
+                            f"— stopping (set flow.max_run_minutes in config to change).[/bold red]"
+                        )
+                        raise RuntimeError(f"Crew timed out after {_max_run_minutes} minutes")
+                    if _crew_exc_holder[0] is not None:
+                        raise _crew_exc_holder[0]
+                    crew_result = _crew_result_holder[0]
+                else:
+                    crew_result = model_crew.kickoff()
                 build_output = crew_result.raw
 
                 # In Process.hierarchical the manager writes the FINAL ANSWER in prose.

@@ -622,6 +622,72 @@ def build_ux_single_task(
         return _kickoff(crew, ux_input)
 
 
+# ---------------------------------------------------------------------------
+# Drift flow
+# ---------------------------------------------------------------------------
+
+_DRIFT_TASK_AGENTS: dict[str, str] = {
+    "drift_assess":  "devops_lead",
+    "drift_resolve": "devops_lead",
+}
+
+
+def build_drift_single_task(
+    task_name: str,
+    drift_input: dict,
+    relay=None,
+    extra_context: str = "",
+) -> str:
+    """Build and run a single drift-flow task. Returns the output string."""
+    tools = _make_tools(relay=relay, jira_key="")
+    agents = build_agents(tools)
+    td = _KNOWLEDGE / "tasks"
+    tc = load_bundle_tasks(td)
+    ctx = _format_drift_context(drift_input)
+    if extra_context:
+        ctx += extra_context
+
+    agent_key = _DRIFT_TASK_AGENTS[task_name]
+    t = Task(
+        name=task_name,
+        description=f"{ctx}\n\n{tc[task_name].description}",
+        expected_output=tc[task_name].expected_output,
+        agent=agents[agent_key],
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        crew = Crew(
+            agents=[agents[agent_key]],
+            tasks=[t],
+            process=Process.sequential,
+            verbose=True,
+        )
+        return _kickoff(crew, drift_input)
+
+
+def _format_drift_context(drift_input: dict) -> str:
+    structure = _load_project_structure()
+    sections: list[str] = []
+    skills = _load_active_skills()
+    if skills:
+        sections.append(skills)
+    envs = ", ".join(drift_input.get("environments", ["dev", "staging", "prod"]))
+    cats = ", ".join(drift_input.get("categories", ["terraform", "cicd", "monitoring", "config"]))
+    header = (
+        f"## Drift context\n\n"
+        f"**Project root**: {drift_input.get('project_root', str(Path.cwd()))}\n"
+        f"**Environments to check**: {envs}\n"
+        f"**Categories to check**: {cats}\n"
+    )
+    focus = drift_input.get("focus", "")
+    if focus:
+        header += f"**Focus**: {focus}\n"
+    sections.append(header)
+    if structure:
+        sections.append(f"## Project structure\n\n{structure}")
+    return "\n\n".join(sections)
+
+
 _VERIFY_TASK_AGENTS: dict[str, str] = {
     "verify_arch_scan":       "architect",
     "verify_security_scan":   "security_lead",

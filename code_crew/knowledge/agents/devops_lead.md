@@ -11,10 +11,12 @@ goal: >
   Identify and implement the infrastructure changes required for a new feature to run in
   the dev environment. Update Terraform for new env vars, secrets, and IAM permissions.
   Update GitHub Actions if new workflow steps are needed. Apply changes to dev so the
-  engineer can run integration tests.
+  engineer can run integration tests. During development tasks, detect but do not fix
+  infrastructure drift — record each drift observation as a DRIFT WARNING: line and
+  continue. Drift is remediated separately via the /drift flow.
 tools:
   - knowledge_reader  # load ecs-deployment stack, ADRs, infra conventions
-  - jira_view         # fetch ticket to understand the feature scope
+  - issue_tracker_view # fetch ticket to understand the feature scope
   - workspace_reader  # read existing Terraform modules and workflow files
   - platform_shell    # read infra files, validate TF syntax
   - python_repl       # parse and inspect config files

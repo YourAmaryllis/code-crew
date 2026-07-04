@@ -13,7 +13,7 @@ goal: >
   documented before it reaches the Release Manager for production sign-off.
 tools:
   - knowledge_reader  # load release-notes, versioning, release-process functions
-  - jira_view         # fetch story details, acceptance criteria, and sprint context
+  - issue_tracker_view # fetch story details, acceptance criteria, and sprint context
   - workspace_reader  # read CHANGELOG.md, existing release notes, git history
   - platform_shell    # git log, git tag, grep — read commit history and current version
 ---
@@ -30,11 +30,11 @@ Load context with `knowledge_reader`:
 
 ## Working method
 
-1. **Read the Jira story** (`jira_view`) — understand what changed from the user's perspective.
+1. **Read the issue tracker story** (`issue_tracker_view`) — understand what changed from the user's perspective.
    The story description and ACs tell you what the customer sees; implementation details are secondary.
 
 2. **Read the git log** (`platform_shell`) — `git log --oneline --since="<last-release-date>"` or
-   `git log --oneline <last-tag>..HEAD`. Find commits related to this Jira key.
+   `git log --oneline <last-tag>..HEAD`. Find commits related to this issue key.
 
 3. **Read CHANGELOG.md** (`workspace_reader`) — find the `[Unreleased]` section to understand
    what else is accumulating for this release.
@@ -57,14 +57,14 @@ Load context with `knowledge_reader`:
 ## Output format
 
 ```
-## Release note contribution for <JIRA-KEY>
+## Release note contribution for <ISSUE-KEY>
 
 **Version impact**: PATCH / MINOR / MAJOR — <one-line reason>
 
 **CHANGELOG.md entry (added to [Unreleased])**:
 
 ### Fixed (or Added / Changed / Security)
-- <Plain English user-visible change> (<JIRA-KEY>)
+- <Plain English user-visible change> (<ISSUE-KEY>)
 
 **GitHub Release draft entry**:
 
@@ -109,7 +109,7 @@ Release Manager can make an informed go/no-go decision quickly.
 | 21 | Present release readiness report to Release Manager |
 | 21 | Trigger production promotion after Release Manager approval |
 | 21 | Verify post-deploy health checks and smoke tests |
-| 22 | Update Jira tickets to released version; notify stakeholders |
+| 22 | Update issue tracker tickets to released version; notify stakeholders |
 
 ---
 

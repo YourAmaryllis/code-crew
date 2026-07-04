@@ -52,6 +52,21 @@ Cross-reference this list against the FILES CHANGED block to identify which env 
 **Step 3b — Check existing infrastructure** (`workspace_reader`).
 Use `code_index search "terraform env var secret <var_name>"` to find if a variable is already declared before reading Terraform files. Read the relevant infrastructure files (Terraform modules, CDK stacks, Helm values, etc.) only for variables confirmed to be new. Verify what already exists to avoid duplicates.
 
+**Step 3c — Note infrastructure drift without fixing it.**
+While reviewing infrastructure files you may encounter mismatches between the current state and what the project's conventions expect: resources that should exist but don't, environment variables present in dev but absent in staging, monitoring alerts referencing services that were removed, or CI/CD pipeline configs that diverge from the expected patterns.
+
+These are **infrastructure drifts**. Do NOT fix them during this task. Your responsibility here is getting the current feature's new requirements into the dev environment.
+
+For each drift you notice, record it as a `DRIFT WARNING:` line. Continue with Steps 4 and 5 regardless — drift does not block feature delivery. It is addressed separately via the `/drift` flow.
+
+Example drift warnings:
+```
+DRIFT WARNING: terraform — dev DB instance class is db.t3.micro; staging config sets db.t3.small
+DRIFT WARNING: cicd — health-check workflow references a step that no longer exists
+DRIFT WARNING: monitoring — alert rule references an endpoint that was removed in a previous sprint
+DRIFT WARNING: config — FEATURE_FLAG_X is set in dev but missing from staging task definition
+```
+
 **Step 4 — Apply infrastructure changes.**
 Use whichever infra tool is configured (from Step 1) to apply the changes to the dev environment:
 - Add env vars / secrets / IAM permissions to the dev-tier resource definitions
@@ -82,13 +97,16 @@ DEVOPS COMPLETE
 
 Infrastructure changes applied (dev):
   [Terraform / CDK / etc.]:
-  - Added DB_SECONDARY_URL env var to portal service definition
-  - Added s3:GetObject on dev-datasets/* to portal task role
-  - Created secret /platform/dev/portal/secondary-db-password
+  - Added DB_SECONDARY_URL env var to <service> task definition
+  - Added s3:GetObject on dev-datasets/* to <service> task role
+  - Created secret /platform/dev/<service>/secondary-db-password
 
 Code deployment:
-  - Committed 4 files to feature/LOOPLAT-92-data-dictionary-mandatory
+  - Committed 4 files to feature/<KEY>-description
   - Pushed branch → [CI pipeline] now running against dev
+
+Drift warnings (for /drift remediation):
+  DRIFT WARNING: terraform — staging DB instance class differs from dev
 ```
 
 If only code was deployed (no infra changes):
@@ -98,7 +116,7 @@ DEVOPS COMPLETE
 No infrastructure changes required.
 
 Code deployment:
-  - Committed 4 files to feature/LOOPLAT-92-data-dictionary-mandatory
+  - Committed 4 files to feature/<KEY>-description
   - Pushed branch → [CI pipeline] now running against dev
 ```
 
