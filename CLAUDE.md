@@ -16,7 +16,11 @@ ops/            # Ops crew: infrastructure, release, monitoring
 shared/         # Shared OKF loader, Bedrock LLM factory, CrewAI tools
 scripts/        # Utility scripts (OKF conversion, etc.)
 docs/
-  decisions/    #   Architecture decision records for code-crew itself (not for agents)
+  add/          #   Architecture design documents for code-crew itself
+  adr/          #   Architecture decision records for code-crew itself
+  sad/          #   System architecture description
+  plan/         #   Roadmap and planning docs
+  eval/         #   Evaluation notes
 ```
 
 ## Key principles
@@ -199,9 +203,9 @@ Task sequence:
 sprint_planning_check → architecture_review → scaffold_code → scaffold_test
 → [BDD cycle] bdd_test_authoring → bdd_po_review + bdd_arch_review → bdd_finalization
   (repeats until PO + Architect both approve)
-→ implementation → devops_coordination
+→ implementation → devops_coordination → cleanup
 → [review gates] code_review → security_review → compliance_review → dod_check
-  (each gate failure retries implementation + devops_coordination)
+  (each gate failure retries implementation + devops_coordination + cleanup)
 → release_notes
 → [staging loop] promote_staging → staging_verification
   (agents use async_job tool: type=gh_actions for workflows, type=ecs for direct updates,
@@ -210,6 +214,23 @@ sprint_planning_check → architecture_review → scaffold_code → scaffold_tes
 → launch_decision   (Release Engineer go/no-go; LAUNCH BLOCKED retries or escalates)
 → [human gate: workflow_dispatch / GitLab manual job → production]
 → smoke_test   (same async_job pattern)
+```
+
+Threat model task sequence (`/threat`):
+```
+threat_discover  (Architect: reads codebase + infra, outputs trustZones + components)
+→ [per-component, parallel] threat_component_threats × N  (Security Lead per component)
+→ [per-component, parallel] threat_mitigations × N        (Security Lead per component)
+→ [Python assembly: renumber IDs, write initial OTM YAML to disk]
+→ [refinement passes × max_refine_passes (default 2)]
+    threat_refine  (Security Lead: reads full OTM, outputs additional_threats + additional_mitigations)
+    → Python merges additions, renumbers, overwrites OTM
+    → stops early on NO NEW THREATS signal
+→ threat_gate    (Manager: completeness check — zone semantics, framework coverage, mitigation state)
+    NEEDS REVISION → threat_patch → threat_gate  (retries gate only, not prior phases)
+    THREAT MODEL APPROVED → write final OTM + export Threat Dragon JSON
+
+/threat refine [N]  — manual: runs N additional refinement passes on the existing OTM on disk
 ```
 
 ## Execution model: manager-worker
@@ -221,16 +242,28 @@ planned. Review and evaluation tasks run sequentially (no manager needed).
 | Mode | Tasks | Model |
 |------|-------|-------|
 | `manager → worker` | scaffold_code, scaffold_test, bdd_authoring, bdd_finalization, implementation, devops_coordination, release_notes, promote_staging, staging_verification, smoke_test | fast manager + standard/powerful worker |
-| sequential | sprint_planning, architecture_review, bdd_po_review, bdd_arch_review, code_review, security_review, compliance_review, dod_check, launch_decision | worker only |
+| sequential | sprint_planning, architecture_review, bdd_po_review, bdd_arch_review, cleanup, code_review, security_review, compliance_review, dod_check, launch_decision | worker only |
 
 To move a task between modes, edit the `MANAGED_TASKS` frozenset in `crew.py`.
 
 ## Design decisions
 
-Decision docs live in `docs/decisions/` — these are about code-crew itself, not knowledge for agents.
+Decision docs live in `docs/adr/` (why) and `docs/add/` (how) — these are about code-crew itself, not knowledge for agents.
 
-- `docs/decisions/CREW-001-fullstack-engineer.md` — SDLC role alignment + full-stack engineer rationale
-- `docs/decisions/CREW-002-async-flow-loop.md` — async wait points for deploy and BDD phases (`/loop` pattern)
+Key ADDs:
+- `docs/add/ADD-001-Virtual-AI-Development-Team.md` — overall system design
+- `docs/add/ADD-006-OKF-Knowledge-Architecture.md` — agent/task/function/stack knowledge hierarchy
+- `docs/add/ADD-007-Server-Mode-IM-Adapters.md` — Slack/Teams server mode
+- `docs/add/ADD-008-Incremental-Per-Unit-LLM-Decomposition.md` — pattern for unbounded tasks (threat modeling, code review)
+- `docs/add/ADD-009-Parallel-Crew-Execution.md` — parallel per-unit execution via asyncio + combined single-pass tasks
+- `docs/add/ADD-010-Guardrails-Destructive-Operations.md` — guardrails on git push, terraform apply, rm -rf, and other irreversible ops
+- `docs/add/ADD-011-Multi-Pass-Threat-Model-Refinement.md` — multi-pass refinement for cross-component and boundary-crossing threats
+
+Key ADRs:
+- `docs/adr/ADR-001-CrewAI-Multi-Agent-Architecture.md` — why CrewAI
+- `docs/adr/ADR-003-Async-Wait-Points.md` — async wait points for deploy and BDD phases (`/loop` pattern)
+- `docs/adr/ADR-007-Python-Flow-Orchestration.md` — Python as the outer loop controller
+- `docs/adr/ADR-009-Parallel-Per-Unit-Agent-Execution.md` — why parallel + combined threats/mitigations
 
 ## Git push
 
