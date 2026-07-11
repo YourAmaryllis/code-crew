@@ -78,11 +78,12 @@ def run_checks(code_path: Path | None = None) -> StartupSummary:
         ))
 
     checks.append(_check_ast_grep())
+    checks.append(_check_graphviz())
     checks.append(_check_langfuse())
     checks.append(_check_designs_dir(root))
 
-    # ast-grep, langfuse, and designs are optional — don't count as errors/warnings
-    _OPTIONAL = {"git repo", "langfuse", "designs", "ast-grep"}
+    # ast-grep, graphviz, langfuse, and designs are optional — don't count as errors/warnings
+    _OPTIONAL = {"git repo", "langfuse", "designs", "ast-grep", "graphviz"}
     warnings = sum(1 for c in checks if not c.ok and c.name not in _OPTIONAL)
     errors = sum(1 for c in checks if not c.ok and c.name == "git repo")
 
@@ -344,6 +345,7 @@ def _cli_install_hints() -> dict[str, str]:
         # ── Prefer brew; cargo install as universal fallback ───────────────────
         "ast-grep": "brew install ast-grep" if _brew else "cargo install ast-grep",
         # ── Prefer brew; reasonable cross-platform fallback ───────────────────
+        "dot":   _brew_or("graphviz", "# https://graphviz.org/download/"),
         "gh":    _brew_or("gh", "go install github.com/cli/cli/v2/cmd/gh@latest") + " && gh auth login",
         "pulumi": _brew_or("pulumi", "curl -fsSL https://get.pulumi.com | sh"),
         "fly":    _brew_or("flyctl", "curl -L https://fly.io/install.sh | sh"),
@@ -371,6 +373,18 @@ def _check_ast_grep() -> CheckResult:
     return CheckResult(
         "ast-grep", False, "",
         f"{hint}  # enables structural AST search for engineer/architect agents",
+    )
+
+
+def _check_graphviz() -> CheckResult:
+    """Check for graphviz dot CLI (threat model diagram layout). Optional — falls back to grid."""
+    path = shutil.which("dot")
+    if path:
+        return CheckResult("graphviz", True, path, "")
+    hint = _cli_install_hints().get("dot", "brew install graphviz")
+    return CheckResult(
+        "graphviz", False, "",
+        f"{hint}  # enables auto-layout for /threat Threat Dragon diagrams",
     )
 
 

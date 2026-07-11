@@ -652,7 +652,7 @@ class TicketFlow:
                 # re-run fresh. Without clearing the gate, a stale cached verdict
                 # (e.g. INCOMPLETE from before any implementation existed) gets
                 # replayed on every retry and the loop never recovers.
-                for t in ("implementation", "devops_coordination", gate_task):
+                for t in ("implementation", "devops_coordination", "cleanup", gate_task):
                     self.state.task_outputs.pop(t, None)
                 _save_checkpoint(self.state)
                 self._run_implementation()
@@ -754,7 +754,7 @@ class TicketFlow:
         _MAX_IMPL_LOOPS = 3
         for attempt in range(_MAX_IMPL_LOOPS):
             if attempt > 0:
-                for t in ("implementation", "devops_coordination"):
+                for t in ("implementation", "devops_coordination", "cleanup"):
                     self.state.task_outputs.pop(t, None)
                 _save_checkpoint(self.state)
 
@@ -815,6 +815,7 @@ class TicketFlow:
             return
 
         self._run_task("devops_coordination")
+        self._run_task("cleanup")
 
     # ------------------------------------------------------------------
     # Task execution
@@ -995,6 +996,7 @@ _TASK_AGENTS: dict[str, str] = {
     "bdd_finalization":     "manager → qa-lead",
     "implementation":       "manager → engineer",
     "devops_coordination":  "manager → devops-lead",
+    "cleanup":              "engineer",
     "release_notes":        "manager → release-engineer",
     "promote_staging":      "manager → devops-lead",
     "staging_verification": "manager → qa-lead",

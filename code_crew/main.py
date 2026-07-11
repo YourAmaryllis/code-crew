@@ -11,6 +11,8 @@ Usage:
 Config is loaded from ~/.code-crew/config.yaml (see .config.example.yaml for format).
 """
 
+from pathlib import Path
+
 import click
 
 from shared.config import load_yaml_config
@@ -342,16 +344,19 @@ def memory_show(jira):
 
 @cli.command()
 @click.argument("path", default="", required=False)
-def explore(path):
+@click.option("--profile", default=None, help="Profile name to load from ~/.code-crew/profiles/")
+def explore(path, profile):
     """Scan the project, detect stacks and build/test commands, identify OTM scopes.
 
     \b
     Examples:
-      code-crew explore            # scan cwd
-      code-crew explore ../myapp   # scan another directory
+      code-crew explore                          # scan cwd
+      code-crew explore ../myapp                 # scan another directory
+      code-crew explore --profile loopora-nvidia # load named profile first
     """
     from rich.console import Console
-    from code_crew.repl import _run_explore
+    from code_crew.repl import _bootstrap, _run_explore
+    _bootstrap(profile=profile)
     _run_explore(path, Console())
 
 
@@ -361,7 +366,8 @@ def explore(path):
 
 @cli.command()
 @click.argument("target", default="", required=False)
-def threat(target):
+@click.option("--profile", default=None, help="Profile name to load from ~/.code-crew/profiles/")
+def threat(target, profile):
     """Generate or refresh OTM threat models for the current project.
 
     Reads the component inventory saved by 'explore'. Pass an optional project
@@ -373,7 +379,8 @@ def threat(target):
       code-crew threat portal      # only the portal scope
     """
     from rich.console import Console
-    from code_crew.repl import _run_threat
+    from code_crew.repl import _bootstrap, _run_threat
+    _bootstrap(profile=profile)
     _run_threat(target, Console())
 
 

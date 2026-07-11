@@ -3,6 +3,7 @@ from shared.tools.async_job import AsyncJobTool, CiStatusTool  # CiStatusTool is
 from shared.tools.ask_human import AskHumanTool
 from shared.tools.figma_reader import FigmaReaderTool
 from shared.tools.knowledge_reader import KnowledgeReaderTool
+from shared.tools.stack_reader import StackReaderTool
 from shared.tools.workspace_reader import WorkspaceReaderTool
 from shared.tools.code_index import CodeIndexTool
 from shared.tools.dod_checker import DoDCheckerTool
@@ -21,7 +22,8 @@ __all__ = [
     "CiStatusTool",  # backward-compat alias
     "AskHumanTool",
     "FigmaReaderTool",
-    "KnowledgeReaderTool",
+    "KnowledgeReaderTool",  # kept for backward-compat; not in _make_tools()
+    "StackReaderTool",
     "WorkspaceReaderTool",
     "CodeIndexTool",
     "SOPReaderTool",  # alias

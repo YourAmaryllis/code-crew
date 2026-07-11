@@ -111,11 +111,10 @@ ZONE: <name>
 ```
 
 **Rules:**
-- Name zones after the entity/role, not the network location
+- Name zones after the entity/role, not the network location or tier
 - Different external actor categories → different zones
-- Perimeter components (load balancer, API gateway) → own perimeter zone, not the external-user zone
-- Third-party cloud services (AWS STS, KMS, external SaaS) → own zone
-- Data stores → own zone, separate from application services
+- Perimeter components (load balancer, API gateway) and data stores → same internal zone as the application services that own them, if they share the same operator and credential type
+- Third-party cloud services (external SaaS, third-party APIs not operated by your org) → own zone
 - Operators/admins → own zone, separate from end users
 
 Do NOT read the dependency manifest, the service entry point, or search for "trust zone" text. Do NOT run `find`, `grep`, or `ls`.
@@ -149,27 +148,44 @@ The name must describe the business purpose. The deployment attribute says the t
 A trust zone is a named region of your architecture where components share the same:
 - **Controlling entity** — the same organisation, team, or role owns and operates them
 - **Authentication mechanism** — the same credential type is required to reach them
-- **Network segment** — they live in the same deployment boundary (public internet, private VPC, data tier, management plane)
 
 A trust *boundary* is the line between two zones. Every dataflow that crosses a boundary is a threat surface — anything crossing must be treated as potentially hostile until verified.
 
-### When to create a new zone
+### How to assign a component to a zone
 
-Create a separate zone whenever **any one** of these is true on the other side of a line:
-- A different organisation or external party controls the components (e.g. end users, third-party SaaS providers, data partners)
-- A different credential type is required (JWT vs IAM role vs mTLS cert vs API key vs no auth)
-- The network segment changes and this creates a meaningful trust difference (private subnet ≠ public internet; management plane ≠ application VPC)
-- A different privilege level applies (admin operators vs. regular users, read-write vs. read-only)
+For each component, ask before creating a new zone:
+1. **Who operates it?** — which organisation or team owns and controls this component
+2. **Does it share the same environment?** — same network, cloud account, or cluster as an existing zone
+3. **Does it share the same external attack surface?** — if an attacker breaches the perimeter, do they reach this component alongside the others in that zone?
 
-**Two actors from different organisations must be in different zones, even if they connect from the same network location.** Two different categories of external user (e.g. consumer vs. provider, user vs. admin) are two zones. An external SaaS you call out to is its own zone regardless of whether it sits on the internet.
+Then:
+- **If all three answers match an existing zone** → assign the component there. Do not create a new zone.
+- **If any answer differs** → consider whether the difference justifies a new zone (see below).
+
+### When a new zone IS justified
+
+A new zone is warranted when:
+- A **different organisation or external party** controls the component (end users, third-party SaaS, partners — they are not your org's infrastructure)
+- A **different external attack surface** — the component is reachable from a different network boundary than any existing zone (e.g., internet-facing vs. VPC-private)
+- A **different privilege level applies to human actors** (admin operators vs. regular users — different people, not just different services)
+
+**Sub-zones:** When there is a meaningful internal boundary inside a larger zone (e.g., a public-facing subnet within a private platform zone, or a restricted data tier within the same org's environment), use a sub-zone with a `parent` field referencing the outer zone. Sub-zones model internal segmentation without claiming those components are independently controlled. Use them instead of creating a flat new zone that duplicates ownership.
+
+**Two external actor categories from different organisations must always be in separate zones**, even if they authenticate the same way (e.g. consumer JWT vs. admin JWT = two zones, because different humans with different privilege levels).
 
 ### Zone naming rules
 
-Name zones after **who or what they represent**, not after their network location:
-- Wrong: `internet`, `private`, `vpc`, `internal`
-- Right: `external-consumers`, `platform-services`, `data-tier`, `platform-operators`, `third-party-providers`, `partner-systems`
+Name a zone after the **principal entity** that controls or uses its components — the organisation, team, or role that owns them.
 
-The name should answer: "Whose zone is this? Who controls components in it?"
+**The ownership test:** substitute the name into "This is _____'s zone." If it sounds natural, it is a good name. If it sounds wrong ("This is data-tier's zone", "This is private's zone"), the name describes a resource type or network location rather than an owner — rename it.
+
+**Examples of the principle applied:**
+- End users from outside your org → `external-consumers` (they are the principal)
+- Your org's AWS-hosted services → `<your-org>-platform` or `platform-aws` (your org is the owner)
+- Privileged operators and CI/CD → `admin-operators` (role that controls these)
+- A third-party SaaS you call out to → `third-party-saas` or a named provider (they control it)
+
+**Avoid** names that describe where something is deployed or what type of resource it is (`vpc`, `private`, `internal`, `data-tier`, `application-tier`, `perimeter`). These fragment a single owner's infrastructure into multiple zones and obscure who is actually in control.
 
 ### Zone rating (0–100 scale)
 
@@ -178,9 +194,8 @@ The name should answer: "Whose zone is this? Who controls components in it?"
 | Fully public, no authentication | 0–10 | Anonymous internet users, public CDN |
 | Authenticated external user | 20–30 | JWT-authenticated API consumer from a different org |
 | Authenticated partner / data provider | 40–50 | API key or mTLS from a known third party |
-| Internal application service | 70–80 | ECS tasks, Lambda functions, private VPC services |
-| Data storage tier | 85–90 | RDS, S3, Redis — accessed via IAM from application services |
-| Management / privileged operators | 85–90 | CI/CD, Terraform, admin consoles |
+| Internal platform (same org, IAM/internal auth) | 70–85 | ECS tasks, ALB, S3, RDS, Lambda — all org-operated, IAM-authenticated. **One zone covers all of these if they share the same operator.** |
+| Management / privileged operators | 85–90 | CI/CD pipelines, Terraform, admin consoles — human actors with elevated privileges |
 
 Higher score = more trusted. Boundary crossings from low to high scores need the strongest authentication and validation.
 
@@ -280,7 +295,7 @@ Follow the structure provided by the Security Lead exactly.
 
 **YAML quoting rules — violations cause parse errors:**
 - Any string containing `:`, `#`, `[`, `]`, `{`, `}`, or leading/trailing spaces MUST be quoted
-- Use single quotes for most strings: `name: 'FHIR Proxy Service (AWS ECS Fargate)'`
+- Use single quotes for most strings: `name: 'Data Processing Worker (AWS ECS Fargate)'`
 - Use double quotes only when the string itself contains a single quote
 - `description` fields almost always need quotes — they frequently contain colons
 - `likelihood` and `impact` must be written as `likelihood: HIGH` (key: value), never as bare `HIGH`

@@ -2977,6 +2977,138 @@ def _run_index(target: str, console: Console) -> None:
                       "Install sentence-transformers for non-default models.[/dim]")
 
 
+def _detect_external_services(
+    infra_modules: "list[str]",
+    designs_dir: "Path | None",
+) -> "list[dict]":
+    """Return third-party external services found in infra module names and designs docs."""
+    import re
+
+    PROVIDER_PATTERNS: "list[tuple[str, str, str]]" = [
+        (r"auth0", "Auth0", "identity"),
+        (r"cognito", "AWS Cognito", "identity"),
+        (r"okta", "Okta", "identity"),
+        (r"cloudflare", "Cloudflare", "cdn-security"),
+        (r"fastly", "Fastly", "cdn"),
+        (r"akamai", "Akamai", "cdn"),
+        (r"stream[-_]?chat|streamchat", "StreamChat", "messaging"),
+        (r"(?<![a-z])stream(?![-_]?chat|s\b)", "Stream.io", "messaging"),
+        (r"stripe", "Stripe", "payments"),
+        (r"adyen", "Adyen", "payments"),
+        (r"datadog", "Datadog", "observability"),
+        (r"pagerduty", "PagerDuty", "alerting"),
+        (r"splunk", "Splunk", "observability"),
+        (r"sendgrid", "SendGrid", "email"),
+        (r"mailgun", "Mailgun", "email"),
+        (r"twilio", "Twilio", "sms"),
+        (r"snowflake", "Snowflake", "data-warehouse"),
+        (r"databricks", "Databricks", "data-platform"),
+        (r"(?<![a-z])box(?![-_]?(jwt|upload|seed|smoke))", "Box", "file-storage"),
+        (r"opensearch", "OpenSearch", "search"),
+        (r"metabase", "Metabase", "analytics"),
+        (r"sentry", "Sentry", "error-tracking"),
+        (r"segment", "Segment", "analytics"),
+        (r"mixpanel", "Mixpanel", "analytics"),
+        (r"hubspot", "HubSpot", "crm"),
+        (r"salesforce", "Salesforce", "crm"),
+        (r"zendesk", "Zendesk", "support"),
+        (r"intercom", "Intercom", "support"),
+    ]
+
+    found: "dict[str, dict]" = {}
+
+    def _check(text: str, source: str) -> None:
+        for pattern, name, category in PROVIDER_PATTERNS:
+            if name not in found and re.search(pattern, text, re.IGNORECASE):
+                found[name] = {"name": name, "category": category, "detected_in": source}
+
+    for mod in infra_modules:
+        _check(mod, "infra")
+
+    if designs_dir and Path(designs_dir).is_dir():
+        for subdir in ("ADD", "SAD"):
+            doc_dir = Path(designs_dir) / subdir
+            if not doc_dir.is_dir():
+                continue
+            for doc in sorted(doc_dir.glob("*.md"))[:12]:
+                try:
+                    _check(doc.read_text(encoding="utf-8", errors="replace")[:4000], "docs")
+                except Exception:
+                    pass
+
+    return list(found.values())
+
+
+def _filter_structure_top_level(md: str, top_level_paths: "set[str]") -> str:
+    """Return a lean structure.md for Phase 4 decomposition.
+
+    Keeps: the repository areas table, top-level UNIT_SUMMARY blocks, and the
+    external services section. Drops: sub-executable UNIT_SUMMARY blocks (they
+    confuse the LLM into treating sub-commands as independent services), DOC_SUMMARY
+    blocks (not needed for decomposition), and raw AREA_SUMMARY failure lines.
+    """
+    lines = md.splitlines(keepends=True)
+    filtered: list[str] = []
+    in_unit = False
+    include_block = False
+    in_doc_block = False
+    buffer: list[str] = []
+
+    def _norm(s: str) -> str:
+        """Strip markdown heading and bold markers so '## UNIT_SUMMARY:' and '**UNIT_SUMMARY COMPLETE**' both match."""
+        return s.strip().lstrip("# ").strip().replace("**", "").strip()
+
+    for line in lines:
+        stripped = line.strip()
+        normed = _norm(stripped)
+        is_unit_start = normed.startswith("UNIT_SUMMARY:") and not normed.startswith("UNIT_SUMMARY COMPLETE")
+        is_unit_end = normed == "UNIT_SUMMARY COMPLETE"
+        is_doc_start = normed.startswith("DOC_SUMMARY:")
+        is_doc_end = normed == "DOC_SUMMARY COMPLETE"
+
+        if is_unit_start:
+            if buffer:
+                if include_block:
+                    filtered.extend(buffer)
+                    # Nested sub-unit starts inside a top-level block means the outer
+                    # UNIT_SUMMARY never got its own COMPLETE marker; synthesize one so
+                    # the classifier's state machine sees a well-formed block.
+                    if not any(_norm(b.strip()) == "UNIT_SUMMARY COMPLETE" for b in buffer):
+                        filtered.append("UNIT_SUMMARY COMPLETE\n")
+                buffer = []
+            path = normed[len("UNIT_SUMMARY:"):].strip().rstrip("/")
+            in_unit = True
+            include_block = (path in top_level_paths)
+            buffer.append(line)
+        elif is_unit_end and in_unit:
+            buffer.append(line)
+            if include_block:
+                filtered.extend(buffer)
+            buffer = []
+            in_unit = False
+            include_block = False
+        elif in_unit:
+            buffer.append(line)
+        elif is_doc_start:
+            in_doc_block = True  # skip this block
+        elif is_doc_end:
+            in_doc_block = False
+        elif in_doc_block:
+            pass  # skip doc content
+        elif stripped.startswith("AREA_SUMMARY:"):
+            pass  # skip failure/infra one-liners — not useful for decomp
+        elif stripped.startswith("**DOCS COMPLETE**") or stripped.startswith("**ADD/") or stripped.startswith("**SAD/"):
+            pass  # skip doc section headers
+        else:
+            filtered.append(line)
+
+    if buffer and include_block:
+        filtered.extend(buffer)
+        if not any(_norm(b.strip()) == "UNIT_SUMMARY COMPLETE" for b in buffer):
+            filtered.append("UNIT_SUMMARY COMPLETE\n")
+    return "".join(filtered)
+
+
 def _run_explore(target: str, console: Console) -> None:
     """
     Scan the project directory, detect tech stacks, optionally generate a
@@ -3197,217 +3329,10 @@ def _run_explore(target: str, console: Console) -> None:
     )
     console.print(f"\n[green]✓[/green] Saved to [dim]{out_dir / 'structure.md'}[/dim]")
 
-    # --- Phase 2: LLM verification + architecture assessment ---
+    component_summaries: dict[str, dict] = {}  # filled after component inventory
     component_descriptions: dict[str, str] = {}
     project_summary: str = ""
-    # Collect CI workflow filenames to pass to architect
-    _ci_workflows_for_llm: dict[str, str] = {}
-    if "github-actions" in ci_methods:
-        _wf_dir = root / ".github" / "workflows"
-        if _wf_dir.is_dir():
-            _wf_files = sorted(f.name for f in _wf_dir.glob("*.yml")) + \
-                        sorted(f.name for f in _wf_dir.glob("*.yaml"))
-            _ci_workflows_for_llm["github-actions"] = ", ".join(_wf_files[:20])
-    try:
-        from code_crew.crew import build_explore_single_task
-        console.print("\n[dim]Running LLM phase (Architect — verifying detections + assessing architecture)…[/dim]")
-        llm_result = build_explore_single_task(
-            {
-                "root_name": root.name,
-                "stacks": stacks,
-                "arch_style": arch_style,
-                "migration_tool": migration_tool,
-                "migration_path": migration_path,
-                "test_framework": test_framework,
-                "api_doc": api_doc,
-                "api_doc_path": api_doc_path,
-                "svc_dirs": svc_dirs_scan,
-                "feature_dirs": feature_dirs_scan,
-                "test_dirs": test_dirs_scan,
-                "commands": all_commands,
-                "ci_methods": ci_methods,
-                "ci_workflows": _ci_workflows_for_llm,
-                "terraform": terraform_info,
-                "compliance_standards": compliance_standards,
-            },
-            extra_context=f"\n## Directory tree\n\n```\n{root.name}/\n{tree_text}\n```\n",
-        )
-
-        # Parse verification output — architect may correct any Phase 1 detection
-        # Also collect DISCOVERY_BEGIN/END blocks for rich markdown sections
-        verified_stacks: list[str] = []
-        corrected_commands: dict[str, str] = {}
-        verification_notes: list[str] = []
-        discoveries: dict[str, str] = {}  # section_name → markdown content
-        _in_discovery: str | None = None
-        _discovery_lines: list[str] = []
-
-        for raw_line in llm_result.splitlines():
-            # Handle DISCOVERY_BEGIN/END before stripping (preserve indentation inside blocks)
-            stripped = raw_line.strip()
-            if stripped.startswith("DISCOVERY_BEGIN:"):
-                _in_discovery = stripped.split(":", 1)[1].strip()
-                _discovery_lines = []
-                continue
-            if stripped.startswith("DISCOVERY_END:"):
-                if _in_discovery:
-                    discoveries[_in_discovery] = "\n".join(_discovery_lines).strip()
-                    console.print(f"  [green]✓[/green] Discovered: [bold]{_in_discovery}[/bold]")
-                _in_discovery = None
-                _discovery_lines = []
-                continue
-            if _in_discovery is not None:
-                _discovery_lines.append(raw_line)
-                continue
-
-            line = stripped
-            if line.startswith("ARCHITECTURE_STYLE:"):
-                _arch = line.split(":", 1)[1].strip()
-                if _arch and (not arch_style or _arch != "undetected"):
-                    arch_style = _arch
-                    os.environ["ARCHITECTURE_STYLE"] = arch_style
-                    console.print(f"[bold]LLM architecture assessment:[/bold] {arch_style}")
-            elif line.startswith("PROJECT_SUMMARY:"):
-                project_summary = line.split(":", 1)[1].strip()
-            elif line.startswith("COMPONENT:"):
-                rest = line.split(":", 1)[1].strip()
-                if ": " in rest:
-                    cdir, desc = rest.split(": ", 1)
-                    component_descriptions[cdir.strip()] = desc.strip()
-            elif line.startswith("STACK_VERIFIED:"):
-                parts = line.split(":", 2)
-                if len(parts) >= 2:
-                    verified_stacks.append(parts[1].strip())
-            elif line.startswith("STACK_ADDED:"):
-                parts = line.split(":", 2)
-                if len(parts) >= 2:
-                    s = parts[1].strip()
-                    if s and s not in stacks:
-                        stacks.append(s)
-                        verified_stacks.append(s)
-                        console.print(f"  [green]+[/green] Architect added stack: [bold]{s}[/bold]")
-            elif line.startswith("STACK_NOT_FOUND:"):
-                parts = line.split(":", 2)
-                if len(parts) >= 2:
-                    s = parts[1].strip()
-                    reason = parts[2].strip() if len(parts) > 2 else ""
-                    if s in stacks:
-                        stacks.remove(s)
-                    console.print(f"  [yellow]~[/yellow] Architect removed stack [bold]{s}[/bold]: {reason}")
-                    verification_notes.append(f"Stack {s} not confirmed: {reason}")
-            elif line.startswith("COMMAND_CORRECTED:"):
-                parts = line.split(":", 3)
-                if len(parts) >= 3:
-                    key = parts[1].strip()
-                    cmd = parts[2].strip()
-                    corrected_commands[key] = cmd
-                    console.print(f"  [yellow]~[/yellow] Command corrected: [bold]{key}[/bold] → `{cmd}`")
-            elif line.startswith("COMMAND_ADDED:"):
-                parts = line.split(":", 3)
-                if len(parts) >= 3:
-                    key = parts[1].strip()
-                    cmd = parts[2].strip()
-                    corrected_commands[key] = cmd
-                    console.print(f"  [green]+[/green] Command added: [bold]{key}[/bold] → `{cmd}`")
-            elif line.startswith("COMMAND_NOT_FOUND:"):
-                parts = line.split(":", 2)
-                if len(parts) >= 2:
-                    key = parts[1].strip()
-                    reason = parts[2].strip() if len(parts) > 2 else ""
-                    if key in all_commands:
-                        del all_commands[key]
-                    verification_notes.append(f"Command {key} not confirmed: {reason}")
-            elif line.startswith(("TF_ROOT_VERIFIED:", "TF_ENV_VERIFIED:", "TF_STATE_VERIFIED:",
-                                   "TF_MODULES_VERIFIED:", "TF_CORRECTED:", "TF_DISCOVERED:")):
-                tag = line.split(":", 1)[0]
-                detail = line.split(":", 1)[1].strip() if ":" in line else ""
-                console.print(f"  [dim]TF {tag.replace('TF_', '').lower()}: {detail[:80]}[/dim]")
-                if line.startswith("TF_CORRECTED:"):
-                    verification_notes.append(f"TF correction: {detail}")
-            elif line.startswith(("CICD_VERIFIED:", "CICD_ADDED:", "CICD_NOT_FOUND:")):
-                pass  # informational, no override needed
-
-        # Apply corrections to all_commands
-        for k, v in corrected_commands.items():
-            all_commands[k] = v
-
-        # Augment structure.md with LLM findings
-        additions = ""
-        if verification_notes:
-            additions += "\n## Architect verification notes\n\n"
-            additions += "\n".join(f"- {n}" for n in verification_notes) + "\n"
-        if project_summary:
-            additions += f"\n## Project summary\n\n{project_summary}\n"
-        if arch_style:
-            additions += f"\n## Architecture\n\n```yaml\narchitecture:\n  style: {arch_style}\n```\n"
-        # Append discovery sections in a defined order
-        _discovery_order = ["code_structure", "test_structure", "cicd_workflows", "entry_points", "architectural_components", "compliance_standards"]
-        for _disc_key in _discovery_order:
-            if _disc_key in discoveries:
-                additions += "\n" + discoveries[_disc_key] + "\n"
-        # Any extra discovery sections the architect added
-        for _disc_key, _disc_content in discoveries.items():
-            if _disc_key not in _discovery_order:
-                additions += "\n" + _disc_content + "\n"
-        if component_descriptions:
-            additions += "\n## Components\n\n"
-            additions += "\n".join(
-                f"- **{k}**: {v}" for k, v in sorted(component_descriptions.items())
-            ) + "\n"
-        if additions:
-            existing = (out_dir / "structure.md").read_text(encoding="utf-8")
-            (out_dir / "structure.md").write_text(existing.rstrip() + "\n" + additions, encoding="utf-8")
-    except Exception as exc:
-        console.print(f"[dim]LLM phase skipped: {exc}[/dim]")
-
-    # --- persist detected stacks + arch + CI + commands + compliance to .code-crew/config.yaml ---
-    # Merge compliance standards from LLM discovery (architect may have found more than Python scan)
-    _llm_compliance: list[str] = []
-    if "compliance_standards" in discoveries:
-        import re as _re
-        for _line in discoveries["compliance_standards"].splitlines():
-            _m = _re.match(r"-\s+(\w[\w\s-]+?)\s+[—–-]", _line.strip())
-            if _m:
-                _std = _m.group(1).strip().lower().replace(" ", "-")
-                if _std not in _llm_compliance:
-                    _llm_compliance.append(_std)
-    # Merge: prefer LLM-confirmed list; fallback to Python-detected
-    final_compliance = _llm_compliance or compliance_standards
-
-    if stacks or arch_style or ci_methods or detected_commands or final_compliance:
-        import yaml as _yaml
-        cfg_path = out_dir / "config.yaml"
-        cfg_data: dict = {}
-        if cfg_path.exists():
-            try:
-                cfg_data = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-            except Exception:
-                cfg_data = {}
-        if stacks:
-            cfg_data["stacks"] = stacks
-        if arch_style:
-            cfg_data.setdefault("architecture", {})["style"] = arch_style
-        if ci_methods:
-            cfg_data.setdefault("ci", {})["deployment_methods"] = ci_methods
-        if final_compliance:
-            cfg_data["compliance_standards"] = final_compliance
-            os.environ["CODE_CREW_COMPLIANCE"] = ",".join(final_compliance)
-        if detected_commands:
-            existing_cmds = cfg_data.get("commands", {})
-            # Only write keys not already overridden by the user
-            for k, v in detected_commands.items():
-                existing_cmds.setdefault(k, v)
-            cfg_data["commands"] = existing_cmds
-            # Apply to env so this session sees them immediately
-            from shared.config import _ENV_MAP, _apply_section
-            _apply_section(existing_cmds, _ENV_MAP.get("commands", {}), override=False)
-        cfg_path.write_text(_yaml.safe_dump(cfg_data, default_flow_style=False, sort_keys=False), encoding="utf-8")
-        if stacks:
-            os.environ["_CODE_CREW_STACKS_PROFILE"] = ",".join(stacks)
-        _cfg_parts = ["stacks", "architecture", "CI/CD", "commands"]
-        if final_compliance:
-            _cfg_parts.append(f"compliance ({', '.join(final_compliance)})")
-        console.print(f"[green]✓[/green] Updated [dim]{cfg_path}[/dim] with {', '.join(_cfg_parts)}")
+    discoveries: dict[str, str] = {}
 
     svc_dirs = svc_dirs_scan
 
@@ -3419,14 +3344,18 @@ def _run_explore(target: str, console: Console) -> None:
 
     console.print("\n[dim]Building component inventory…[/dim]")
 
-    # Sub-executables: cmd/ sub-dirs within each svc_dir
-    cmd_entries: list[str] = []
-    for svc in svc_dirs:
-        cmd_dir = root / svc / "cmd"
-        if cmd_dir.is_dir():
-            for sub in sorted(cmd_dir.iterdir()):
-                if sub.is_dir():
-                    cmd_entries.append(f"{svc}/cmd/{sub.name}")
+    # Sub-executables: detected via stack-specific modules in shared/stacks/
+    from shared.stacks import detect_sub_executables
+    sub_executables: list[str] = detect_sub_executables(root, svc_dirs)
+
+    # Git submodules: pre-read .gitmodules so the scope agent doesn't need to
+    _gitmodules_content: str = ""
+    _gitmodules_path = root / ".gitmodules"
+    if _gitmodules_path.exists():
+        try:
+            _gitmodules_content = _gitmodules_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
     # Infrastructure modules — use detected path from terraform_info
     infra_modules: list[str] = []
@@ -3452,19 +3381,17 @@ def _run_explore(target: str, console: Console) -> None:
             p = svc_path / manifest
             if p.exists():
                 key_files.append({"type": "dependency-manifest", "path": str(p.relative_to(root))})
-        # cmd/ entry points (main.go or equivalent)
-        cmd_path = svc_path / "cmd"
-        if cmd_path.is_dir():
-            for sub in sorted(cmd_path.iterdir()):
-                if sub.is_dir() and sub.name not in _SKIP_DIRS:
-                    for ep in ("main.go", "main.py", "index.ts", "server.go"):
-                        p = sub / ep
-                        if p.exists():
-                            key_files.append({"type": "entry-point", "path": str(p.relative_to(root))})
-                            break
-        # Top-level entry point if no cmd/
+        # Entry points — check sub_executables first, then fall back to common patterns
+        _svc_execs = [e for e in sub_executables if e.startswith(f"{svc}/")]
+        if _svc_execs:
+            for _exec_path in _svc_execs[:4]:  # cap at 4 per service
+                for ep in ("main.go", "main.py", "index.ts", "server.go", "__main__.py"):
+                    p = root / _exec_path / ep
+                    if p.exists():
+                        key_files.append({"type": "entry-point", "path": str(p.relative_to(root))})
+                        break
         else:
-            for ep in ("main.go", "main.py", "cmd/main.go"):
+            for ep in ("main.go", "main.py", "cmd/main.go", "index.ts", "app.py"):
                 p = svc_path / ep
                 if p.exists():
                     key_files.append({"type": "entry-point", "path": str(p.relative_to(root))})
@@ -3480,73 +3407,393 @@ def _run_explore(target: str, console: Console) -> None:
                     key_files.append({"type": "terraform-module", "path": str(p.relative_to(root))})
                     break
 
+    # Domain directory hints — look inside internal/ (Go), src/pages or app/ (TS/Node), and
+    # src/ (Python) for subdirectories that look like business domains rather than utility libs.
+    # These are heuristic candidates only; the scope agent verifies against the SAD and code.
+    domain_dirs: dict[str, list[str]] = {}
+    _SRC_EXTS = ("*.go", "*.ts", "*.tsx", "*.py", "*.js")
+    _DOMAIN_MIN_FILES = 5  # fewer than this → likely a utility/adapter, not a domain
+    _DOMAIN_MAX_RESULTS = 20  # cap per service to keep context manageable
+    for svc in svc_dirs:
+        svc_path = root / svc
+        _found_domains: list[tuple[int, str, str]] = []  # (file_count, name, rel_path)
+
+        # ── Go: internal/ up to two levels deep (svc/internal/ or svc/backend/internal/) ──
+        _internal_candidates = [
+            svc_path / "internal",
+            *(svc_path / sub / "internal"
+              for sub in ("backend", "server", "cmd", "pkg", "service")
+              if (svc_path / sub / "internal").is_dir()),
+        ]
+        for _int_dir in _internal_candidates:
+            if not _int_dir.is_dir():
+                continue
+            for _d in sorted(_int_dir.iterdir()):
+                if not _d.is_dir() or _d.name.startswith("."):
+                    continue
+                _n = sum(len(list(_d.glob(ext))) for ext in _SRC_EXTS)
+                if _n >= _DOMAIN_MIN_FILES:
+                    _rel = str(_d.relative_to(root))
+                    _found_domains.append((_n, _d.name, _rel))
+            break  # use first internal/ found, don't double-count
+
+        # ── TypeScript/Node: src/pages/, src/app/, app/ ──
+        for _pages in (svc_path / "frontend" / "src" / "pages",
+                        svc_path / "src" / "pages",
+                        svc_path / "src" / "app",
+                        svc_path / "app"):
+            if not _pages.is_dir():
+                continue
+            for _d in sorted(_pages.iterdir()):
+                if not _d.is_dir() or _d.name.startswith("_") or _d.name.startswith("."):
+                    continue
+                _n = sum(len(list(_d.rglob(ext))) for ext in ("*.ts", "*.tsx"))
+                if _n >= _DOMAIN_MIN_FILES:
+                    _rel = str(_d.relative_to(root))
+                    _found_domains.append((_n, _d.name, _rel))
+            break
+
+        # ── Python: src/<package>/ or <svc>/<package>/ ──
+        for _py_src in (svc_path / "src", svc_path):
+            if not _py_src.is_dir():
+                continue
+            for _d in sorted(_py_src.iterdir()):
+                if not _d.is_dir() or _d.name.startswith(".") or _d.name in ("tests", "test"):
+                    continue
+                if not (_d / "__init__.py").exists():
+                    continue
+                _n = len(list(_d.glob("*.py")))
+                if _n >= _DOMAIN_MIN_FILES:
+                    _rel = str(_d.relative_to(root))
+                    _found_domains.append((_n, _d.name, _rel))
+            if _found_domains:
+                break
+
+        if _found_domains:
+            # Sort by file count descending so the most substantial domains come first
+            _found_domains.sort(key=lambda x: x[0], reverse=True)
+            domain_dirs[svc] = [
+                f"{name} ({rel_path}, {n} files)"
+                for n, name, rel_path in _found_domains[:_DOMAIN_MAX_RESULTS]
+            ]
+
     inventory = {
         "svc_dirs": svc_dirs,
-        "cmd_entries": cmd_entries,
+        "sub_executables": sub_executables,
         "infra_modules": infra_modules,
         "key_files": key_files,
         "stacks": stacks,
         "terraform": terraform_info,
+        "domain_dirs": domain_dirs,
+        "gitmodules": _gitmodules_content,
     }
 
     console.print(f"  Services: {', '.join(svc_dirs) or 'none'}")
-    if cmd_entries:
-        console.print(f"  Sub-executables: {', '.join(cmd_entries)}")
+    if sub_executables:
+        console.print(f"  Sub-executables: {', '.join(sub_executables)}")
+    if domain_dirs:
+        for _svc, _doms in domain_dirs.items():
+            console.print(f"  Domain dirs [{_svc}]: {', '.join(d.split(' (')[0] for d in _doms)}")
     if infra_modules:
         console.print(f"  Infra modules: {', '.join(infra_modules)}")
     if key_files:
         console.print(f"  Key files catalogued: {len(key_files)}")
 
-    # --- Phase 3a: OTM scope decision ---
-    console.print("\n[dim]Phase 3a — OTM scope decision (Architect)…[/dim]")
+    # ── External services detection ───────────────────────────────────────────
+    # Identify external third-party services from infra module names + ADD/SAD docs.
+    # Written to structure.md and inventory.json so /threat can include them as
+    # external entities in OTM trust zones.
+    _ext_services = _detect_external_services(infra_modules, designs_dir if designs_dir and designs_dir.exists() else None)
+    if _ext_services:
+        _ext_md = "\n## External services\n\n"
+        _ext_md += "| Service | Category | Source |\n|---------|----------|--------|\n"
+        for _es in _ext_services:
+            _ext_md += f"| {_es['name']} | {_es['category']} | {_es['detected_in']} |\n"
+        _existing_md = (out_dir / "structure.md").read_text(encoding="utf-8")
+        (out_dir / "structure.md").write_text(_existing_md.rstrip() + "\n" + _ext_md, encoding="utf-8")
+        console.print(f"  External services: {', '.join(e['name'] for e in _ext_services)}")
+    inventory["external_services"] = _ext_services
+
+    # ── Phase 2 / 3 / 4: LLM phases (new ADD-013 flow) ───────────────────────
+    from code_crew.crew import (
+        _build_filtered_tree,
+        build_breakdown_task, build_summarize_unit_task,
+        build_summarize_docs_task,
+        classify_units_from_structure, build_diagram_from_services,
+    )
+
+    # ── Phase 2: Repo breakdown ────────────────────────────────────────────────
+    console.print("\n[dim]Phase 2 — Repo breakdown…[/dim]")
+    _areas: list[dict] = []  # {path, type, description}
+    try:
+        _tree_ctx = (
+            f"**Sub-executables detected**: {', '.join(sub_executables) or 'none'}\n"
+            f"**Infra modules detected**: {', '.join(infra_modules[:20]) or 'none'}\n"
+        )
+        _breakdown_raw = build_breakdown_task(root, extra_context=_tree_ctx)
+        _repo_prefix = root.name.rstrip("/") + "/"
+        for _line in _breakdown_raw.splitlines():
+            _s = _line.strip()
+            if _s.startswith("AREA:"):
+                _parts = [p.strip() for p in _s[5:].split("|", 2)]
+                if len(_parts) >= 2:
+                    _apath = _parts[0]
+                    # Strip repo-name prefix the LLM sometimes prepends (e.g. "code-crew/portal" → "portal")
+                    if _apath.startswith(_repo_prefix):
+                        _apath = _apath[len(_repo_prefix):]
+                    # Skip non-existent or non-directory paths (e.g. "pyproject.toml", "README.md")
+                    if not _apath or not (root / _apath.rstrip("/")).is_dir():
+                        continue
+                    _areas.append({
+                        "path": _apath,
+                        "type": _parts[1],
+                        "description": _parts[2] if len(_parts) > 2 else "",
+                    })
+                    console.print(f"  [dim]{_parts[1]:14}[/dim] {_apath}")
+    except Exception as exc:
+        console.print(f"  [yellow]Breakdown skipped: {exc}[/yellow]")
+        _areas = [{"path": d, "type": "service", "description": ""} for d in svc_dirs_scan]
+
+    # Append areas table to structure.md
+    if _areas:
+        _area_md = "\n## Repository areas\n\n"
+        _area_md += "| Path | Type | Description |\n|------|------|-------------|\n"
+        for _a in _areas:
+            _area_md += f"| `{_a['path']}` | {_a['type']} | {_a['description']} |\n"
+        _existing_md = (out_dir / "structure.md").read_text(encoding="utf-8")
+        (out_dir / "structure.md").write_text(_existing_md.rstrip() + "\n" + _area_md, encoding="utf-8")
+
+    # ── Phase 3: Per-unit deep-dive ───────────────────────────────────────────
+    console.print("\n[dim]Phase 3 — Per-unit deep-dive…[/dim]")
+    _unit_summaries: list[str] = []  # raw text blocks to append to structure.md
+
+    def _summarise_area(area: dict, depth: int = 0) -> None:
+        """Recursively summarise one area; spawns sub-calls if DECOMPOSE=yes."""
+        atype = area["type"]
+        apath = area["path"]
+        indent = "  " * depth
+
+        if atype in ("docs",):
+            console.print(f"{indent}[dim]→ docs {apath}[/dim]")
+            try:
+                _raw = build_summarize_docs_task(root, apath, area["description"])
+                _unit_summaries.append(_raw)
+                console.print(f"{indent}[green]✓[/green] docs {apath}")
+            except Exception as exc:
+                console.print(f"{indent}[yellow]~[/yellow] {apath}: {exc}")
+                _unit_summaries.append(f"AREA_SUMMARY: {apath} | docs | summarisation failed\n")
+
+        elif atype in ("service", "library", "tool", "demo", "test-harness"):
+            console.print(f"{indent}[dim]→ {atype} {apath}[/dim]")
+            try:
+                _raw = build_summarize_unit_task(
+                    root, apath, atype, area["description"],
+                    sub_executables, infra_modules,
+                )
+                # Normalize the UNIT_SUMMARY path line to match the actual path being processed.
+                # The 8b model sometimes hallucmates a wrong path or wraps the header in
+                # a markdown section marker (## UNIT_SUMMARY:). Strip ## prefix and fix path.
+                _apath_base = apath.rstrip("/")
+                _raw_lines = _raw.splitlines()
+                for _i, _rl in enumerate(_raw_lines):
+                    _s = _rl.strip().lstrip("# ").strip()
+                    if _s.startswith("UNIT_SUMMARY:") and not _s.startswith("UNIT_SUMMARY COMPLETE"):
+                        _raw_lines[_i] = f"UNIT_SUMMARY: {_apath_base}"
+                        break
+                _raw = "\n".join(_raw_lines)
+                _unit_summaries.append(_raw)
+                # Check for DECOMPOSE: yes
+                _decompose = False
+                _sub_units: list[str] = []
+                for _l in _raw.splitlines():
+                    _ls = _l.strip()
+                    if _ls.startswith("DECOMPOSE: yes"):
+                        _decompose = True
+                    elif _ls.startswith("SUB_UNITS:") and _decompose:
+                        # Reject angle-bracket placeholders the 8b model sometimes emits literally
+                        _sub_units = [s.strip() for s in _ls[10:].split(",")
+                                      if s.strip() and not s.strip().startswith("<")]
+                # Sub-unit segments that indicate code packages, not deployable services.
+                # The 8b model often returns Go internal/ packages or node_modules as
+                # sub-units; none of these are independently deployable.
+                _CODE_PKG_SEGS = {"internal", "pkg", "lib", "vendor", "node_modules",
+                                   "common", "shared", "utils", "helpers", "types"}
+
+                if _decompose and _sub_units and depth < 2:
+                    console.print(f"{indent}  [dim]↓ decomposing into: {', '.join(_sub_units)}[/dim]")
+                    for _sub in _sub_units:
+                        # Prepend parent path if the sub-unit path is relative.
+                        # Use _apath_base (trailing slash stripped) to avoid double-slash.
+                        if not _sub.startswith(_apath_base + "/") and not _sub.startswith("/"):
+                            _sub_abs = f"{_apath_base}/{_sub.lstrip('/')}"
+                        else:
+                            _sub_abs = _sub
+                        # Detect path duplication: the LLM sometimes returns paths that
+                        # include the parent dir name (e.g. parent="a/cmd", sub="cmd/server"
+                        # → "a/cmd/cmd/server"). If _sub_abs doesn't exist but stripping the
+                        # last parent segment from _sub produces a valid path, use that.
+                        if not (root / _sub_abs.rstrip("/")).is_dir():
+                            _last_seg = _apath_base.rsplit("/", 1)[-1]
+                            _sub_stripped = _sub.lstrip("/")
+                            if _sub_stripped.startswith(_last_seg + "/"):
+                                _sub_alt = f"{_apath_base}/{_sub_stripped[len(_last_seg)+1:]}"
+                                if (root / _sub_alt.rstrip("/")).is_dir():
+                                    _sub_abs = _sub_alt
+                        # Skip paths that look like code packages, not services.
+                        _sub_segs = set(_sub_abs.rstrip("/").split("/"))
+                        if _sub_segs & _CODE_PKG_SEGS:
+                            console.print(f"{indent}  [dim]  skip {_sub_abs} (code package)[/dim]")
+                            continue
+                        _summarise_area({"path": _sub_abs, "type": "service", "description": f"sub-unit of {apath}"}, depth + 1)
+                else:
+                    _t = next((_l.split(":", 1)[1].strip() for _l in _raw.splitlines() if _l.strip().startswith("TYPE:")), "?")
+                    _s = next((_l.split(":", 1)[1].strip() for _l in _raw.splitlines() if _l.strip().startswith("SENSITIVITY:")), "?")
+                    console.print(f"{indent}[green]✓[/green] {apath}: {_t} · {_s}")
+            except Exception as exc:
+                console.print(f"{indent}[yellow]~[/yellow] {apath}: {exc}")
+                _unit_summaries.append(f"AREA_SUMMARY: {apath} | {atype} | summarisation failed\n")
+
+        else:  # infra, unknown
+            _unit_summaries.append(f"AREA_SUMMARY: {apath} | {atype} | {area['description']}\n")
+
+    for _area in _areas:
+        _summarise_area(_area)
+
+    # Flush all unit summaries to structure.md
+    if _unit_summaries:
+        _sum_md = "\n## Unit summaries\n\n" + "\n\n".join(_unit_summaries)
+        _existing_md = (out_dir / "structure.md").read_text(encoding="utf-8")
+        (out_dir / "structure.md").write_text(_existing_md.rstrip() + "\n" + _sum_md, encoding="utf-8")
+    console.print(f"  [green]✓[/green] structure.md updated with {len(_unit_summaries)} unit summaries")
+
+    # ── Persist config (stacks, arch, CI, commands, compliance) ──────────────
+    final_compliance = compliance_standards
+    if stacks or arch_style or ci_methods or detected_commands or final_compliance:
+        import yaml as _yaml
+        cfg_path = out_dir / "config.yaml"
+        cfg_data: dict = {}
+        if cfg_path.exists():
+            try:
+                cfg_data = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            except Exception:
+                cfg_data = {}
+        if stacks:
+            cfg_data["stacks"] = stacks
+        if arch_style:
+            cfg_data.setdefault("architecture", {})["style"] = arch_style
+        if ci_methods:
+            cfg_data.setdefault("ci", {})["deployment_methods"] = ci_methods
+        if final_compliance:
+            cfg_data["compliance_standards"] = final_compliance
+            os.environ["CODE_CREW_COMPLIANCE"] = ",".join(final_compliance)
+        if detected_commands:
+            existing_cmds = cfg_data.get("commands", {})
+            for k, v in detected_commands.items():
+                existing_cmds.setdefault(k, v)
+            cfg_data["commands"] = existing_cmds
+            from shared.config import _ENV_MAP, _apply_section
+            _apply_section(existing_cmds, _ENV_MAP.get("commands", {}), override=False)
+        cfg_path.write_text(_yaml.safe_dump(cfg_data, default_flow_style=False, sort_keys=False), encoding="utf-8")
+        if stacks:
+            os.environ["_CODE_CREW_STACKS_PROFILE"] = ",".join(stacks)
+        _cfg_parts = ["stacks", "architecture", "CI/CD", "commands"]
+        if final_compliance:
+            _cfg_parts.append(f"compliance ({', '.join(final_compliance)})")
+        console.print(f"[green]✓[/green] Updated [dim]{cfg_path}[/dim] with {', '.join(_cfg_parts)}")
+
+    # ── Phase 4: Decomposition ────────────────────────────────────────────────
+    # Classification is done in Python (deterministic) from UNIT_SUMMARY TYPE/ENTRY_POINTS.
+    # Only the mermaid diagram is delegated to the LLM (simpler, less hallucination-prone).
+    console.print("\n[dim]Phase 4 — Decomposition…[/dim]")
     svc_id_fallback = root.name.lower().replace(" ", "-")
     scope_output = ""
+    _real_services: list[str] = []
+    _not_services: dict[str, str] = {}
+    _decomposed: dict[str, list[str]] = {}
     try:
-        from code_crew.crew import build_otm_scope_task
-        scope_crew = build_otm_scope_task(inventory)
-        scope_output = scope_crew.kickoff().raw
+        _structure_md_content = (out_dir / "structure.md").read_text(encoding="utf-8")
+
+        # Filter to top-level area summaries so sub-executable blocks don't appear.
+        _top_level_paths = {_a["path"].rstrip("/") for _a in _areas}
+        _decomp_md = _filter_structure_top_level(_structure_md_content, _top_level_paths)
+
+        # Classify deterministically from UNIT_SUMMARY fields (no LLM needed).
+        _cls = classify_units_from_structure(_decomp_md)
+        _real_services = _cls["real_services"]
+        _not_services = _cls["not_services"]
+        _decomposed = _cls["decomposed"]
+
+        console.print(f"  [green]✓[/green] Real services: {', '.join(_real_services)}")
+        for _ns, _reason in _not_services.items():
+            console.print(f"  [dim]✗ {_ns}: {_reason}[/dim]")
+        for _parent, _subs in _decomposed.items():
+            console.print(f"  [green]↓[/green] {_parent} → {', '.join(_subs)}")
+
+        # Build diagram via LLM (diagram drawing only — no classification).
+        _ext_svcs = inventory.get("external_services", [])
+        _diagram_raw = build_diagram_from_services(
+            _real_services, _not_services, _decomposed, _ext_svcs
+        )
+        # Strip any stray backtick fences the model adds around the graph block
+        _diagram = "\n".join(
+            l for l in _diagram_raw.splitlines()
+            if not l.strip().startswith("```")
+        ).strip()
+
+        if _diagram and _diagram.startswith("graph "):
+            _decomp_section = "\n## Decomposition\n\n" + _diagram + "\n"
+            _existing_md = (out_dir / "structure.md").read_text(encoding="utf-8")
+            (out_dir / "structure.md").write_text(_existing_md.rstrip() + "\n" + _decomp_section, encoding="utf-8")
+            (out_dir / "decomposition.md").write_text(
+                f"# {root.name} — Decomposition\n\n" + _diagram + "\n",
+                encoding="utf-8",
+            )
+            console.print("  [green]✓[/green] decomposition.md written")
+        else:
+            _debug_path = out_dir / "decomposition_debug.txt"
+            _debug_path.write_text(_diagram_raw, encoding="utf-8")
+            console.print(f"  [yellow]No diagram found — raw output saved to {_debug_path}[/yellow]")
     except Exception as exc:
-        console.print(f"[yellow]OTM scope phase failed: {exc}[/yellow]")
-        console.print("[dim]Falling back to single-project OTM.[/dim]")
-        all_components = svc_dirs + cmd_entries
+        console.print(f"  [yellow]Decomposition skipped: {exc}[/yellow]")
         scope_output = (
             f"PROJECT: {svc_id_fallback}\n"
-            f"DESCRIPTION: {project_summary or root.name + ' platform'}\n"
-            f"COMPONENTS: {', '.join(all_components)}\n"
+            f"DESCRIPTION: {root.name} platform\n"
+            f"COMPONENTS: {', '.join(svc_dirs)}\n"
             f"OTM SCOPE COMPLETE"
         )
 
-    # Parse PROJECT blocks from scope output
+    # Build project list from Python-classified real services (deterministic, no LLM parsing).
+    import re as _re_scope
     projects: list[dict] = []
-    current_proj: dict = {}
-    for line in scope_output.splitlines():
-        line = line.strip()
-        if line.startswith("PROJECT:"):
-            if current_proj:
-                projects.append(current_proj)
-            # Normalise to lowercase kebab-case (model sometimes omits hyphens)
-            import re as _re_scope
-            raw_id = line.split(":", 1)[1].strip()
-            proj_id = _re_scope.sub(r"[^a-z0-9]+", "-", raw_id.lower()).strip("-")
-            current_proj = {
-                "id": proj_id,
-                "name": proj_id.replace("-", " ").title(),
-                "description": "",
-                "components": [],
-            }
-        elif line.startswith("DESCRIPTION:") and current_proj:
-            current_proj["description"] = line.split(":", 1)[1].strip()
-        elif line.startswith("COMPONENTS:") and current_proj:
-            current_proj["components"] = [c.strip() for c in line.split(":", 1)[1].split(",") if c.strip()]
-    if current_proj:
-        projects.append(current_proj)
+    _svc_source = _real_services or [svc_id_fallback]
+    for _svc_path in _svc_source:
+        _subs = _decomposed.get(_svc_path, [])
+        if _subs:
+            # Decomposed service → one project per sub-service
+            for _sub in _subs:
+                _pid = _re_scope.sub(r"[^a-z0-9]+", "-",
+                                     f"{_svc_path}-{_sub}".lower()).strip("-")
+                projects.append({
+                    "id": _pid,
+                    "name": _pid.replace("-", " ").title(),
+                    "description": f"Sub-service '{_sub}' of {_svc_path}",
+                    "components": [f"{_svc_path}/{_sub}"],
+                })
+        else:
+            _pid = _re_scope.sub(r"[^a-z0-9]+", "-", _svc_path.lower()).strip("-")
+            projects.append({
+                "id": _pid,
+                "name": _pid.replace("-", " ").title(),
+                "description": f"Deployable service at {_svc_path}",
+                "components": [_svc_path],
+            })
 
-    # Deduplicate by id (model sometimes repeats PROJECT blocks in its output)
+    # Deduplicate by id
     seen_ids: set[str] = set()
     projects = [p for p in projects if p["id"] not in seen_ids and not seen_ids.add(p["id"])]  # type: ignore[func-returns-value]
 
     if not projects:
-        console.print("[yellow]No project blocks parsed from scope output — skipping OTM generation.[/yellow]")
+        console.print("[yellow]No deployable services identified — skipping OTM generation.[/yellow]")
         return
 
     console.print(f"\n[bold]OTM projects identified:[/bold] {', '.join(p['id'] for p in projects)}")
@@ -3776,6 +4023,34 @@ def _run_threat(target: str, console: Console) -> None:
         console.print("[yellow]Inventory is empty. Run [bold]/explore[/bold] to re-scan.[/yellow]")
         return
 
+    # Merge config-declared projects (threat.projects or top-level projects:) on top of
+    # the auto-detected inventory.  Config entries take precedence by id; entries not in
+    # the inventory are appended.  This lets users declare sub-projects of a monorepo
+    # (e.g. split "portal" into "dataset-registration", "container-instrumentation") without
+    # re-running /explore or editing inventory.json directly.
+    _cfg_projects: list[dict] = (
+        _proj_cfg.get("threat", {}).get("projects")
+        or _proj_cfg.get("projects")
+        or []
+    )
+    if _cfg_projects:
+        _inv_by_id = {p["id"]: p for p in projects}
+        for _cp in _cfg_projects:
+            _cid = _cp.get("id", "").strip()
+            if not _cid:
+                continue
+            _entry = {
+                "id": _cid,
+                "name": _cp.get("name", _cid.replace("-", " ").title()),
+                "description": _cp.get("description", ""),
+                # source_dirs scopes the threat crew to specific paths; falls back to
+                # the parent project's components if not set.
+                "components": _cp.get("source_dirs") or _inv_by_id.get(_cid, {}).get("components", []),
+                "terraform_grep": _inv_by_id.get(_cid, {}).get("terraform_grep", ""),
+            }
+            _inv_by_id[_cid] = _entry
+        projects = list(_inv_by_id.values())
+
     if filter_id:
         matched = [p for p in projects if p["id"] == filter_id]
         if not matched:
@@ -3795,7 +4070,13 @@ def _run_threat(target: str, console: Console) -> None:
     tmd_dir = designs_dir / "TMD"
     tmd_dir.mkdir(exist_ok=True)
 
-    from code_crew.crew import build_threat_model_crew, build_threat_patch_crew, build_threat_gate_crew
+    from code_crew.crew import (
+        build_threat_model_crew, build_threat_patch_crew, build_threat_gate_crew,
+        build_threat_discover_crew, build_threat_component_threats_crew,
+        build_threat_mitigations_crew, build_threat_component_crew,
+        assemble_otm_yaml, _parse_yaml_section,
+        _build_threat_context,
+    )
     from crewai import Task, Crew, Process, Agent
 
     today = datetime.date.today().isoformat()
@@ -3812,209 +4093,320 @@ def _run_threat(target: str, console: Console) -> None:
 
     console.print(f"\n[bold]Threat modeling:[/bold] {', '.join(p['id'] for p in projects)}\n")
 
+    def _kickoff_timed(crew, label: str, _max_504_retries: int = 6):
+        """Run crew.kickoff() with per-project timeout and 504 retry.
+
+        NVIDIA Build (and other hosted LLMs) return 504 when the generation takes
+        too long. Retry up to _max_504_retries times with 30-second backoff before
+        giving up.
+        """
+        import threading as _threading
+        import time as _time
+
+        for _attempt in range(_max_504_retries):
+            _holder = [None]
+            _exc_holder = [None]
+
+            def _run():
+                try:
+                    _holder[0] = crew.kickoff()
+                except Exception as _e:
+                    _exc_holder[0] = _e
+
+            if _timeout_secs:
+                _t = _threading.Thread(target=_run, daemon=True)
+                _t.start()
+                _t.join(timeout=_timeout_secs)
+                if _t.is_alive():
+                    console.print(
+                        f"\n[bold red]  ✗ {label} exceeded {_max_run_minutes}-minute limit "
+                        f"— stopping (set flow.max_run_minutes in config to change).[/bold red]"
+                    )
+                    raise RuntimeError(f"Crew timed out after {_max_run_minutes} minutes")
+            else:
+                _run()
+
+            exc = _exc_holder[0]
+            if exc is None:
+                return _holder[0]
+
+            _exc_str = str(exc)
+            _is_transient = (
+                "504" in _exc_str
+                or "timed out" in _exc_str.lower()
+                or "connection" in _exc_str.lower()
+                or "502" in _exc_str
+                or "503" in _exc_str
+            )
+            if _is_transient and _attempt < _max_504_retries - 1:
+                _wait = 30 * (_attempt + 1)
+                console.print(
+                    f"[yellow]  {label}: transient API error (attempt {_attempt + 1}/{_max_504_retries})"
+                    f" — retrying in {_wait}s… ({_exc_str[:80]})[/yellow]"
+                )
+                _time.sleep(_wait)
+                continue
+
+            raise exc
+
     for project in projects:
         tmd_file = tmd_dir / f"{project['id']}.yaml"
-        revision_feedback = ""
-        _last_yaml = ""  # keep the best OTM seen so far for patch revisions
+        _last_yaml = ""
 
-        for _revision in range(_max_revisions + 1):
-            if _revision == 0:
-                console.print(f"[dim]  [bold]{project['id']}[/bold] — Security Lead + Architect collaborating…[/dim]")
-            else:
-                console.print(
-                    f"[dim]  [bold]{project['id']}[/bold] — revision {_revision}/{_max_revisions} "
-                    f"— patching {len(revision_feedback.splitlines())} manager gap(s)…[/dim]"
-                )
+        try:
+            # ── Phase 1: Discovery (trust zones + components) ─────────────────────
+            console.print(f"[dim]  [bold]{project['id']}[/bold] — Phase 1: discovering trust zones + components…[/dim]")
 
-            try:
-                # ── Phase 1: full hierarchical crew on first pass; targeted patch on revisions ──
-                # Use patch crew only when we have a valid base OTM to patch. If _last_yaml is
-                # empty (no YAML was produced yet) always re-run the full crew — the patch crew
-                # with an empty OTM gets confused and searches the filesystem for its own instructions.
-                if _revision == 0 or not _last_yaml:
-                    model_crew = build_threat_model_crew(project, inventory, revision_feedback)
-                else:
-                    model_crew = build_threat_patch_crew(project, _last_yaml, revision_feedback)
+            discover_crew = build_threat_discover_crew(project, inventory)
+            discover_result = _kickoff_timed(discover_crew, f"{project['id']} Phase 1")
+            _tok = getattr(discover_crew.usage_metrics, "total_tokens", 0) or 0
+            if _tok:
+                console.print(f"[dim]  discover tokens: {_tok:,}[/dim]")
 
-                if _timeout_secs:
-                    from concurrent.futures import ThreadPoolExecutor as _TPE, TimeoutError as _TE
-                    import threading as _threading
-                    _crew_result_holder = [None]
-                    _crew_exc_holder = [None]
+            discover_output = discover_result.raw
+            # Also check worker task output in case manager summary omits raw YAML
+            _discover_candidates = [discover_output]
+            if hasattr(discover_crew, "tasks") and discover_crew.tasks:
+                for _wt in discover_crew.tasks:
+                    if _wt.output and str(_wt.output.raw or "").strip():
+                        _discover_candidates.append(str(_wt.output.raw))
 
-                    def _run_crew():
-                        try:
-                            _crew_result_holder[0] = model_crew.kickoff()
-                        except Exception as _e:
-                            _crew_exc_holder[0] = _e
-
-                    _t = _threading.Thread(target=_run_crew, daemon=True)
-                    _t.start()
-                    _t.join(timeout=_timeout_secs)
-                    if _t.is_alive():
-                        # Thread still running — daemon=True means it dies with the process
-                        console.print(
-                            f"\n[bold red]  ✗ Run exceeded {_max_run_minutes}-minute limit "
-                            f"— stopping (set flow.max_run_minutes in config to change).[/bold red]"
-                        )
-                        raise RuntimeError(f"Crew timed out after {_max_run_minutes} minutes")
-                    if _crew_exc_holder[0] is not None:
-                        raise _crew_exc_holder[0]
-                    crew_result = _crew_result_holder[0]
-                else:
-                    crew_result = model_crew.kickoff()
-                build_output = crew_result.raw
-
-                # In Process.hierarchical the manager writes the FINAL ANSWER in prose.
-                # The actual OTM YAML may be in the worker task's output instead — check both.
-                candidate_outputs = [build_output]
-                if hasattr(model_crew, "tasks") and model_crew.tasks:
-                    for _t in model_crew.tasks:
-                        if _t.output and str(_t.output.raw or "").strip():
-                            candidate_outputs.append(str(_t.output.raw))
-
-                def _extract_from(text: str) -> str:
-                    cleaned = _re.sub(r"<\|[^|>]+\|>[^\n]*\n?", "", text)
-                    m = _re.search(
-                        r"(otmVersion:.*?)(?:OTM BUILD COMPLETE|```\s*$)", cleaned, _re.DOTALL
-                    )
-                    if m:
-                        return m.group(1).strip()
-                    candidate = cleaned.split("OTM BUILD COMPLETE")[0].strip()
-                    candidate = _re.sub(r"^```ya?ml\s*\n?", "", candidate, flags=_re.MULTILINE)
-                    candidate = _re.sub(r"^```\s*$", "", candidate, flags=_re.MULTILINE).strip()
-                    return candidate if "otmVersion:" in candidate else ""
-
-                yaml_text = ""
-                for _candidate in candidate_outputs:
-                    yaml_text = _extract_from(_candidate)
-                    if yaml_text:
-                        break
-
-                # Strip NVIDIA/LLaMA model artifacts for the final clean_output used downstream
-                clean_output = _re.sub(r"<\|[^|>]+\|>[^\n]*\n?", "", build_output)
-
-                if not yaml_text or "otmVersion:" not in yaml_text:
-                    # Agent may have written the file via shell instead of outputting text.
-                    # Only use the disk file if the agent wrote it THIS run (mtime after run start).
-                    _disk_ok = False
-                    if tmd_file.exists():
-                        import os as _os
-                        _mtime = datetime.datetime.fromtimestamp(_os.path.getmtime(tmd_file))
-                        _disk_content = tmd_file.read_text(encoding="utf-8")
-                        if _mtime > _run_start and "otmVersion:" in _disk_content:
-                            _disk_ok = True
-                    if _disk_ok:
-                        console.print(f"[dim]  No YAML in response — reading from disk (agent wrote directly)[/dim]")
-                        yaml_text = _disk_content
-                        # Strip our own file header if present
-                        yaml_text = _re.sub(r"^#[^\n]*\n", "", yaml_text, flags=_re.MULTILINE).strip()
-                    else:
-                        # Log a snippet of what the manager actually returned to aid diagnosis
-                        _preview = (build_output or "").strip()[:300].replace("\n", "↵")
-                        console.print(
-                            f"[yellow]  No valid OTM YAML extracted for {project['id']} "
-                            f"on attempt {_revision + 1} — retrying.[/yellow]\n"
-                            f"[dim]  Manager output preview: {_preview}[/dim]"
-                        )
-                        # Carry the previous attempt's established content forward so the
-                        # Architect does not re-read files and re-discover zones from scratch.
-                        _prev_content = (build_output or "").strip()[:3000]
-                        revision_feedback = (
-                            "## Established context from previous attempt\n\n"
-                            "The previous attempt produced the analysis below but did NOT output OTM YAML.\n"
-                            "The trust zones, component boundaries, and findings below are already established — "
-                            "do NOT re-read source files, Terraform, or design docs to re-discover them.\n\n"
-                            f"{_prev_content}\n\n"
-                            "## What to do now\n\n"
-                            "Proceed directly to Phase 1b (component inventory using the zones above) and then "
-                            "produce the complete OTM YAML as plain text in your response. "
-                            "End with OTM BUILD COMPLETE. Do NOT write any files to disk."
-                        )
-                        continue
-
-                # ── Lint → AI-fix loop ────────────────────────────────────────────────
-                # Only re-trigger the AI fix when the same error (same line/column)
-                # persists — a different error means the fix changed something, so stop.
-                _prev_err_mark: tuple | None = None
-                for _lint_attempt in range(_max_lint_retries + 1):
-                    try:
-                        _yaml.safe_load(yaml_text)
-                        break
-                    except _yaml.YAMLError as _ye:
-                        _mark = _ye.problem_mark
-                        _err_key = (_mark.line, _mark.column) if _mark else str(_ye)
-
-                        if _lint_attempt > 0 and _err_key != _prev_err_mark:
-                            # Error shifted — fix changed the YAML; stop here to avoid
-                            # chasing a moving target
-                            console.print(
-                                f"[dim]  Lint error shifted after fix (now line {_mark.line + 1 if _mark else '?'}) "
-                                f"— stopping lint loop.[/dim]"
-                            )
-                            break
-
-                        if _lint_attempt == _max_lint_retries:
-                            console.print(
-                                f"[yellow]  OTM YAML for {project['id']} still invalid after "
-                                f"{_max_lint_retries} fix attempts — same error persists.[/yellow]"
-                            )
-                            yaml_text = ""
-                            break
-
-                        _prev_err_mark = _err_key
-                        _line = _mark.line + 1 if _mark else "?"
-                        console.print(f"[dim]  Lint error at line {_line}: {_ye.problem} — asking architect to fix…[/dim]")
-                        from code_crew.crew import build_agents, _make_tools
-                        _fix_task = Task(
-                            name=f"fix_otm_yaml_{project['id']}",
-                            description=(
-                                f"The OTM YAML for project '{project['id']}' has a YAML syntax error:\n\n"
-                                f"  Line {_line}: {_ye.problem}\n\n"
-                                f"Here is the invalid YAML:\n\n```yaml\n{yaml_text}\n```\n\n"
-                                "Output the fully corrected YAML. Do not truncate. "
-                                "End with OTM BUILD COMPLETE.\n\n"
-                                "CRITICAL: Write the YAML as plain text. Do NOT call any tools."
-                            ),
-                            expected_output="Complete valid OTM YAML. Ends with OTM BUILD COMPLETE.",
-                            agent=build_agents(_make_tools())["architect"],
-                        )
-                        _fix_crew = Crew(
-                            agents=[_fix_task.agent], tasks=[_fix_task],
-                            process=Process.sequential, verbose=True,
-                        )
-                        _fix_out = _re.sub(r"<\|[^|>]+\|>[^\n]*\n?", "", _fix_crew.kickoff().raw)
-                        _fx = _re.search(
-                            r"(otmVersion:.*?)(?:OTM BUILD COMPLETE|```\s*$)", _fix_out, _re.DOTALL
-                        )
-                        yaml_text = _fx.group(1).strip() if _fx else _fix_out.split("OTM BUILD COMPLETE")[0].strip()
-
-                if not yaml_text:
-                    if _revision < _max_revisions:
-                        revision_feedback = (
-                            "The OTM YAML produced contained YAML syntax errors that could not be auto-fixed. "
-                            "Pay careful attention to YAML structure — ensure every risk block has "
-                            "explicit `likelihood:` and `impact:` keys, not bare scalars."
-                        )
-                        continue
-                    console.print(f"[yellow]  Skipping {project['id']} — YAML could not be fixed.[/yellow]")
+            zones: list = []
+            components: list = []
+            for _cand in _discover_candidates:
+                _z = _parse_yaml_section(_cand, "trustZones")
+                _c = _parse_yaml_section(_cand, "components")
+                if _z and not zones:
+                    zones = _z
+                if _c and not components:
+                    components = _c
+                if zones and components:
                     break
 
-                # Save the best valid OTM seen so far for patch revisions.
-                # Only set this AFTER lint succeeds so _last_yaml is always valid YAML.
-                _last_yaml = yaml_text
+            if not zones or not components:
+                console.print(
+                    f"[yellow]  Phase 1 produced no zones/components for {project['id']} "
+                    f"— falling back to full crew.[/yellow]"
+                )
+                # Fallback: full monolithic crew (existing logic)
+                _fb_crew = build_threat_model_crew(project, inventory)
+                _fb_result = _kickoff_timed(_fb_crew, f"{project['id']} fallback")
+                _fb_tok = getattr(_fb_crew.usage_metrics, "total_tokens", 0) or 0
+                if _fb_tok:
+                    console.print(f"[dim]  fallback tokens: {_fb_tok:,}[/dim]")
+                _fb_out = _fb_result.raw
+                _fb_candidates = [_fb_out]
+                if hasattr(_fb_crew, "tasks") and _fb_crew.tasks:
+                    for _wt in _fb_crew.tasks:
+                        if _wt.output and str(_wt.output.raw or "").strip():
+                            _fb_candidates.append(str(_wt.output.raw))
+                _fb_yaml = ""
+                for _cand in _fb_candidates:
+                    _cleaned = _re.sub(r"<\|[^|>]+\|>[^\n]*\n?", "", _cand)
+                    _m = _re.search(r"(otmVersion:.*?)(?:OTM BUILD COMPLETE|```\s*$)", _cleaned, _re.DOTALL)
+                    if _m:
+                        _fb_yaml = _m.group(1).strip()
+                        break
+                if _fb_yaml:
+                    _last_yaml = _fb_yaml
+                    tmd_file.write_text(
+                        f"# OpenThreatModel v0.2.0 — generated by /threat on {today} [FALLBACK]\n"
+                        f"# Project: {project['name']}\n\n" + _fb_yaml + "\n",
+                        encoding="utf-8",
+                    )
+                    _rel = tmd_file.relative_to(root) if tmd_file.is_relative_to(root) else tmd_file.name
+                    console.print(f"[dim]  Written (fallback, unreviewed): {_rel}[/dim]")
+                    _convert_tmd(tmd_file, tmd_dir, root, console)
+                else:
+                    console.print(f"[yellow]  Fallback also produced no OTM for {project['id']} — skipping.[/yellow]")
+                continue
 
-                # ── Phase 2: Manager gate ─────────────────────────────────────────────
-                console.print(f"[dim]  [bold]{project['id']}[/bold] — manager reviewing completeness…[/dim]")
+            console.print(f"[dim]  {len(zones)} zones, {len(components)} components discovered[/dim]")
+
+            # ── Phase 1 verification gate ─────────────────────────────────────
+            # Print zone → component table so the user can verify trust groupings
+            # before the crew spends time on Phase 2+3 threat analysis.
+            _zone_comp_map: dict[str, list[str]] = {}
+            for _z in zones:
+                _zone_comp_map[_z.get("id", "")] = []
+            for _c in components:
+                _zid = (_c.get("parent") or {}).get("trustZone", "?")
+                _zone_comp_map.setdefault(_zid, []).append(_c.get("name", _c.get("id", "?")))
+            console.print(f"\n[bold]Phase 1 result — {project['id']}[/bold]")
+            for _z in zones:
+                _zid = _z.get("id", "")
+                _zname = _z.get("name", _zid)
+                _rating = _z.get("rating", "?")
+                _members = _zone_comp_map.get(_zid, [])
+                _member_str = ", ".join(_members) if _members else "[dim]no components[/dim]"
+                console.print(f"  [cyan]{_zname}[/cyan] (rating {_rating}): {_member_str}")
+            console.print("")
+
+            _ans = _read_line(console, "[bold]Continue to threat analysis?[/bold] [y/N] ").strip().lower()
+            if _ans not in ("y", "yes"):
+                # Write partial OTM and stop — user will inspect zones before proceeding
+                _partial = assemble_otm_yaml(project, zones, components, [], [], stacks, today)
+                tmd_file.write_text(
+                    f"# OpenThreatModel v0.2.0 — partial (Phase 1 complete, stopped for review)\n"
+                    f"# Project: {project['name']}\n\n" + _partial + "\n",
+                    encoding="utf-8",
+                )
+                _rel = tmd_file.relative_to(root) if tmd_file.is_relative_to(root) else tmd_file.name
+                console.print(f"[dim]  Partial OTM saved: {_rel}[/dim]")
+                console.print(f"[yellow]  Stopped after Phase 1. Re-run /threat {project['id']} to continue.[/yellow]")
+                continue
+
+            # Write partial OTM after Phase 1
+            _partial = assemble_otm_yaml(project, zones, components, [], [], stacks, today)
+            tmd_file.write_text(
+                f"# OpenThreatModel v0.2.0 — partial (Phase 1 complete)\n"
+                f"# Project: {project['name']}\n\n" + _partial + "\n",
+                encoding="utf-8",
+            )
+
+            # Build shared context string for phases 2+3 (pre-scanned files + established zones/components)
+            _base_ctx = _build_threat_context(project, inventory)
+            _zones_yaml = _yaml.dump({"trustZones": zones}, sort_keys=False, allow_unicode=True, default_flow_style=False)
+            _comps_yaml = _yaml.dump({"components": components}, sort_keys=False, allow_unicode=True, default_flow_style=False)
+            _phase1_ctx = (
+                "## Established trust zones (from Phase 1 — do NOT re-derive)\n\n"
+                f"```yaml\n{_zones_yaml}```\n\n"
+                "## Established components (from Phase 1 — do NOT re-derive)\n\n"
+                f"```yaml\n{_comps_yaml}```"
+            )
+
+            # ── Phase 2+3: Threats + mitigations per component (parallel) ──────────
+            import asyncio as _asyncio
+
+            _MAX_PARALLEL = 3  # NVIDIA free tier: cap concurrent calls
+            _base_threat_ctx = _base_ctx + "\n\n" + _phase1_ctx
+
+            async def _run_component(_comp: dict, _id_start: int) -> tuple[list, list]:
+                """Run one component crew asynchronously; return (threats, mitigations)."""
+                _comp_name = _comp.get("name", _comp.get("id", "unknown")) if isinstance(_comp, dict) else "unknown"
+                _crew = build_threat_component_crew(
+                    project, _comp,
+                    context_text=_base_threat_ctx,
+                    threat_id_start=_id_start,
+                )
+                try:
+                    _result = await _crew.kickoff_async()
+                except Exception as _exc:
+                    console.print(f"[yellow]  component {_comp_name}: failed ({_exc}) — skipping[/yellow]")
+                    return [], []
+                _tok = getattr(_crew.usage_metrics, "total_tokens", 0) or 0
+                if _tok:
+                    console.print(f"[dim]  {_comp_name} tokens: {_tok:,}[/dim]")
+                # kickoff_async() may not populate .raw in all CrewAI versions;
+                # fall back to tasks_output or str() coercion.
+                _to_raw = (_result.tasks_output[0].raw if _result.tasks_output else "")
+                _raw = _result.raw or _to_raw or str(_result)
+                console.print(
+                    f"[dim]  {_comp_name} raw[0:120]: "
+                    f"{repr(_raw[:120]) if _raw else '(empty)'}[/dim]"
+                )
+                _threats = _parse_yaml_section(_raw, "threats")
+                _mits = _parse_yaml_section(_raw, "mitigations")
+                return _threats, _mits
+
+            async def _run_all_parallel() -> tuple[list, list]:
+                _sem = _asyncio.Semaphore(_MAX_PARALLEL)
+                _id_start = 1
+                _ordered: list[tuple[int, list, list]] = []
+
+                async def _guarded(_comp: dict, _start: int, _idx: int):
+                    _comp_name = _comp.get("name", _comp.get("id", "?")) if isinstance(_comp, dict) else "?"
+                    console.print(f"[dim]  analysing: {_comp_name} ({_idx}/{len(components)})…[/dim]")
+                    async with _sem:
+                        _t, _m = await _run_component(_comp, _start)
+                    return _idx, _t, _m
+
+                # Pre-assign sequential threat ID starts (approximate — order preserved)
+                _starts = []
+                _running_start = 1
+                for _c in components:
+                    _starts.append(_running_start)
+                    _running_start += 10  # generous upper bound per component
+
+                _tasks = [
+                    _guarded(_comp, _starts[i], i + 1)
+                    for i, _comp in enumerate(components)
+                ]
+                _results = await _asyncio.gather(*_tasks)
+
+                # Sort by original index so OTM order matches component order
+                for _idx, _t, _m in sorted(_results, key=lambda x: x[0]):
+                    _ordered.append((_idx, _t, _m))
+
+                all_t: list = []
+                all_m: list = []
+                for _, _t, _m in _ordered:
+                    all_t.extend(_t)
+                    all_m.extend(_m)
+
+                return all_t, all_m
+
+            console.print(f"[dim]  analysing {len(components)} components (parallel, max {_MAX_PARALLEL})…[/dim]")
+            all_threats, all_mitigations = _asyncio.run(_run_all_parallel())
+
+            # Write OTM after all components complete
+            _partial = assemble_otm_yaml(project, zones, components, all_threats, all_mitigations, stacks, today)
+            tmd_file.write_text(
+                f"# OpenThreatModel v0.2.0 — partial (post Phase 2+3)\n"
+                f"# Project: {project['name']}\n\n" + _partial + "\n",
+                encoding="utf-8",
+            )
+
+            console.print(f"[dim]  {len(all_threats)} threats, {len(all_mitigations)} mitigations[/dim]")
+            if not all_threats:
+                console.print(f"[red]  {project['id']}: Phase 2+3 produced 0 threats — parallel parse failed. "
+                               f"Check _result.raw from kickoff_async(). Aborting.[/red]")
+                continue
+
+            # ── Assemble final OTM ────────────────────────────────────────────────
+            yaml_text = assemble_otm_yaml(project, zones, components, all_threats, all_mitigations, stacks, today)
+
+            try:
+                _yaml.safe_load(yaml_text)
+            except _yaml.YAMLError as _ye:
+                console.print(f"[yellow]  OTM YAML lint warning for {project['id']}: {_ye}[/yellow]")
+
+            _last_yaml = yaml_text
+
+            # ── Gate + patch loop ─────────────────────────────────────────────────
+            revision_feedback = ""
+            for _revision in range(_max_revisions + 1):
+                if _revision > 0:
+                    console.print(
+                        f"[dim]  revision {_revision}/{_max_revisions} — patching "
+                        f"{len(revision_feedback.splitlines())} gap(s)…[/dim]"
+                    )
+                    _patch_crew = build_threat_patch_crew(project, _last_yaml, revision_feedback)
+                    _patch_result = _kickoff_timed(_patch_crew, f"{project['id']} patch/{_revision}")
+                    _tok = getattr(_patch_crew.usage_metrics, "total_tokens", 0) or 0
+                    if _tok:
+                        console.print(f"[dim]  patch tokens: {_tok:,}[/dim]")
+                    _patch_out = _re.sub(r"<\|[^|>]+\|>[^\n]*\n?", "", _patch_result.raw)
+                    _pm = _re.search(r"(otmVersion:.*?)(?:OTM BUILD COMPLETE|```\s*$)", _patch_out, _re.DOTALL)
+                    if _pm:
+                        yaml_text = _pm.group(1).strip()
+                        _last_yaml = yaml_text
+
+                console.print(f"[dim]  {project['id']} — gate reviewing…[/dim]")
+                _gate_ctx_est = len(yaml_text) // 4
+                console.print(f"[dim]  gate context ~{_gate_ctx_est:,} tokens[/dim]")
                 gate_crew = build_threat_gate_crew(project, yaml_text, stacks)
-                gate_output = gate_crew.kickoff().raw
+                gate_result = _kickoff_timed(gate_crew, f"{project['id']} gate/{_revision}")
+                _gate_tok = getattr(gate_crew.usage_metrics, "total_tokens", 0) or 0
+                if _gate_tok:
+                    console.print(f"[dim]  gate tokens: {_gate_tok:,}[/dim]")
+                gate_output = gate_result.raw
 
                 if "THREAT MODEL APPROVED" in gate_output:
                     residual = gate_output.split("THREAT MODEL APPROVED", 1)[1].strip()
                     tmd_file.write_text(
                         f"# OpenThreatModel v0.2.0 — generated by /threat on {today}\n"
-                        f"# Project: {project['name']}\n\n"
-                        + yaml_text + "\n",
+                        f"# Project: {project['name']}\n\n" + yaml_text + "\n",
                         encoding="utf-8",
                     )
                     _rel = tmd_file.relative_to(root) if tmd_file.is_relative_to(root) else tmd_file.name
@@ -4022,7 +4414,7 @@ def _run_threat(target: str, console: Console) -> None:
                     if residual:
                         console.print(f"[dim]  Residual risk: {residual.strip()[:300]}[/dim]")
                     _convert_tmd(tmd_file, tmd_dir, root, console)
-                    break  # done for this project
+                    break
 
                 elif "NEEDS REVISION" in gate_output and _revision < _max_revisions:
                     gaps = gate_output.split("NEEDS REVISION", 1)[1].strip()
@@ -4031,18 +4423,15 @@ def _run_threat(target: str, console: Console) -> None:
                         f"  [dim]{gaps[:400]}[/dim]"
                     )
                     revision_feedback = gaps
-                    # loop: re-run model crew with the manager's feedback injected
 
                 else:
-                    # max revisions reached or unexpected gate output — write best effort
                     console.print(
                         f"[yellow]  {project['id']}: max revisions reached or gate inconclusive — "
                         f"writing best-effort OTM.[/yellow]"
                     )
                     tmd_file.write_text(
                         f"# OpenThreatModel v0.2.0 — generated by /threat on {today} [UNREVIEWED]\n"
-                        f"# Project: {project['name']}\n\n"
-                        + yaml_text + "\n",
+                        f"# Project: {project['name']}\n\n" + yaml_text + "\n",
                         encoding="utf-8",
                     )
                     _rel = tmd_file.relative_to(root) if tmd_file.is_relative_to(root) else tmd_file.name
@@ -4050,9 +4439,8 @@ def _run_threat(target: str, console: Console) -> None:
                     _convert_tmd(tmd_file, tmd_dir, root, console)
                     break
 
-            except Exception as exc:
-                console.print(f"[yellow]  OTM build failed for {project['id']}: {exc}[/yellow]")
-                break
+        except Exception as exc:
+            console.print(f"[yellow]  OTM build failed for {project['id']}: {exc}[/yellow]")
 
 
 def _run_fix(console: Console) -> None:

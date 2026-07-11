@@ -62,10 +62,13 @@ A trust boundary is a line where control, authentication, or privilege changes. 
 **A zone boundary exists when any of these is true:**
 - A different organisation, team, or external entity owns or operates the components on the other side
 - A different authentication mechanism is required (e.g. JWT vs IAM role vs mTLS vs API key vs no auth)
-- A significantly different network segment separates them (public internet, VPC private subnet, data tier, management plane)
-- A different privilege or regulatory scope applies (admin vs. user, PHI-in-scope vs. out-of-scope)
+- A different privilege level applies to **human actors** (admin operators vs. regular users)
 
-**Two components that differ on any of the above belong in different zones, even if they are in the same VPC.**
+**Components belong in the same zone when they share the same owner, the same network environment, and the same external attack surface.** A load balancer, application service, and database all operated by the same org and sitting inside the same network boundary are one zone — an attacker who breaches the perimeter reaches all of them. Internal sub-boundaries (public vs. private subnet) may warrant a sub-zone, but not a separate independent zone.
+
+**Assign each component to an existing zone before creating a new one.** Ask: does any proposed zone already have the same operator, same environment, and same external attack surface? If yes, place the component there. Use a sub-zone (with a `parent` field) for meaningful internal segmentation rather than creating a flat new zone.
+
+**Sub-zones** model internal segmentation within a larger zone — for example, a public-facing ALB tier nested inside an org's private platform zone. The inner zone inherits the outer zone's owner but has an additional internal boundary worth modelling.
 
 Ask the Architect for trust zones using a **compact structured-output question** — no prose, just zone blocks:
 
@@ -75,10 +78,10 @@ Ask the Architect for trust zones using a **compact structured-output question**
 ZONE: <name — who/what this zone represents>
   id: <kebab-case>
   description: <one sentence — who controls it and what credential crosses into it>
-  rating: <0=public/unauthenticated, 25=authenticated external, 50=authenticated partner, 75=internal service, 85=privileged/admin, 90=data tier>
+  rating: <0=public/unauthenticated, 25=authenticated external, 50=authenticated partner, 75=internal platform (org-operated, IAM/internal auth — covers ALB, app services, and data stores in the same org), 85=privileged/admin operators>
 ```
 
-Remember: separate zones for each distinct external actor category; perimeter components (load balancer, API gateway) are NOT in the external-user zone; third-party cloud services are their own zone; data stores are separate from application services; operators are separate from end users."
+Remember: separate zones for each distinct external actor category; perimeter components (load balancer, API gateway, data stores) are NOT in the external-user zone — they belong in the owning organisation's internal zone; third-party cloud services (SaaS, external APIs) are their own zone; operators are separate from end users. Do NOT create a separate zone for data stores just because they are a different network tier — assign them to the same zone as the application services that own them."
 
 If the Architect needs more context: direct it to the system architecture doc (SAD) or infrastructure modules — NOT to the dependency manifest or service entry point.
 
@@ -89,17 +92,19 @@ Validate the ZONE blocks against:
 - Third-party services (cloud APIs, SaaS) not grouped with internal services
 
 Validate the Architect's proposed zones against these rules:
-- Each zone must have a distinct name that describes the entity or role, not just a network tier (`external-consumers` not `internet`, `platform-services` not `private`)
+- Each zone name must describe the **principal entity** that owns or controls its components (organisation, team, or role) — not a network tier, resource type, or deployment location. Apply the ownership test: "This is _____'s zone" should sound natural.
 - Two different human roles with different privileges must be in different zones even if they connect from the same network
 - An external SaaS that you call out to is a different zone from your own services
-- A data store accessed only via IAM from your services is a different zone from those services
+- **A data store operated by the same organisation and accessed via the same credential type (e.g. IAM) belongs in the same zone as the services that own it** — do not split it into a `data-tier` zone
+
+For each component the Architect assigns to a zone, verify: "Is there an existing zone with the same owner and same credential type?" If yes, the component must be in that zone — reject a new zone proposal that duplicates an existing one.
 
 Once you agree on the zone list, record it as:
 ```
 ZONE: <Descriptive name — who/what this zone represents>
   id: <kebab-case>
   description: <one sentence — who controls it and what credential crosses into it>
-  rating: <0=fully public, 25=authenticated external, 50=authenticated partner, 75=internal service, 85=privileged/admin, 90=data tier>
+  rating: <0=fully public, 25=authenticated external, 50=authenticated partner, 75=internal platform (org-operated — ALB, app services, data stores sharing the same operator), 85=privileged/admin operators>
 ```
 
 ---
@@ -139,7 +144,7 @@ COMPONENT: <Proper descriptive name — what it IS and who uses it>
 
 **Connectivity check** — ask the Architect to verify after all components are listed:
 - Every component in an internal application zone has at least one dataflow in or out
-- Every component in a data zone has at least one inbound connection from an application zone
+- Every data store component has at least one inbound connection from an application component
 - Every standalone component (no dataflows) has a documented `standalone_reason`
 - Every boundary-crossing dataflow (source and destination in different zones) will need a threat — flag these explicitly
 
@@ -213,7 +218,7 @@ Direct the Architect to do the following in a SINGLE response (no separate OTM d
 
 **Phase 4 checklist** — verify before accepting the Architect's OTM:
 - Every component has a proper name and deployment attribute
-- Every `private` and `data` zone component has at least one connection
+- Every internal-platform component (application services, data stores) has at least one connection
 - Every standalone component has a documented reason
 - Every component has at least the minimum required threats for its type
 - Every threat has a mitigation

@@ -1,6 +1,6 @@
 # ADD-002: /init, /explore, and /verify Command Design
 
-**Status:** Accepted
+**Status:** Partially superseded — `/explore` section superseded by [ADD-013](ADD-013-Explore-Command-Design.md)
 **Date:** 2026-06-27
 **Related:** [SAD-001: code-crew system architecture](../sad/SAD-001-code-crew.md)
 

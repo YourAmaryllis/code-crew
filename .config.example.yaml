@@ -56,25 +56,32 @@ bedrock:
 # llm:
 #   default:
 #     provider: nvidia
-#     model: meta/llama-3.3-70b-instruct     # free tier model
+#     model: meta/llama-3.3-70b-instruct     # 128k context — best general-purpose free model
 #   tiers:
 #     fast:
 #       provider: nvidia
-#       model: meta/llama-3.1-8b-instruct
+#       model: meta/llama-3.1-8b-instruct    # 128k context — fast, lightweight
 #     standard:
 #       provider: nvidia
-#       model: meta/llama-3.3-70b-instruct
+#       model: meta/llama-3.3-70b-instruct   # 128k context
 #     powerful:
 #       provider: nvidia
-#       model: nvidia/llama-3.1-nemotron-70b-instruct
+#       model: nvidia/llama-3.1-nemotron-70b-instruct  # 128k context — NVIDIA-tuned 70B
+#       # Alternative: meta/llama-3.1-405b-instruct    # 128k context — most capable, slower
 #
-# Popular free NVIDIA Build models:
+# ⚠ AVOID for powerful tier:
+#   nvidia/nemotron-3-super-120b-a12b   — only 4k context; causes 504 timeouts on large OTMs
+#   nvidia/nemotron-4-340b-instruct     — only 4k context; same issue
+#   These are mixture-of-experts models optimised for speed, not long-context tasks.
+#
+# Popular free NVIDIA Build models (all 128k context unless noted):
 #   meta/llama-3.3-70b-instruct           — best general-purpose free model
 #   meta/llama-3.1-8b-instruct            — fast, lightweight
-#   nvidia/llama-3.1-nemotron-70b-instruct — NVIDIA-tuned 70B
-#   microsoft/phi-3.5-mini-instruct        — small, fast
-#   mistralai/mistral-7b-instruct-v0.3    — efficient 7B
-#   moonshotai/kimi-k2.6                   — strong reasoning
+#   meta/llama-3.1-405b-instruct          — most capable, slower
+#   nvidia/llama-3.1-nemotron-70b-instruct — NVIDIA-tuned 70B, strong instruction following
+#   moonshotai/kimi-k2.6                   — strong reasoning, 131k context
+#   google/gemma-3-27b-it                  — efficient 27B, 131k context
+#   mistralai/mistral-7b-instruct-v0.3    — efficient 7B, 32k context
 #   Browse full catalog: https://build.nvidia.com/explore/discover
 #
 # Provider API keys (set in environment, not in this file):
@@ -214,6 +221,52 @@ issue_tracker:
 # threat_modeling:
 #   tool: threat-dragon    # threat-dragon | irius-risk | microsoft-tmmt
 #   output_dir: ""         # optional override (default: same dir as OTM YAML)
+
+# ─────────────────────────────────────────────
+# Project decomposition overrides
+#
+# /explore auto-detects projects from the directory structure and SAD.
+# Use this section to declare additional projects or split a monorepo service
+# into logical threat model units without changing the source layout.
+#
+# Each entry is merged into the inventory on every /threat run:
+#   - Entries with the same id as an auto-detected project replace it.
+#   - Entries with a new id are added alongside the auto-detected ones.
+#
+# Fields:
+#   id           — used as the filename: designs/TMD/<id>.yaml  (required)
+#   name         — human-readable display name
+#   description  — scope statement sent to the threat modeling crew
+#   source_dirs  — code paths to focus the crew on; omit to use the full inventory
+#
+# Example — decompose a monorepo portal into logical threat model units:
+# projects:
+#   - id: dataset-registration
+#     name: Dataset Registration
+#     description: >
+#       API for file uploads, access to seller S3 buckets, structure validation,
+#       PHI detection, data curation pipelines, format conversion, and metric collection.
+#     source_dirs:
+#       - portal/backend/internal/dataset
+#       - portal/backend/internal/phi
+#       - portal/backend/internal/convert
+#   - id: container-instrumentation
+#     name: Container Instrumentation
+#     description: >
+#       Docker container submission workflow: instrumentation, fingerprinting,
+#       data exfiltration detection, and certificate generation.
+#     source_dirs:
+#       - portal/backend/internal/container
+#       - portal/backend/internal/cert
+#   - id: data-guide
+#     name: Data Guide Chatbot
+#     description: >
+#       Conversational AI assistant for dataset discovery, guidance, and
+#       recommendation. Includes RAG pipeline and LLM tool calls.
+#     source_dirs:
+#       - portal/backend/internal/guide
+#       - portal/frontend/src/guide
+# ─────────────────────────────────────────────
 
 # ─────────────────────────────────────────────
 # Domain modeling

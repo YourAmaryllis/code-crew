@@ -29,14 +29,35 @@ from shared.tools import (
     FigmaReaderTool,
     JiraSprintListTool,
     JiraViewTool,
-    KnowledgeReaderTool,
     MemoryTool,
     PlatformShellTool,
     PythonREPLTool,
+    StackReaderTool,
     WorkspaceReaderTool,
 )
 
 _KNOWLEDGE = Path(__file__).parent / "knowledge"
+
+
+def _load_stacks(stacks: list[str]) -> str:
+    """Load and concatenate stack docs for pre-injection into task descriptions.
+
+    Called by crew builders when inventory.stacks is already known so agents
+    receive stack conventions without needing to call stack_reader at runtime.
+    """
+    import re as _re
+    _stacks_dir = _KNOWLEDGE / "stacks"
+    parts = []
+    for name in stacks:
+        p = _stacks_dir / f"{name}.md"
+        if not p.exists():
+            continue
+        txt = p.read_text(encoding="utf-8")
+        if txt.startswith("---"):
+            body = _re.split(r"^---\s*$", txt, maxsplit=2, flags=_re.MULTILINE)
+            txt = body[2].strip() if len(body) >= 3 else txt
+        parts.append(f"### Stack: `{name}`\n\n{txt}")
+    return "\n\n---\n\n".join(parts)
 
 
 def _kickoff(crew: "Crew", inputs: dict) -> str:
@@ -78,7 +99,7 @@ def _make_tools(code_path: str = "", relay=None, jira_key: str = "") -> dict:
         shell = PlatformShellTool(code_path=code_path)
         runner = BDDTestRunnerTool(code_path=code_path)
     return {
-        "knowledge_reader": KnowledgeReaderTool(),
+        "stack_reader": StackReaderTool(),
         "workspace_reader": WorkspaceReaderTool(),
         "code_index": CodeIndexTool(),
         "api_spec": ApiSpecTool(),
@@ -100,7 +121,7 @@ def build_agents(tools: dict) -> dict:
     agents_dir = _KNOWLEDGE / "agents"
     ac = load_bundle_agents(agents_dir)
 
-    kr = tools["knowledge_reader"]
+    sr = tools["stack_reader"]
     ws = tools["workspace_reader"]
     ci = tools["code_index"]
     ap = tools["api_spec"]
@@ -128,16 +149,16 @@ def build_agents(tools: dict) -> dict:
         )
 
     return {
-        "scrum_master":      _agent("scrum_master",      [kr, dc, jv, mm]),
-        "architect":         _agent("architect",         [kr, ws, ci, jv, sh, ah]),
-        "engineer":          _agent("engineer",          [kr, ws, ci, ap, jv, sh, pr, ah], max_iter=25),
-        "qa_lead":           _agent("qa_lead",           [kr, ws, jv, sh, br, pr, ah, cs]),
-        "security_lead":      _agent("security_lead",      [kr, ws, sh, pr], max_iter=25),
-        "compliance_officer": _agent("compliance_officer", [kr, ws, jv], max_iter=20),
-        "product_owner":     _agent("product_owner",     [kr, jv]),
-        "devops_lead":       _agent("devops_lead",       [kr, ws, jv, sh, pr, cs]),
-        "release_engineer":  _agent("release_engineer",  [kr, ws, jv, sh]),
-        "ux_lead":           _agent("ux_lead",           [fr, kr, ws, ah]),
+        "scrum_master":      _agent("scrum_master",      [sr, dc, jv, mm]),
+        "architect":         _agent("architect",         [sr, ws, ci, jv, sh, ah]),
+        "engineer":          _agent("engineer",          [sr, ws, ci, ap, jv, sh, pr, ah], max_iter=25),
+        "qa_lead":           _agent("qa_lead",           [sr, ws, jv, sh, br, pr, ah, cs]),
+        "security_lead":      _agent("security_lead",      [sr, ws, sh, pr], max_iter=25),
+        "compliance_officer": _agent("compliance_officer", [sr, ws, jv], max_iter=20),
+        "product_owner":     _agent("product_owner",     [sr, jv]),
+        "devops_lead":       _agent("devops_lead",       [sr, ws, jv, sh, pr, cs]),
+        "release_engineer":  _agent("release_engineer",  [sr, ws, jv, sh]),
+        "ux_lead":           _agent("ux_lead",           [fr, sr, ws, ah]),
     }
 
 
@@ -250,12 +271,13 @@ def build_tasks(agents: dict, sprint_input: dict, tasks_dir: Path | None = None)
     bdd_final        = task("bdd_finalization",       "qa_lead",        [bdd_po_review, bdd_arch_review],     _bdd_approved)
     implementation   = task("implementation",          "engineer",       [arch_review, scaffold_code, bdd_final], _impl_guardrail)
     devops_coord     = task("devops_coordination",    "devops_lead",    [arch_review, implementation],        _devops_complete)
-    code_review      = task("code_review",            "architect",          [implementation, devops_coord])
+    cleanup          = task("cleanup",                "engineer",           [implementation, devops_coord])
+    code_review      = task("code_review",            "architect",          [implementation, devops_coord, cleanup])
     sec_review       = task("security_review",         "security_lead",      [implementation, devops_coord, code_review])
     comp_review      = task("compliance_review",       "compliance_officer", [implementation, devops_coord, code_review, sec_review])
     dod_check        = task("dod_check",               "scrum_master",
                             [sprint_planning, arch_review, scaffold_code, scaffold_test,
-                             bdd_authoring, bdd_final, implementation, devops_coord,
+                             bdd_authoring, bdd_final, implementation, devops_coord, cleanup,
                              code_review, sec_review, comp_review])
     release_notes     = task("release_notes",         "release_engineer",   [dod_check],                     _release_done)
     promote_staging   = task("promote_staging",       "devops_lead",        [release_notes])
@@ -274,6 +296,7 @@ def build_tasks(agents: dict, sprint_input: dict, tasks_dir: Path | None = None)
         "bdd_finalization":     bdd_final,
         "implementation":       implementation,
         "devops_coordination":  devops_coord,
+        "cleanup":              cleanup,
         "code_review":          code_review,
         "security_review":      sec_review,
         "compliance_review":    comp_review,
@@ -508,7 +531,7 @@ def _format_context(sprint_input: dict) -> str:
         f"**HTML design**: {sprint_input.get('html_design_ref', '') or 'not provided'}\n"
         f"**Relevant ADDs**: {add_refs}\n"
         f"{_designs_context_line()}\n"
-        + (f"**Architecture pattern**: {arch_style} — load `stacks/arch-{arch_style}.md` via knowledge_reader for layer rules\n" if arch_style else "")
+        + (f"**Architecture pattern**: {arch_style}\n\n{_load_stacks([f'arch-{arch_style}'])}\n" if arch_style else "")
         + f"\n**Acceptance criteria**:\n{acs}"
     )
     if comment_context:
@@ -1015,93 +1038,12 @@ def build_verify_crew(project_root: str = "") -> Crew:
         )
 
 
-def build_explore_single_task(explore_input: dict, extra_context: str = "") -> str:
-    """Run the LLM phase of /explore. Returns the raw output string."""
-    tools = _make_tools()
-    agents = build_agents(tools)
-    td = _KNOWLEDGE / "tasks"
-    tc = load_bundle_tasks(td)
-
-    # Core detections
-    stacks = explore_input.get("stacks", [])
-    commands = explore_input.get("commands", {})
-    ci_methods = explore_input.get("ci_methods", [])
-    ci_workflows = explore_input.get("ci_workflows", {})
-    terraform = explore_input.get("terraform", {})
-
-    ctx = f"## Project: {explore_input.get('root_name', '.')}\n\n"
-    ctx += f"**Phase 1 architecture**: {explore_input.get('arch_style', 'undetected')}\n"
-    ctx += f"**Phase 1 migration tool**: {explore_input.get('migration_tool', 'undetected')}\n"
-    ctx += f"**Phase 1 migration path**: {explore_input.get('migration_path', 'not detected')}\n"
-    ctx += f"**Phase 1 test framework**: {explore_input.get('test_framework', 'not detected')}\n"
-    ctx += f"**Phase 1 API doc standard**: {explore_input.get('api_doc', 'not detected')}"
-    if explore_input.get("api_doc_path"):
-        ctx += f" (at `{explore_input['api_doc_path']}`)"
-    ctx += "\n"
-    ctx += f"**Service dirs**: {', '.join(explore_input.get('svc_dirs', []))}\n"
-    _comp_stds = explore_input.get("compliance_standards", [])
-    if _comp_stds:
-        ctx += f"**Phase 1 compliance standards detected**: {', '.join(_comp_stds)} — verify by reading designs/ and docs/\n"
-    else:
-        ctx += f"**Phase 1 compliance standards**: none detected — check designs/ and docs/ for HIPAA/SOC2/GDPR/CCPA/PCI-DSS/FIPS mentions\n"
-    ctx += "\n"
-
-    feature_dirs = explore_input.get("feature_dirs", [])
-    test_dirs = explore_input.get("test_dirs", [])
-    if feature_dirs:
-        ctx += f"**BDD feature dirs**: {', '.join(feature_dirs)}\n"
-    if test_dirs:
-        ctx += f"**Detected test dirs**: {', '.join(test_dirs)}\n"
-    ctx += "\n"
-
-    if stacks:
-        ctx += f"### Detected stacks (verify each)\n" + "\n".join(f"- {s}" for s in stacks) + "\n\n"
-
-    if commands:
-        ctx += "### Detected commands (verify source files exist)\n"
-        ctx += "\n".join(f"- `{k}`: `{v}`" for k, v in commands.items()) + "\n\n"
-
-    if ci_methods:
-        ctx += "### Detected CI/CD methods (verify config files)\n"
-        for m in ci_methods:
-            detail = ci_workflows.get(m, "")
-            ctx += f"- {m}" + (f": {detail}" if detail else "") + "\n"
-        ctx += "\n"
-
-    if terraform:
-        ctx += "### Detected Terraform structure (verify by reading files)\n"
-        if terraform.get("root"):
-            ctx += f"- Root: `{terraform['root']}`\n"
-        envs = terraform.get("environments", {})
-        if envs:
-            for env, layers in sorted(envs.items()):
-                ctx += f"- Env `{env}`: {', '.join(layers)}\n"
-        if terraform.get("apply_order"):
-            ctx += f"- Apply order: {terraform['apply_order']}\n"
-        if terraform.get("state_bucket"):
-            ctx += f"- State bucket: `{terraform['state_bucket']}`\n"
-        if terraform.get("state_region"):
-            ctx += f"- State region: `{terraform['state_region']}`\n"
-        if terraform.get("state_key_pattern"):
-            ctx += f"- State key pattern: `{terraform['state_key_pattern']}`\n"
-        if terraform.get("aws_profile"):
-            ctx += f"- AWS profile: `{terraform['aws_profile']}`\n"
-        modules = terraform.get("modules", [])
-        if modules:
-            modules_path = terraform.get("modules_path") or "infra/modules"
-            ctx += f"- Modules ({len(modules)} in `{modules_path}/`): {', '.join(modules[:15])}"
-            if len(modules) > 15:
-                ctx += f" … +{len(modules) - 15} more"
-            ctx += "\n"
-        ctx += "\n"
-
-    if extra_context:
-        ctx += extra_context
-
+def _run_explore_subtask(task_name: str, description: str, expected_output: str, agents: dict) -> str:
+    """Run one focused explore subtask. Returns the raw output string."""
     t = Task(
-        name="explore_scan",
-        description=f"{ctx}\n\n{tc['explore_scan'].description}",
-        expected_output=tc["explore_scan"].expected_output,
+        name=task_name,
+        description=description,
+        expected_output=expected_output,
         agent=agents["architect"],
     )
     with warnings.catch_warnings():
@@ -1114,9 +1056,954 @@ def build_explore_single_task(explore_input: dict, extra_context: str = "") -> s
         )
         # inputs={} prevents CrewAI from treating {env}/{layer} in embedded
         # values (e.g. Terraform state key patterns) as template variables.
-        # All context is already embedded in the task description via f-strings.
         result = crew.kickoff(inputs={})
     return str(result)
+
+
+def _build_filtered_tree(root: "Path", max_depth: int = 6) -> str:
+    """Build an indented directory tree filtered to signal files only.
+
+    Shows all directories (skipping noise) and key manifest / entrypoint files.
+    This gives the LLM a structural view without flooding it with source filenames.
+    """
+    import pathlib
+
+    SKIP_DIRS = {
+        ".git", "vendor", "node_modules", "__pycache__", ".terraform",
+        ".code-crew", "dist", "build", ".venv", "venv", ".mypy_cache",
+        ".next", "coverage", ".idea", ".vscode", "playwright-report",
+        "output", "test-results", ".turbo", ".cache",
+    }
+    SKIP_PREFIXES = (".", "_")
+
+    # Files worth showing — manifests, entrypoints, key config
+    SIGNAL_NAMES = {
+        "README.md", "README.rst", "readme.md", "README",
+        "go.mod", "go.sum", "package.json", "package-lock.json",
+        "Cargo.toml", "pom.xml", "build.gradle", "settings.gradle",
+        "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
+        "Makefile", "makefile", "GNUmakefile",
+        "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
+        ".gitmodules", "main.go", "main.py", "__main__.py",
+        "index.ts", "index.js", "server.go", "app.py", "app.ts",
+        "atlas.hcl", "alembic.ini",
+    }
+    SIGNAL_EXTENSIONS = {".tf", ".hcl"}  # terraform/config worth noting
+
+    root = pathlib.Path(root)
+    if not root.is_dir():
+        return f"{root.name} (not a directory — skipped)"
+    lines: list[str] = [f"{root.name}/"]
+
+    def _walk(path: pathlib.Path, prefix: str, depth: int) -> None:
+        if depth > max_depth:
+            return
+        try:
+            entries = sorted(path.iterdir(), key=lambda e: (e.is_file(), e.name.lower()))
+        except PermissionError:
+            return
+
+        dirs = [
+            e for e in entries
+            if e.is_dir()
+            and e.name not in SKIP_DIRS
+            and not e.name.startswith(SKIP_PREFIXES)
+        ]
+        files = [
+            e for e in entries
+            if e.is_file()
+            and (e.name in SIGNAL_NAMES or e.suffix in SIGNAL_EXTENSIONS)
+            and not e.name.startswith(".")
+        ]
+
+        all_items = dirs + files
+        for i, entry in enumerate(all_items):
+            is_last = i == len(all_items) - 1
+            connector = "└── " if is_last else "├── "
+            child_prefix = prefix + ("    " if is_last else "│   ")
+            label = f"{entry.name}/" if entry.is_dir() else entry.name
+            lines.append(f"{prefix}{connector}{label}")
+            if entry.is_dir():
+                _walk(entry, child_prefix, depth + 1)
+
+    _walk(root, "", 0)
+    return "\n".join(lines)
+
+
+def _crew_kickoff_with_timeout(crew: "Crew", timeout_seconds: int = 300) -> str:
+    """Run crew.kickoff() with a hard wall-clock timeout via SIGALRM (Unix).
+
+    NVIDIA Build free tier silently hangs instead of returning 504 when the
+    server-side deadline is exceeded. ThreadPoolExecutor.shutdown(wait=True)
+    blocks even after future.result() times out, so we use SIGALRM which
+    actually interrupts the running HTTP call. Falls back to no timeout on
+    Windows (no SIGALRM).
+    """
+    import signal
+
+    if not hasattr(signal, "SIGALRM"):
+        return str(crew.kickoff(inputs={}))
+
+    class _AlarmTimeout(BaseException):
+        pass
+
+    def _handler(signum: int, frame: object) -> None:
+        raise _AlarmTimeout()
+
+    old_handler = signal.signal(signal.SIGALRM, _handler)
+    signal.alarm(timeout_seconds)
+    try:
+        result = crew.kickoff(inputs={})
+        signal.alarm(0)
+        return str(result)
+    except _AlarmTimeout:
+        raise TimeoutError(
+            f"LLM call timed out after {timeout_seconds}s — NVIDIA server may be overloaded"
+        )
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+
+def _llm_call_with_tools(task_name: str, ctx: str, tc: dict, agents: dict,
+                          timeout_seconds: int = 120) -> str:
+    """Run one LLM task with workspace_reader + code_index tools."""
+    tools = _make_tools()
+    # Rebuild agent with full tool list (agents dict may have been built with empty tools)
+    from code_crew.crew import build_agents
+    agents_with_tools = build_agents(tools)
+    t = Task(
+        name=task_name,
+        description=f"{ctx}\n\n{tc[task_name].description}",
+        expected_output=tc[task_name].expected_output,
+        agent=agents_with_tools["architect"],
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        crew = Crew(
+            agents=[agents_with_tools["architect"]],
+            tasks=[t],
+            process=Process.sequential,
+            verbose=True,
+        )
+        return _crew_kickoff_with_timeout(crew, timeout_seconds=timeout_seconds)
+
+
+def build_breakdown_task(root: "Path", extra_context: str = "") -> str:
+    """Phase 2: send filtered tree to LLM → AREA classifications.
+
+    Bypasses CrewAI and calls the LLM directly so the socket-level timeout is
+    actually enforced. Uses the fast (small) model — classification is pattern
+    matching, so 8b is sufficient and has lower queue times on NVIDIA free tier.
+    Depth=2 is enough to classify top-level areas without noise.
+    """
+    from shared.llm_factory import direct_llm_completion
+
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    tree = _build_filtered_tree(root, max_depth=2)
+    ctx = f"## Repository: {root.name}\n\n```\n{tree}\n```\n\n{extra_context}"
+    prompt = f"{ctx}\n\n{tc['explore_breakdown'].description}"
+    return direct_llm_completion(prompt, tier="fast", timeout=90, max_retries=3)
+
+
+def _pre_read_unit(root: "Path", unit_path: str, max_file_chars: int = 800) -> str:
+    """Pre-fetch key content from a unit directory for context injection.
+
+    Reads: directory listing (depth 2), README, dependency manifests, and
+    entry-point files. Keeps each file truncated to max_file_chars to stay
+    within token budget.
+    """
+    import pathlib
+
+    SIGNAL_NAMES = {
+        "README.md", "README.rst", "readme.md", "README",
+        "go.mod", "package.json", "Cargo.toml", "pom.xml",
+        "pyproject.toml", "setup.py", "requirements.txt",
+        "Makefile", "Dockerfile", "docker-compose.yml",
+    }
+    ENTRY_NAMES = {
+        "main.go", "main.py", "__main__.py", "server.go",
+        "app.py", "app.ts", "index.ts", "index.js",
+    }
+
+    unit_abs = pathlib.Path(root) / unit_path
+    parts: list[str] = []
+
+    # Depth-2 directory tree
+    parts.append(_build_filtered_tree(unit_abs, max_depth=2))
+
+    def _try_read(p: pathlib.Path) -> str:
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+            if len(text) > max_file_chars:
+                text = text[:max_file_chars] + "\n… (truncated)"
+            return text
+        except OSError:
+            return ""
+
+    # Key files: manifests first, then entry points
+    for name in list(SIGNAL_NAMES) + list(ENTRY_NAMES):
+        candidate = unit_abs / name
+        if candidate.is_file():
+            content = _try_read(candidate)
+            if content:
+                parts.append(f"\n### {name}\n```\n{content}\n```")
+
+    # cmd/ sub-entries (Go-style executables)
+    cmd_dir = unit_abs / "cmd"
+    if cmd_dir.is_dir():
+        for sub in sorted(cmd_dir.iterdir()):
+            if sub.is_dir():
+                for entry in ("main.go", "main.py"):
+                    ep = sub / entry
+                    if ep.is_file():
+                        content = _try_read(ep)
+                        if content:
+                            parts.append(f"\n### cmd/{sub.name}/{entry}\n```\n{content}\n```")
+                        break
+
+    return "\n".join(parts)
+
+
+def build_summarize_unit_task(root: "Path", unit_path: str, unit_type: str,
+                               unit_description: str, sub_executables: list[str],
+                               infra_modules: list[str]) -> str:
+    """Phase 3: deep-dive one unit → UNIT_SUMMARY block.
+
+    Pre-reads key files programmatically then calls the LLM directly (bypassing
+    CrewAI) so the socket-level timeout is enforced. Avoids the tool-use loop
+    which requires multiple round-trips and is more likely to hang on NVIDIA.
+    """
+    from shared.llm_factory import direct_llm_completion
+
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+
+    matching_execs = [e for e in sub_executables if e.startswith(unit_path + "/")]
+    matching_infra = [m for m in infra_modules
+                      if unit_path.replace("_", "-") in m or m in unit_path]
+
+    ctx = f"## Unit: {unit_path}\n"
+    ctx += f"**Classified as**: {unit_type} — {unit_description}\n"
+    if matching_execs:
+        ctx += f"**Detected sub-executables**: {', '.join(matching_execs)}\n"
+    if matching_infra:
+        ctx += f"**Matching infra modules**: {', '.join(matching_infra)}\n"
+    ctx += "\n### Pre-read content\n" + _pre_read_unit(root, unit_path)
+
+    prompt = f"{ctx}\n\n{tc['explore_summarize_unit'].description}"
+    return direct_llm_completion(prompt, tier="fast", timeout=90, max_retries=2)
+
+
+def build_summarize_docs_task(root: "Path", docs_path: str,
+                               docs_description: str) -> str:
+    """Phase 3: summarize a docs directory → DOC_SUMMARY blocks.
+
+    Pre-reads document titles/first paragraphs then calls the LLM directly.
+    """
+    import pathlib
+    from shared.llm_factory import direct_llm_completion
+
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    docs_abs = pathlib.Path(root) / docs_path
+
+    # Collect doc files (up to 20, first 400 chars each)
+    doc_snippets: list[str] = []
+    try:
+        for p in sorted(docs_abs.rglob("*.md"))[:20]:
+            try:
+                snippet = p.read_text(encoding="utf-8", errors="replace")[:400]
+                rel = p.relative_to(docs_abs)
+                doc_snippets.append(f"**{rel}**\n{snippet}\n---")
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+    ctx = (f"## Documentation directory: {docs_path}\n"
+           f"**Description**: {docs_description}\n\n"
+           + ("\n".join(doc_snippets) if doc_snippets else "(no documents found)"))
+
+    prompt = f"{ctx}\n\n{tc['explore_summarize_docs'].description}"
+    return direct_llm_completion(prompt, tier="fast", timeout=90, max_retries=2)
+
+
+_DEPLOYABLE_TYPES = frozenset({"deployable-service", "worker", "lambda", "frontend"})
+
+
+def classify_units_from_structure(structure_md: str) -> dict:
+    """Phase 4 (Python): parse UNIT_SUMMARY blocks and classify deterministically.
+
+    Returns dict:
+      real_services: list[str]           — paths with deployable TYPE or non-none ENTRY_POINTS
+      not_services: dict[str, str]       — path → reason (library/cli/test-harness/…)
+      decomposed: dict[str, list[str]]   — parent path → sub-service names
+    """
+    result: dict = {"real_services": [], "not_services": {}, "decomposed": {}}
+
+    in_block = False
+    current_path: str | None = None
+    current: dict = {}
+
+    def _clean(raw: str) -> str:
+        """Strip markdown heading markers and bold markers so the model's formatting doesn't break matching."""
+        return raw.strip().lstrip("# ").strip().replace("**", "").strip()
+
+    for line in structure_md.splitlines():
+        normed = _clean(line)
+        if normed.startswith("UNIT_SUMMARY:") and not normed.startswith("UNIT_SUMMARY COMPLETE"):
+            in_block = True
+            current_path = normed[len("UNIT_SUMMARY:"):].strip().rstrip("/")
+            current = {"type": "", "entry_points": "none", "decompose": False, "sub_units": []}
+        elif normed == "UNIT_SUMMARY COMPLETE" and in_block:
+            if current_path:
+                ep_val = current["entry_points"].lower().strip()
+                is_deployable = (
+                    current["type"] in _DEPLOYABLE_TYPES
+                    or (ep_val and ep_val != "none")
+                )
+                if is_deployable:
+                    result["real_services"].append(current_path)
+                    if current["decompose"] and current["sub_units"]:
+                        result["decomposed"][current_path] = current["sub_units"]
+                else:
+                    result["not_services"][current_path] = current["type"] or "library"
+            in_block = False
+            current_path = None
+        elif in_block:
+            s = _clean(line)
+            if s.startswith("TYPE:"):
+                _val = s[5:].strip().split()
+                if _val:
+                    current["type"] = _val[0].lower().rstrip(",|")
+            elif s.startswith("ENTRY_POINTS:"):
+                current["entry_points"] = s[13:].strip()
+            elif s.upper().startswith("DECOMPOSE: YES"):
+                current["decompose"] = True
+            elif s.startswith("SUB_UNITS:") and current["decompose"]:
+                subs = [x.strip() for x in s[10:].split(",")
+                        if x.strip() and not x.strip().startswith("<")]
+                if subs:
+                    current["sub_units"] = subs
+
+    # Commit any unclosed block (EOF or filter flushed without COMPLETE marker)
+    if in_block and current_path:
+        ep_val = current["entry_points"].lower().strip()
+        is_deployable = (
+            current["type"] in _DEPLOYABLE_TYPES
+            or (ep_val and ep_val != "none")
+        )
+        if is_deployable:
+            result["real_services"].append(current_path)
+            if current["decompose"] and current["sub_units"]:
+                result["decomposed"][current_path] = current["sub_units"]
+        else:
+            result["not_services"][current_path] = current["type"] or "library"
+
+    return result
+
+
+def build_diagram_from_services(
+    real_services: "list[str]",
+    not_services: "dict[str, str]",
+    decomposed: "dict[str, list[str]]",
+    external_services: "list[dict]",
+) -> str:
+    """Phase 4 (Python): deterministic Mermaid graph TD from classified service lists.
+
+    Parent-child edges are derived from path hierarchy (no LLM hallucinations).
+    External services appear as nodes; sub-services from decomposed appear inline.
+    """
+    if not real_services:
+        return ""
+
+    def _node_id(path: str) -> str:
+        return path.replace("/", "-").replace("_", "-").replace(".", "-").replace(" ", "-")
+
+    svc_set = set(real_services)
+    lines = ["graph TD"]
+
+    # Declare all internal service nodes
+    for svc in real_services:
+        nid = _node_id(svc)
+        lines.append(f'    {nid}["{svc}\\n(deployable)"]')
+
+    # Declare explicit decomposed sub-service nodes (if not already in real_services)
+    for parent, subs in decomposed.items():
+        for sub in subs:
+            full = f"{parent}/{sub}"
+            if full not in svc_set:
+                nid = _node_id(full)
+                lines.append(f'    {nid}["{sub}\\n(sub-service)"]')
+
+    # External service nodes
+    ext_names = []
+    for e in external_services:
+        name = e.get("name", str(e)) if isinstance(e, dict) else str(e)
+        ext_names.append(name)
+        nid = _node_id(name)
+        lines.append(f'    {nid}["{name}\\n(external)"]:::external')
+
+    # Structural parent-child edges from path hierarchy
+    for svc in real_services:
+        parent = svc.rsplit("/", 1)[0] if "/" in svc else None
+        if parent and parent in svc_set:
+            lines.append(f"    {_node_id(parent)} --> {_node_id(svc)}")
+
+    # Explicit sub-service edges from decomposed dict
+    for parent, subs in decomposed.items():
+        pid = _node_id(parent)
+        for sub in subs:
+            full = f"{parent}/{sub}"
+            cid = _node_id(full)
+            edge = f"    {pid} --> {cid}"
+            if edge not in lines:
+                lines.append(edge)
+
+    if ext_names:
+        lines.append("    classDef external fill:#f5f5f5,stroke:#999,stroke-dasharray:4 4")
+
+    return "\n".join(lines)
+
+
+def build_synthesize_decomposition_from_structure(structure_md: str) -> str:
+    """Phase 4: decomposition from structure.md → REAL_SERVICE/DECOMPOSE/PROJECT + diagram.
+
+    Uses direct LLM call (bypassing CrewAI) with the standard model so the
+    socket-level timeout is enforced. structure.md already has all unit summaries,
+    so tool access is rarely needed for classification.
+
+    Kept for backward compatibility; new callers should use classify_units_from_structure
+    + build_diagram_from_services instead.
+    """
+    from shared.llm_factory import direct_llm_completion
+
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    ctx = f"## structure.md\n\n{structure_md}\n"
+    prompt = f"{ctx}\n\n{tc['explore_synthesize_decomposition'].description}"
+    return direct_llm_completion(prompt, tier="fast", timeout=90, max_retries=3)
+
+
+def _pre_read_infra_dir(root: "Path", terraform_info: dict) -> str:
+    """Return a flat file listing of the infra directory — no parsing, just names."""
+    import pathlib
+    infra_root_rel = (terraform_info or {}).get("root", "")
+    if not infra_root_rel:
+        return ""
+    infra_path = pathlib.Path(root) / infra_root_rel
+    if not infra_path.is_dir():
+        return ""
+    lines: list[str] = [f"## Infrastructure directory: {infra_root_rel}/"]
+    try:
+        for entry in sorted(infra_path.iterdir()):
+            if entry.name.startswith("."):
+                continue
+            if entry.is_dir():
+                children = sorted(c.name for c in entry.iterdir()
+                                   if not c.name.startswith("."))[:20]
+                lines.append(f"  {entry.name}/")
+                for c in children:
+                    lines.append(f"    {c}")
+            else:
+                lines.append(f"  {entry.name}")
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
+def _pre_read_sad(designs_dir: "Path | None") -> str:
+    """Return first ~1500 chars of each SAD file in designs/SAD/."""
+    import pathlib
+    if not designs_dir:
+        return ""
+    sad_dir = pathlib.Path(designs_dir) / "SAD"
+    if not sad_dir.is_dir():
+        return ""
+    chunks: list[str] = []
+    for f in sorted(sad_dir.glob("*.md"))[:4]:
+        try:
+            content = f.read_text(encoding="utf-8", errors="replace")[:1500]
+            chunks.append(f"### {f.name}\n\n{content}")
+        except Exception:
+            pass
+    return "\n\n".join(chunks)
+
+
+def build_synthesize_decomposition_task(
+    candidate_dirs: list[str],
+    sub_executables: list[str],
+    infra_modules: list[str],
+    gitmodules: str,
+    infra_dir_listing: str,
+    sad_excerpts: str,
+    service_subdirs: dict[str, list[str]],
+) -> str:
+    """Decomposition synthesis: candidates → REAL_SERVICE/NOT_SERVICE/DECOMPOSE + diagram."""
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    agents = build_agents(_make_tools())
+
+    by_svc: dict[str, list[str]] = {}
+    for exe in sub_executables:
+        parent = exe.split("/")[0]
+        by_svc.setdefault(parent, []).append(exe)
+
+    ctx = "## Candidate service directories\n\n"
+    for d in candidate_dirs:
+        subdirs = service_subdirs.get(d, [])
+        execs = by_svc.get(d, [])
+        ctx += f"### {d}/\n"
+        if subdirs:
+            ctx += f"- Subdirs: {', '.join(subdirs[:20])}\n"
+        if execs:
+            ctx += f"- Sub-executables: {', '.join(execs)}\n"
+        else:
+            ctx += "- Sub-executables: none\n"
+        matching = [m for m in infra_modules if d.replace("_", "-") in m or m in d]
+        if matching:
+            ctx += f"- Matching infra modules: {', '.join(matching)}\n"
+        ctx += "\n"
+
+    ctx += "## All sub-executables\n" + "\n".join(f"- {e}" for e in sub_executables) + "\n\n"
+    ctx += "## All infrastructure modules\n" + "\n".join(f"- {m}" for m in infra_modules[:40]) + "\n\n"
+
+    if gitmodules:
+        ctx += f"## .gitmodules\n\n```\n{gitmodules}\n```\n\n"
+    if infra_dir_listing:
+        ctx += infra_dir_listing + "\n\n"
+    if sad_excerpts:
+        ctx += "## System Architecture Document (SAD) excerpts\n\n" + sad_excerpts + "\n\n"
+
+    return _llm_call("explore_synthesize_decomposition", ctx, tc, agents)
+
+
+def _parse_decomposition_output(raw: str) -> dict:
+    """Parse REAL_SERVICE/NOT_SERVICE/DECOMPOSE lines and DECOMPOSITION diagram.
+
+    The 8b model often echoes the task template (including format examples in code
+    fences) before producing real output, and wraps real output in code fences too.
+    Strategy: strip all backtick fence markers and scan every remaining line for the
+    actual marker prefixes. For the diagram, find the first `graph TD/LR` block.
+    """
+    result: dict = {
+        "real_services": [],
+        "not_services": {},
+        "decomposed": {},
+        "diagram": "",
+    }
+
+    # Strip backtick fence lines and DECOMPOSITION_BEGIN/END markers (just noise).
+    # Collect the diagram separately: first graph TD/LR block in the output.
+    _in_graph = False
+    _graph_lines: list[str] = []
+    _seen_graph_end = False
+
+    lines = raw.splitlines()
+    clean_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        # Skip fence markers and explicit diagram markers
+        if stripped.startswith("```") or stripped in ("DECOMPOSITION_BEGIN", "DECOMPOSITION_END"):
+            if _in_graph and not _seen_graph_end:
+                # A ``` line closes the graph block
+                _seen_graph_end = True
+                _in_graph = False
+            continue
+        # Detect start of mermaid graph block
+        if stripped.startswith("graph ") and not result["diagram"] and not _in_graph:
+            _in_graph = True
+            _graph_lines = [line]
+            continue
+        if _in_graph:
+            if stripped == "" and _graph_lines:
+                # Blank line ends the graph block
+                _seen_graph_end = True
+                _in_graph = False
+                result["diagram"] = "\n".join(_graph_lines).strip()
+            else:
+                _graph_lines.append(line)
+            continue
+        clean_lines.append(line)
+
+    # If graph block ran to end of input without a closing marker, save it
+    if _in_graph and _graph_lines and not result["diagram"]:
+        result["diagram"] = "\n".join(_graph_lines).strip()
+    elif _seen_graph_end and _graph_lines and not result["diagram"]:
+        result["diagram"] = "\n".join(_graph_lines).strip()
+
+    # Now parse the marker lines (fences already stripped)
+    for line in clean_lines:
+        stripped = line.strip()
+        if stripped.startswith("REAL_SERVICE:"):
+            rest = stripped.split(":", 1)[1].strip()
+            svc = rest.split("|")[0].strip().split("→")[0].strip().rstrip("/")
+            # Reject angle-bracket template placeholders
+            if svc and not svc.startswith("<") and svc not in result["real_services"]:
+                result["real_services"].append(svc)
+        elif stripped.startswith("NOT_SERVICE:"):
+            rest = stripped.split(":", 1)[1].strip()
+            parts = rest.split("|", 1)
+            svc = parts[0].strip().split("→")[0].strip().rstrip("/")
+            reason = parts[1].strip() if len(parts) > 1 else ""
+            if svc and not svc.startswith("<"):
+                result["not_services"][svc] = reason
+        elif stripped.startswith("DECOMPOSE:"):
+            rest = stripped.split(":", 1)[1].strip()
+            parts = rest.split("→", 1)
+            if len(parts) == 2:
+                parent = parts[0].strip().rstrip("/")
+                sub_part = parts[1].split("|")[0].strip()
+                subs = [s.strip() for s in sub_part.split(",")
+                        if s.strip() and not s.strip().startswith("<")]
+                if parent and not parent.startswith("<") and subs:
+                    result["decomposed"][parent] = subs
+    return result
+
+
+def _pre_read_service(root: "Path", svc: str, sub_executables: list[str]) -> dict:
+    """Read key files for one service dir. Returns dict ready to inject into a summarize task."""
+    import pathlib
+    svc_path = pathlib.Path(root) / svc
+
+    readme = ""
+    for name in ("README.md", "README.rst", "readme.md"):
+        p = svc_path / name
+        if p.exists():
+            try:
+                readme = p.read_text(encoding="utf-8", errors="replace")[:600]
+            except Exception:
+                pass
+            break
+
+    subdirs = []
+    try:
+        subdirs = sorted(
+            d.name for d in svc_path.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        )[:25]
+    except Exception:
+        pass
+
+    manifest = ""
+    manifest_names = ("go.mod", "package.json", "requirements.txt",
+                      "pyproject.toml", "Cargo.toml", "pom.xml")
+    search_paths = [svc_path] + [svc_path / sub for sub in subdirs[:5]]
+    for sp in search_paths:
+        for name in manifest_names:
+            p = sp / name
+            if p.exists():
+                try:
+                    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()[:12]
+                    rel = str(p.relative_to(root))
+                    manifest = f"{rel}:\n" + "\n".join(lines)
+                except Exception:
+                    pass
+                break
+        if manifest:
+            break
+
+    entry_snippets = []
+    svc_execs = [e for e in sub_executables if e.startswith(f"{svc}/")]
+    for exec_path in svc_execs[:4]:
+        for ep in ("main.go", "main.py", "index.ts", "__main__.py", "server.go"):
+            p = pathlib.Path(root) / exec_path / ep
+            if p.exists():
+                try:
+                    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()[:15]
+                    entry_snippets.append(f"{exec_path}/{ep}:\n" + "\n".join(lines))
+                except Exception:
+                    pass
+                break
+
+    return {
+        "name": svc,
+        "readme": readme,
+        "subdirs": subdirs,
+        "manifest": manifest,
+        "entry_snippets": entry_snippets,
+        "sub_executables": svc_execs,
+    }
+
+
+def _pre_read_domain(root: "Path", domain_path: str) -> dict:
+    """Read key files for one domain dir. Returns dict ready to inject into a summarize task."""
+    import pathlib
+    dp = pathlib.Path(root) / domain_path
+
+    files: list[str] = []
+    key_content = ""
+    try:
+        source_exts = {".go", ".py", ".ts", ".tsx", ".java", ".rs", ".js"}
+        all_files = list(dp.iterdir())
+        files = sorted(f.name for f in all_files if f.is_file())[:30]
+        source_files = [f for f in all_files if f.is_file() and f.suffix in source_exts]
+        if source_files:
+            key_file = max(source_files, key=lambda f: f.stat().st_size)
+            lines = key_file.read_text(encoding="utf-8", errors="replace").splitlines()[:20]
+            key_content = f"{key_file.name}:\n" + "\n".join(lines)
+    except Exception:
+        pass
+
+    return {
+        "name": dp.name,
+        "path": domain_path,
+        "parent_service": domain_path.split("/")[0] if "/" in domain_path else "",
+        "files": files,
+        "key_content": key_content,
+    }
+
+
+def _llm_call(task_name: str, ctx: str, tc: dict, agents: dict,
+              timeout_seconds: int = 300, max_retries: int = 2) -> str:
+    """Run one no-tools LLM task and return its raw output.
+
+    Retries up to max_retries times on TimeoutError or transient failure, since
+    NVIDIA Build free tier can 504 even on small contexts.
+    """
+    import time
+
+    last_exc: BaseException | None = None
+    for attempt in range(max_retries + 1):
+        if attempt > 0:
+            wait = 30 * attempt
+            print(f"  [retry {attempt}/{max_retries}] waiting {wait}s before retry…")
+            time.sleep(wait)
+        try:
+            t = Task(
+                name=task_name,
+                description=f"{ctx}\n\n{tc[task_name].description}",
+                expected_output=tc[task_name].expected_output,
+                agent=agents["architect"],
+            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+                crew = Crew(
+                    agents=[agents["architect"]],
+                    tasks=[t],
+                    process=Process.sequential,
+                    verbose=True,
+                )
+                return _crew_kickoff_with_timeout(crew, timeout_seconds=timeout_seconds)
+        except BaseException as exc:
+            last_exc = exc
+            print(f"  LLM call attempt {attempt + 1} failed: {exc}")
+    raise RuntimeError(f"LLM call '{task_name}' failed after {max_retries + 1} attempts") from last_exc
+
+
+def build_summarize_service_task(service_info: dict, infra_modules: list[str]) -> str:
+    """Summarize one service directory. Returns raw output string."""
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    agents = build_agents(_make_tools())
+
+    ctx = f"## Service: {service_info['name']}\n\n"
+    if service_info.get("readme"):
+        ctx += f"### README (first 600 chars)\n\n{service_info['readme']}\n\n"
+    if service_info.get("subdirs"):
+        ctx += f"### Subdirectories\n" + "\n".join(f"- {d}" for d in service_info["subdirs"]) + "\n\n"
+    if service_info.get("manifest"):
+        ctx += f"### Dependency manifest\n\n```\n{service_info['manifest']}\n```\n\n"
+    if service_info.get("entry_snippets"):
+        ctx += "### Entry point snippets\n\n"
+        for snippet in service_info["entry_snippets"]:
+            ctx += f"```\n{snippet}\n```\n\n"
+    if service_info.get("sub_executables"):
+        ctx += "### Sub-executables detected\n" + "\n".join(f"- {e}" for e in service_info["sub_executables"]) + "\n\n"
+    if infra_modules:
+        ctx += "### Infrastructure modules (for context)\n" + "\n".join(f"- {m}" for m in infra_modules[:20]) + "\n\n"
+
+    return _llm_call("explore_summarize_service", ctx, tc, agents)
+
+
+def build_summarize_domain_task(domain_info: dict, infra_modules: list[str]) -> str:
+    """Summarize one domain directory. Returns raw output string."""
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    agents = build_agents(_make_tools())
+
+    ctx = f"## Domain: {domain_info['name']}"
+    if domain_info.get("parent_service"):
+        ctx += f" (inside {domain_info['parent_service']})"
+    ctx += f"\n**Path**: `{domain_info['path']}`\n\n"
+    if domain_info.get("files"):
+        ctx += "### Files in this directory\n" + "\n".join(f"- {f}" for f in domain_info["files"]) + "\n\n"
+    if domain_info.get("key_content"):
+        ctx += f"### Key source file (largest)\n\n```\n{domain_info['key_content']}\n```\n\n"
+    if infra_modules:
+        # Highlight if domain name matches any module
+        domain_name = domain_info["name"].replace("_", "-")
+        matching = [m for m in infra_modules if domain_name in m or m in domain_name]
+        if matching:
+            ctx += f"### Matching infrastructure modules\n" + "\n".join(f"- {m}" for m in matching) + "\n\n"
+        ctx += "### All infrastructure modules\n" + "\n".join(f"- {m}" for m in infra_modules[:20]) + "\n\n"
+
+    return _llm_call("explore_summarize_domain", ctx, tc, agents)
+
+
+def build_synthesize_scope_task(summaries: dict, inventory: dict) -> str:
+    """Scope synthesis: summaries → PROJECT blocks. Returns raw output string."""
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    agents = build_agents(_make_tools())
+
+    ctx = _build_summaries_context(summaries, inventory)
+    return _llm_call("explore_synthesize_scope", ctx, tc, agents)
+
+
+def build_synthesize_architecture_task(summaries: dict, inventory: dict) -> str:
+    """Architecture synthesis: summaries → ARCHITECTURE_STYLE, COMPONENT lines, code_structure."""
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    agents = build_agents(_make_tools())
+
+    ctx = _build_summaries_context(summaries, inventory)
+    ctx += f"\n**Python-detected architecture hint**: {inventory.get('arch_style', 'undetected')}\n"
+    return _llm_call("explore_synthesize_architecture", ctx, tc, agents)
+
+
+def build_synthesize_compliance_task(summaries: dict, inventory: dict) -> str:
+    """Compliance synthesis: summaries → compliance_standards DISCOVERY block."""
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    agents = build_agents(_make_tools())
+
+    ctx = _build_summaries_context(summaries, inventory)
+    detected = inventory.get("compliance_standards", [])
+    if detected:
+        ctx += f"\n**Python-detected compliance standards**: {', '.join(detected)}\n"
+    else:
+        ctx += "\n**Python-detected compliance standards**: none\n"
+    return _llm_call("explore_synthesize_compliance", ctx, tc, agents)
+
+
+def _build_summaries_context(summaries: dict, inventory: dict) -> str:
+    """Build the shared context block injected into all synthesis tasks."""
+    ctx = f"## Project: {inventory.get('root_name', '.')}\n\n"
+
+    service_sums = {k: v for k, v in summaries.items() if not v.get("_is_domain")}
+    domain_sums = {k: v for k, v in summaries.items() if v.get("_is_domain")}
+
+    if service_sums:
+        ctx += "## Service summaries\n\n"
+        for svc, s in service_sums.items():
+            ctx += f"### {svc}\n"
+            ctx += f"- **Purpose**: {s.get('PURPOSE', '')}\n"
+            ctx += f"- **Type**: {s.get('TYPE', '')}\n"
+            ctx += f"- **Sensitivity**: {s.get('SENSITIVITY', '')}\n"
+            if s.get("ENTRY_POINTS") and s["ENTRY_POINTS"] != "none":
+                ctx += f"- **Entry points**: {s['ENTRY_POINTS']}\n"
+            if s.get("subdirs"):
+                ctx += f"- **Subdirectories**: {', '.join(s['subdirs'][:15])}\n"
+            ctx += "\n"
+
+    if domain_sums:
+        ctx += "## Domain summaries\n\n"
+        for path, s in domain_sums.items():
+            ctx += f"### {s.get('DOMAIN_SUMMARY', path)}\n"
+            ctx += f"- **Purpose**: {s.get('PURPOSE', '')}\n"
+            ctx += f"- **Sensitivity**: {s.get('SENSITIVITY', '')}\n"
+            ctx += f"- **Separate OTM**: {s.get('SEPARATE_OTM', 'no')}\n"
+            if s.get("REASON"):
+                ctx += f"- **Reason**: {s['REASON']}\n"
+            ctx += "\n"
+
+    if inventory.get("infra_modules"):
+        ctx += "## Infrastructure modules\n" + "\n".join(f"- {m}" for m in inventory["infra_modules"]) + "\n\n"
+    if inventory.get("sub_executables"):
+        ctx += "## Sub-executables\n" + "\n".join(f"- {e}" for e in inventory["sub_executables"]) + "\n\n"
+    if inventory.get("gitmodules"):
+        ctx += f"## .gitmodules\n\n```\n{inventory['gitmodules']}\n```\n\n"
+
+    return ctx
+
+
+def build_explore_single_task(explore_input: dict, extra_context: str = "") -> str:
+    """Run the LLM phase of /explore as 3 focused subtasks. Returns concatenated output."""
+    tools = _make_tools()
+    agents = build_agents(tools)
+    td = _KNOWLEDGE / "tasks"
+    tc = load_bundle_tasks(td)
+
+    stacks = explore_input.get("stacks", [])
+    commands = explore_input.get("commands", {})
+    ci_methods = explore_input.get("ci_methods", [])
+    ci_workflows = explore_input.get("ci_workflows", {})
+    terraform = explore_input.get("terraform", {})
+    feature_dirs = explore_input.get("feature_dirs", [])
+    test_dirs = explore_input.get("test_dirs", [])
+    comp_stds = explore_input.get("compliance_standards", [])
+    domain_dirs = explore_input.get("domain_dirs", {})
+
+    header = f"## Project: {explore_input.get('root_name', '.')}\n\n"
+    header += f"**Service dirs**: {', '.join(explore_input.get('svc_dirs', []))}\n\n"
+
+    # ── Subtask 1: no-tools synthesis — architecture style, component descriptions ──
+    # Keep context minimal: no file lists, no modules, no commands. Agent must not call tools.
+    v = header
+    v += f"**Phase 1 architecture**: {explore_input.get('arch_style', 'undetected')}\n"
+    v += f"**Phase 1 migration tool**: {explore_input.get('migration_tool', 'undetected')}\n"
+    v += f"**Phase 1 test framework**: {explore_input.get('test_framework', 'not detected')}\n"
+    v += f"**Phase 1 API doc standard**: {explore_input.get('api_doc', 'not detected')}"
+    if explore_input.get("api_doc_path"):
+        v += f" (at `{explore_input['api_doc_path']}`)"
+    v += "\n\n"
+    if stacks:
+        v += "### Detected stacks\n" + "\n".join(f"- {s}" for s in stacks) + "\n\n"
+    if ci_methods:
+        v += "### Detected CI/CD methods\n" + "\n".join(f"- {m}" for m in ci_methods) + "\n\n"
+    if terraform.get("root"):
+        v += f"**Terraform root**: `{terraform['root']}`\n\n"
+    # Top-level commands only (not the full list which can be very long)
+    _key_cmds = {k: v_ for k, v_ in commands.items() if k in ("test", "build", "lint")}
+    if _key_cmds:
+        v += "### Key commands\n"
+        v += "\n".join(f"- `{k}`: `{v_}`" for k, v_ in _key_cmds.items()) + "\n\n"
+
+    result1 = _run_explore_subtask(
+        "explore_verify",
+        f"{v}\n\n{tc['explore_verify'].description}",
+        tc["explore_verify"].expected_output,
+        agents,
+    )
+
+    # ── Subtask 2: code structure, architectural components, entry points ──
+    s = header
+    if stacks:
+        s += "### Verified stacks\n" + "\n".join(f"- {st}" for st in stacks) + "\n\n"
+    if domain_dirs:
+        s += "### Detected domain directories (heuristic — verify with SAD and code)\n"
+        for svc, doms in domain_dirs.items():
+            s += f"**{svc}**: {', '.join(doms)}\n"
+        s += "\n"
+    if extra_context:
+        s += extra_context
+
+    result2 = _run_explore_subtask(
+        "explore_structure",
+        f"{s}\n\n{tc['explore_structure'].description}",
+        tc["explore_structure"].expected_output,
+        agents,
+    )
+
+    # ── Subtask 3: test suites, CI/CD workflows, compliance ──
+    t_ = header
+    if feature_dirs:
+        t_ += f"**BDD feature dirs**: {', '.join(feature_dirs)}\n"
+    if test_dirs:
+        t_ += f"**Detected test dirs**: {', '.join(test_dirs)}\n"
+    if comp_stds:
+        t_ += f"**Phase 1 compliance standards detected**: {', '.join(comp_stds)} — verify by reading designs/ and docs/\n"
+    else:
+        t_ += "**Phase 1 compliance standards**: none detected — check designs/ and docs/ for HIPAA/SOC2/GDPR/CCPA/PCI-DSS/FIPS mentions\n"
+    t_ += "\n"
+    if ci_methods:
+        t_ += "### Detected CI/CD methods\n"
+        for m in ci_methods:
+            detail = ci_workflows.get(m, "")
+            t_ += f"- {m}" + (f": {detail}" if detail else "") + "\n"
+        t_ += "\n"
+
+    result3 = _run_explore_subtask(
+        "explore_tests",
+        f"{t_}\n\n{tc['explore_tests'].description}",
+        tc["explore_tests"].expected_output,
+        agents,
+    )
+
+    return result1 + "\n" + result2 + "\n" + result3
 
 
 def build_domain_single_task(
@@ -1202,26 +2089,88 @@ def build_domain_extract_crew(target_path: str = "") -> Crew:
         )
 
 
+def _read_service_readmes(inventory: dict) -> str:
+    """Pre-read README files for each service dir. Returns formatted markdown block."""
+    import pathlib
+    root_str = inventory.get("root", "")
+    if not root_str:
+        return ""
+    root = pathlib.Path(root_str)
+    lines: list[str] = []
+    for svc in inventory.get("svc_dirs", []):
+        for readme_name in ("README.md", "README.rst", "README.txt", "readme.md"):
+            readme = root / svc / readme_name
+            if readme.exists():
+                try:
+                    content = readme.read_text(encoding="utf-8", errors="replace")
+                    # Cap at 600 chars — enough for the first paragraph
+                    if len(content) > 600:
+                        content = content[:600] + "\n... (truncated)"
+                    lines.append(f"### {svc}/README\n\n{content}")
+                except Exception:
+                    pass
+                break
+    return "\n\n".join(lines)
+
+
 def build_otm_scope_task(inventory: dict) -> Crew:
     """Return a single-task Crew that decides how to partition the project into OTM files."""
     tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
     agents = build_agents(_make_tools())
 
     lines = ["## Project inventory\n"]
+    lines.append(f"**Root**: {inventory.get('root', '.')}")
+    if inventory.get("stacks"):
+        lines.append(f"**Detected stacks**: {', '.join(inventory['stacks'])}")
+
     if inventory.get("svc_dirs"):
         lines.append("### Source services (top-level directories)\n" +
                      "\n".join(f"- {d}" for d in inventory["svc_dirs"]))
-    if inventory.get("cmd_entries"):
-        lines.append("### Sub-executables (cmd/ entries)\n" +
-                     "\n".join(f"- {e}" for e in inventory["cmd_entries"]))
+
+    if inventory.get("sub_executables"):
+        lines.append(
+            "### Sub-executables (separately deployable binaries within services)\n"
+            "Detected by stack-specific scan (Go cmd/, Python __main__, Node workspaces, etc.):\n" +
+            "\n".join(f"- {e}" for e in inventory["sub_executables"])
+        )
+
+    if inventory.get("domain_dirs"):
+        _dd_lines = [
+            "### Detected domain directories\n"
+            "Heuristic scan of internal/src/pages dirs — directories with ≥5 source files.\n"
+            "Use as candidates; not all will warrant a separate OTM."
+        ]
+        for svc, domains in inventory["domain_dirs"].items():
+            _dd_lines.append(f"\n**{svc}**:")
+            _dd_lines.extend(f"  - {d}" for d in domains)
+        lines.append("\n".join(_dd_lines))
+
     if inventory.get("infra_modules"):
-        lines.append("### Infrastructure modules\n" +
-                     "\n".join(f"- {m}" for m in inventory["infra_modules"]))
+        lines.append(
+            "### Infrastructure modules\n"
+            "A domain directory that matches an infra module name has its own deployment unit:\n" +
+            "\n".join(f"- {m}" for m in inventory["infra_modules"])
+        )
+
     if inventory.get("external_services"):
-        lines.append("### External services detected in source\n" +
-                     "\n".join(f"- {s}" for s in inventory["external_services"]))
-    if inventory.get("stacks"):
-        lines.append(f"### Active stacks\n{', '.join(inventory['stacks'])}")
+        _ext_lines: list[str] = []
+        for _es in inventory["external_services"]:
+            if isinstance(_es, dict):
+                _ext_lines.append(f"- {_es.get('name', _es)} ({_es.get('category', '')})")
+            else:
+                _ext_lines.append(f"- {_es}")
+        lines.append("### External services detected in source\n" + "\n".join(_ext_lines))
+
+    # Pre-read service READMEs so the agent doesn't need tool calls for this
+    _readmes = _read_service_readmes(inventory)
+    if _readmes:
+        lines.append("## Service READMEs (pre-read — do not re-read these files)\n\n" + _readmes)
+
+    # Pre-read .gitmodules
+    if inventory.get("gitmodules"):
+        lines.append("## .gitmodules (pre-read — do not re-read this file)\n\n```\n"
+                     + inventory["gitmodules"] + "\n```")
+
     ctx = "\n\n".join(lines)
 
     t = Task(
@@ -1406,6 +2355,13 @@ def _build_threat_context(project: dict, inventory: dict, revision_feedback: str
     if structure:
         ctx_lines.append(f"## Project structure\n\n{structure}")
 
+    stack_docs = _load_stacks(stacks)
+    if stack_docs:
+        ctx_lines.append(
+            "## Technology stack conventions (pre-injected — do NOT call stack_reader)\n\n"
+            + stack_docs
+        )
+
     if revision_feedback:
         ctx_lines.append(
             f"## Manager revision feedback (address ALL items before producing the OTM)\n\n"
@@ -1469,11 +2425,10 @@ def build_threat_model_crew(project: dict, inventory: dict, revision_feedback: s
 def build_threat_patch_crew(project: dict, otm_text: str, revision_feedback: str) -> Crew:
     """Sequential crew: Architect patches specific gaps in an existing OTM YAML.
 
-    Used for revisions — lighter than the full hierarchical re-run. The Architect
-    only reads the files needed to fill the specific gaps the manager identified.
+    No tools — all context (OTM + feedback) is pre-injected by Python.
     """
     tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
-    agents = build_agents(_make_tools())
+    ac = load_bundle_agents(_KNOWLEDGE / "agents")
 
     ctx = (
         f"## Project\n\n"
@@ -1485,8 +2440,16 @@ def build_threat_patch_crew(project: dict, otm_text: str, revision_feedback: str
         f"```yaml\n{otm_text}\n```"
     )
 
-    architect = agents["architect"]
-    architect.max_iter = 20
+    architect_def = ac["architect"]
+    architect = Agent(
+        role=architect_def.role,
+        goal=architect_def.goal,
+        backstory=architect_def.backstory,
+        llm=get_llm_for_tier("standard"),
+        tools=[],
+        max_iter=5,
+        verbose=True,
+    )
 
     patch_task = Task(
         name="threat_patch",
@@ -1508,7 +2471,6 @@ def build_threat_patch_crew(project: dict, otm_text: str, revision_feedback: str
 def build_threat_gate_crew(project: dict, otm_text: str, stacks: list[str]) -> Crew:
     """Sequential crew: Manager reviews the OTM and either approves or lists gaps."""
     tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
-    agents = build_agents(_make_tools())
 
     compliance = os.environ.get("CODE_CREW_COMPLIANCE", "")
     gate_ctx = (
@@ -1532,6 +2494,407 @@ def build_threat_gate_crew(project: dict, otm_text: str, stacks: list[str]) -> C
         return Crew(
             agents=[manager_agent],
             tasks=[gate_task],
+            process=Process.sequential,
+            verbose=True,
+        )
+
+
+def _parse_yaml_section(text: str, key: str) -> list:
+    """Extract a top-level YAML list section from LLM output. Returns [] on any failure."""
+    import yaml as _yaml
+    import re as _re
+    # Strip markdown fences
+    text = _re.sub(r"```ya?ml\s*\n?", "", text)
+    text = _re.sub(r"```\s*$", "", text, flags=_re.MULTILINE)
+    # Strip known completion markers that look like non-YAML prose
+    for _marker in ("DISCOVERY COMPLETE", "THREATS COMPLETE", "MITIGATIONS COMPLETE", "OTM BUILD COMPLETE", "COMPONENT COMPLETE"):
+        text = text.replace(_marker, "")
+    # Find `key:` at start of a line
+    pattern = _re.compile(r"^" + _re.escape(key) + r"\s*:", _re.MULTILINE)
+    m = pattern.search(text)
+    if not m:
+        return []
+    start = m.start()
+    # Find next top-level key (non-indented line matching `word:`)
+    remaining = text[start:]
+    top_key_re = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*:", _re.MULTILINE)
+    end = len(remaining)
+    for mk in top_key_re.finditer(remaining):
+        if mk.start() > 0:  # skip the first match (that's our key)
+            end = mk.start()
+            break
+    snippet = remaining[:end].strip()
+    try:
+        parsed = _yaml.safe_load(snippet)
+        if isinstance(parsed, dict) and key in parsed:
+            val = parsed[key]
+            return val if isinstance(val, list) else []
+        return []
+    except Exception:
+        return []
+
+
+def _infer_assets(components: list[dict]) -> list[dict]:
+    """Build unique OTM assets from component phi_categories and a base availability asset."""
+    seen: set[str] = set()
+    assets: list[dict] = []
+    for comp in components:
+        attrs = comp.get("attributes", {}) if isinstance(comp, dict) else {}
+        for cat in (attrs.get("phi_categories") or []):
+            if not cat or cat in seen:
+                continue
+            seen.add(cat)
+            assets.append({
+                "name": cat,
+                "id": cat.replace(" ", "-").lower(),
+                "risk": {"confidentiality": "HIGH", "integrity": "HIGH", "availability": "MEDIUM"},
+                "description": f"{cat} data",
+            })
+    if "system-availability" not in seen:
+        assets.append({
+            "name": "System Availability",
+            "id": "system-availability",
+            "risk": {"confidentiality": "LOW", "integrity": "MEDIUM", "availability": "HIGH"},
+            "description": "Service uptime and availability",
+        })
+    return assets
+
+
+def _infer_dataflows(components: list[dict], zones: list[dict]) -> list[dict]:
+    """Infer OTM dataflows from component connects_to fields."""
+    comp_map = {c["id"]: c for c in components if isinstance(c, dict) and "id" in c}
+    zone_rating = {z["id"]: z.get("rating", 75) for z in zones if isinstance(z, dict) and "id" in z}
+
+    seen_pairs: set[tuple] = set()
+    dataflows: list[dict] = []
+
+    def _comp_phi_asset_ids(comp: dict) -> list[str]:
+        attrs = comp.get("attributes", {}) or {}
+        return [c.replace(" ", "-").lower() for c in (attrs.get("phi_categories") or []) if c]
+
+    for comp in components:
+        if not isinstance(comp, dict):
+            continue
+        src_id = comp.get("id", "")
+        connects_to = comp.get("connects_to") or []
+        if isinstance(connects_to, str):
+            connects_to = [connects_to]
+
+        for dst_id in connects_to:
+            if not dst_id or (src_id, dst_id) in seen_pairs:
+                continue
+            seen_pairs.add((src_id, dst_id))
+
+            dst = comp_map.get(dst_id)
+            if not dst:
+                continue
+
+            dst_type = dst.get("type", "service")
+            protocol_map = {
+                "database": "PostgreSQL", "queue": "SQS",
+                "external-service": "HTTPS", "actor": "HTTPS",
+            }
+            protocol = protocol_map.get(dst_type, "HTTPS")
+
+            src_zone_id = (comp.get("parent") or {}).get("trustZone", "")
+            dst_zone_id = (dst.get("parent") or {}).get("trustZone", "")
+            src_rating = zone_rating.get(src_zone_id, 75)
+
+            if dst_type == "database":
+                auth = "IAM Role"
+            elif src_rating < 50:
+                auth = "JWT"
+            elif src_zone_id == dst_zone_id or (src_rating >= 75 and zone_rating.get(dst_zone_id, 75) >= 75):
+                auth = "IAM Role"
+            else:
+                auth = "JWT"
+
+            df_id = f"df-{src_id}-to-{dst_id}"
+            if len(df_id) > 60:
+                df_id = f"df-{src_id[:20]}-to-{dst_id[:20]}"
+
+            src_assets = _comp_phi_asset_ids(comp)
+            dst_assets = _comp_phi_asset_ids(dst)
+            all_assets = list(dict.fromkeys(src_assets + dst_assets))
+
+            dataflows.append({
+                "name": f"{comp.get('name', src_id)} → {dst.get('name', dst_id)}",
+                "id": df_id,
+                "source": src_id,
+                "destination": dst_id,
+                "protocol": protocol,
+                "assets": all_assets,
+                "authentication": auth,
+            })
+
+    return dataflows
+
+
+def assemble_otm_yaml(
+    project: dict,
+    zones: list,
+    components: list,
+    threats: list,
+    mitigations: list,
+    stacks: list,
+    date: str,
+) -> str:
+    """Assemble a complete OTM v0.2.0 YAML from parsed pieces.
+
+    Strips Python-internal routing fields (connects_to, receives_from) from components,
+    renumbers threats T-001..N and mitigations M-001..N, and updates all cross-references.
+    """
+    import yaml as _yaml
+
+    # Renumber threats and build old→new ID map
+    threat_id_map: dict[str, str] = {}
+    renumbered_threats = []
+    for i, t in enumerate(threats, 1):
+        if not isinstance(t, dict):
+            continue
+        new_id = f"T-{i:03d}"
+        old_id = t.get("id", new_id)
+        threat_id_map[old_id] = new_id
+        renumbered_threats.append({**t, "id": new_id})
+
+    # Renumber mitigations and update mitigatedThreats references
+    renumbered_mitigations = []
+    for i, m in enumerate(mitigations, 1):
+        if not isinstance(m, dict):
+            continue
+        new_id = f"M-{i:03d}"
+        old_refs = m.get("mitigatedThreats") or []
+        new_refs = [threat_id_map.get(r, r) for r in old_refs]
+        renumbered_mitigations.append({**m, "id": new_id, "mitigatedThreats": new_refs})
+
+    # Clean components — strip Python-internal routing fields
+    clean_components = []
+    for comp in components:
+        if not isinstance(comp, dict):
+            continue
+        c = {k: v for k, v in comp.items() if k not in ("connects_to", "receives_from")}
+        clean_components.append(c)
+
+    assets = _infer_assets(clean_components)
+    dataflows = _infer_dataflows(components, zones)  # use original with connects_to
+
+    otm = {
+        "otmVersion": "0.2.0",
+        "project": {
+            "name": project.get("name", project.get("id", "")),
+            "id": project.get("id", ""),
+            "description": project.get("description", ""),
+            "owner": "Security Lead",
+            "attributes": {
+                "stacks": stacks,
+                "threat_model_date": date,
+            },
+        },
+        "representations": [
+            {"name": "Architecture Diagram", "id": "arch-diagram", "type": "diagram"}
+        ],
+        "trustZones": zones,
+        "assets": assets,
+        "components": clean_components,
+        "dataflows": dataflows,
+        "threats": renumbered_threats,
+        "mitigations": renumbered_mitigations,
+    }
+
+    return _yaml.dump(otm, sort_keys=False, allow_unicode=True, default_flow_style=False)
+
+
+def build_threat_discover_crew(project: dict, inventory: dict) -> "Crew":
+    """Sequential crew: Architect analyzes pre-scanned context and outputs zones + components YAML.
+
+    No tools — _build_threat_context already pre-reads key source and infra files.
+    Giving the architect tools causes it to loop on knowledge_reader instead of working
+    from the injected context.
+    """
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    ac = load_bundle_agents(_KNOWLEDGE / "agents")
+
+    ctx = _build_threat_context(project, inventory)
+
+    architect_def = ac["architect"]
+    architect = Agent(
+        role=architect_def.role,
+        goal=architect_def.goal,
+        backstory=architect_def.backstory,
+        llm=get_llm_for_tier("standard"),
+        tools=[],  # no tools — all context provided via _build_threat_context
+        max_iter=5,
+        verbose=True,
+    )
+
+    discover_task = Task(
+        name="threat_discover",
+        description=f"{ctx}\n\n{tc['threat_discover'].description}",
+        expected_output=tc["threat_discover"].expected_output,
+        agent=architect,
+    )
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        return Crew(
+            agents=[architect],
+            tasks=[discover_task],
+            process=Process.sequential,
+            verbose=True,
+        )
+
+
+def build_threat_component_threats_crew(
+    project: dict,
+    component: dict,
+    context_text: str,
+    threat_id_start: int = 1,
+) -> "Crew":
+    """Sequential crew: Architect outputs threats YAML for one component. No file reads."""
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    ac = load_bundle_agents(_KNOWLEDGE / "agents")
+
+    import yaml as _yaml
+    comp_yaml = _yaml.dump({"component": component}, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    comp_name = component.get("name", component.get("id", "unknown"))
+
+    task_description = (
+        f"{context_text}\n\n"
+        f"## Component to analyse\n\n"
+        f"Name: **{comp_name}**\n\n"
+        f"```yaml\n{comp_yaml}```\n\n"
+        f"## Threat ID start\n\n"
+        f"Start threat IDs at T-{threat_id_start:03d}. "
+        f"Your first threat is T-{threat_id_start:03d}, second is T-{threat_id_start+1:03d}, etc.\n\n"
+        + tc["threat_component_threats"].description
+    )
+
+    architect_def = ac["architect"]
+    architect = Agent(
+        role=architect_def.role,
+        goal=architect_def.goal,
+        backstory=architect_def.backstory,
+        llm=get_llm_for_tier("standard"),
+        tools=[],
+        max_iter=5,
+        verbose=True,
+    )
+
+    threat_task = Task(
+        name=f"threat_component_{component.get('id', 'unknown')}",
+        description=task_description,
+        expected_output=tc["threat_component_threats"].expected_output,
+        agent=architect,
+    )
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        return Crew(
+            agents=[architect],
+            tasks=[threat_task],
+            process=Process.sequential,
+            verbose=True,
+        )
+
+
+def build_threat_component_crew(
+    project: dict,
+    component: dict,
+    context_text: str,
+    threat_id_start: int = 1,
+) -> "Crew":
+    """Sequential crew: Architect outputs threats + mitigations for one component in one pass.
+
+    Replaces the separate build_threat_component_threats_crew + build_threat_mitigations_crew
+    calls. Intended for parallel execution via kickoff_async().
+    """
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    ac = load_bundle_agents(_KNOWLEDGE / "agents")
+
+    import yaml as _yaml
+    comp_yaml = _yaml.dump({"component": component}, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    comp_name = component.get("name", component.get("id", "unknown"))
+
+    task_description = (
+        f"{context_text}\n\n"
+        f"## Component to analyse\n\n"
+        f"Name: **{comp_name}**\n\n"
+        f"```yaml\n{comp_yaml}```\n\n"
+        f"## Threat ID start\n\n"
+        f"Start threat IDs at T-{threat_id_start:03d}. "
+        f"Your first threat is T-{threat_id_start:03d}, second is T-{threat_id_start+1:03d}, etc.\n\n"
+        + tc["threat_component"].description
+    )
+
+    architect_def = ac["architect"]
+    architect = Agent(
+        role=architect_def.role,
+        goal=architect_def.goal,
+        backstory=architect_def.backstory,
+        llm=get_llm_for_tier("standard"),
+        tools=[],
+        max_iter=5,
+        verbose=True,
+    )
+
+    task = Task(
+        name=f"threat_component_{component.get('id', 'unknown')}",
+        description=task_description,
+        expected_output=tc["threat_component"].expected_output,
+        agent=architect,
+    )
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        return Crew(
+            agents=[architect],
+            tasks=[task],
+            process=Process.sequential,
+            verbose=True,
+        )
+
+
+def build_threat_mitigations_crew(
+    project: dict,
+    threats_context: str,
+    otm_context: str,
+) -> "Crew":
+    """Sequential crew: Architect outputs mitigations YAML for all threats. No file reads."""
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+    ac = load_bundle_agents(_KNOWLEDGE / "agents")
+
+    task_description = (
+        f"**Project**: {project.get('name', project.get('id', ''))}\n\n"
+        + otm_context
+        + "\n\n"
+        + threats_context
+        + "\n\n"
+        + tc["threat_mitigations"].description
+    )
+
+    architect_def = ac["architect"]
+    architect = Agent(
+        role=architect_def.role,
+        goal=architect_def.goal,
+        backstory=architect_def.backstory,
+        llm=get_llm_for_tier("standard"),
+        tools=[],
+        max_iter=5,
+        verbose=True,
+    )
+
+    mit_task = Task(
+        name="threat_mitigations",
+        description=task_description,
+        expected_output=tc["threat_mitigations"].expected_output,
+        agent=architect,
+    )
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*cannot be serialized.*checkpointing.*")
+        return Crew(
+            agents=[architect],
+            tasks=[mit_task],
             process=Process.sequential,
             verbose=True,
         )

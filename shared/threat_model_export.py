@@ -150,7 +150,7 @@ def _component_cell(
         "size": size,
         "attrs": {
             "text": {"text": name[:40]},
-            "body": {"stroke": "#333333", "strokeWidth": 1.5},
+            "body": {"stroke": "#333333", "strokeWidth": 1.5, "strokeDasharray": ""},
         },
         "visible": True,
         "shape": shape,
@@ -181,14 +181,22 @@ def _flow_cell(
     tgt_ports = target_cell.get("ports", {}).get("items") or []
     if not src_ports or not tgt_ports:
         return None
+    src_port, tgt_port = _directional_ports(source_cell, target_cell)
     encrypted = protocol.upper().startswith("HTTPS") or "TLS" in protocol.upper() or "MTLS" in protocol.upper()
     return {
         "shape": "flow",
         "zIndex": 10,
         "id": _new_id(),
         "connector": "smooth",
-        "source": {"cell": source_cell["id"], "port": src_ports[1]["id"]},
-        "target": {"cell": target_cell["id"], "port": tgt_ports[3]["id"]},
+        "attrs": {
+            "line": {
+                "targetMarker": {"name": "block"},
+                "sourceMarker": {"name": ""},
+                "strokeDasharray": "",
+            }
+        },
+        "source": {"cell": source_cell["id"], "port": src_ports[src_port]["id"]},
+        "target": {"cell": target_cell["id"], "port": tgt_ports[tgt_port]["id"]},
         "labels": [{"attrs": {"label": {"text": name[:48]}}}],
         "data": {
             "type": "tm.Flow",
@@ -239,10 +247,138 @@ def _td_threat(
 
 # ── layout ───────────────────────────────────────────────────────────────────
 
+def _cell_center(cell: dict[str, Any]) -> tuple[float, float]:
+    pos = cell.get("position", {})
+    size = cell.get("size", {})
+    return (
+        pos.get("x", 0) + size.get("width", 0) / 2,
+        pos.get("y", 0) + size.get("height", 0) / 2,
+    )
+
+
+def _directional_ports(src_cell: dict[str, Any], tgt_cell: dict[str, Any]) -> tuple[int, int]:
+    """Choose source/target port indices based on relative node positions.
+
+    Port order in _ports(): 0=top, 1=right, 2=bottom, 3=left.
+    Picks the pair that keeps the connector on the natural side of each node.
+    """
+    sx, sy = _cell_center(src_cell)
+    tx, ty = _cell_center(tgt_cell)
+    dx, dy = tx - sx, ty - sy
+    if abs(dx) >= abs(dy):
+        return (1, 3) if dx >= 0 else (3, 1)  # horizontal: right→left or left→right
+    else:
+        return (2, 0) if dy >= 0 else (0, 2)  # vertical: bottom→top or top→bottom
+
+
+def _graphviz_positions(
+    components: list[dict[str, Any]],
+    trust_zones: list[dict[str, Any]],
+    dataflows: list[dict[str, Any]],
+    comp_lookup: dict[str, str],
+    canvas_w: int = 1400,
+    canvas_h: int = 900,
+) -> dict[str, tuple[int, int]]:
+    """Compute node positions via graphviz dot layout.
+
+    Returns {comp_id: (x, y)} using the graphviz binary found on PATH.
+    Returns {} if graphviz or pygraphviz is unavailable.
+    """
+    import shutil
+    if not shutil.which("dot"):
+        return {}
+    try:
+        import pygraphviz as pgv
+    except ImportError:
+        return {}
+
+    G = pgv.AGraph(directed=True, strict=False)
+    G.graph_attr.update(
+        rankdir="LR",
+        splines="ortho",
+        nodesep="0.6",
+        ranksep="1.2",
+        compound="true",
+    )
+    # Use fixed-size nodes; graphviz dimensions are in inches at 72 dpi
+    G.node_attr.update(shape="box", width="2.2", height="1.0", fixedsize="true", fontsize="10")
+
+    # Group components by trust zone for cluster subgraphs
+    zone_comps: dict[str, list[str]] = {}
+    for comp in components:
+        parent = comp.get("parent") or {}
+        zone_id = parent.get("trustZone") or (trust_zones[0]["id"] if trust_zones else "private")
+        zone_comps.setdefault(zone_id, []).append(comp["id"])
+
+    for zone in trust_zones:
+        zone_id = zone["id"]
+        members = zone_comps.get(zone_id, [])
+        if not members:
+            continue
+        sub = G.add_subgraph(
+            members,
+            name=f"cluster_{zone_id}",
+            label=zone.get("name", zone_id),
+            style="rounded",
+        )
+        for comp_id in members:
+            comp = next((c for c in components if c["id"] == comp_id), None)
+            label = (comp.get("name", comp_id) if comp else comp_id)[:24]
+            sub.add_node(comp_id, label=label)
+
+    # Add any nodes not yet in the graph
+    for comp in components:
+        if not G.has_node(comp["id"]):
+            G.add_node(comp["id"], label=comp.get("name", comp["id"])[:24])
+
+    # Add dataflow edges
+    for flow in dataflows:
+        src = _resolve(flow.get("source"), comp_lookup)
+        dst = _resolve(flow.get("destination") or flow.get("target"), comp_lookup)
+        if src and dst and src != dst:
+            G.add_edge(src, dst)
+
+    G.layout(prog="dot")
+
+    # Extract positions; graphviz uses pts with origin at bottom-left
+    raw: list[tuple[str, float, float]] = []
+    for node in G.nodes():
+        pos_str = node.attr.get("pos", "")
+        if not pos_str:
+            continue
+        try:
+            gx, gy = map(float, pos_str.split(","))
+            raw.append((str(node), gx, gy))
+        except ValueError:
+            continue
+
+    if not raw:
+        return {}
+
+    xs = [r[1] for r in raw]
+    ys = [r[2] for r in raw]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    rx = max_x - min_x or 1.0
+    ry = max_y - min_y or 1.0
+    pad = 120
+
+    result: dict[str, tuple[int, int]] = {}
+    for node_id, gx, gy in raw:
+        px = pad + int((gx - min_x) / rx * (canvas_w - 2 * pad))
+        # Flip y: graphviz y increases upward, screen y increases downward
+        py = pad + int((1.0 - (gy - min_y) / ry) * (canvas_h - 2 * pad))
+        result[node_id] = (px, py)
+
+    return result
+
+
 def _layout(
     components: list[dict[str, Any]],
     trust_zones: list[dict[str, Any]],
     threat_instances: dict[str, list[dict[str, Any]]],
+    dataflows: list[dict[str, Any]] | None = None,
+    comp_lookup: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     zone_order = [z["id"] for z in trust_zones]
     zone_name = {z["id"]: z.get("name", z["id"]) for z in trust_zones}
@@ -254,26 +390,57 @@ def _layout(
         zone_id = parent.get("trustZone") or default_zone
         grouped.setdefault(zone_id, []).append(comp)
 
+    # Try graphviz layout; fall back to grid if unavailable
+    gv_pos = _graphviz_positions(
+        components, trust_zones,
+        dataflows or [], comp_lookup or {},
+    ) if dataflows is not None else {}
+
     cells: list[dict[str, Any]] = []
     cell_by_id: dict[str, dict[str, Any]] = {}
-    x_offset = 40
-    cols, col_w, row_h, pad, gap = 4, 180, 110, 30, 80
 
-    for zone_id in zone_order:
-        comps = grouped.get(zone_id) or []
-        if not comps:
-            continue
-        rows = (len(comps) + cols - 1) // cols
-        box_w = pad * 2 + cols * col_w
-        box_h = pad * 2 + rows * row_h
-        cells.append(_boundary_box(zone_name.get(zone_id, zone_id), x_offset, 40, box_w, box_h))
-        for i, comp in enumerate(comps):
-            x = x_offset + pad + (i % cols) * col_w
-            y = 40 + pad + (i // cols) * row_h
-            cell = _component_cell(comp, x, y, threat_instances.get(comp["id"], []))
-            cells.append(cell)
-            cell_by_id[comp["id"]] = cell
-        x_offset += box_w + gap
+    if gv_pos:
+        # ── graphviz path: place nodes at computed positions, draw zone boxes ──
+        zone_pad = 40
+        for zone_id in zone_order:
+            comps = grouped.get(zone_id) or []
+            if not comps:
+                continue
+            positions = [gv_pos.get(c["id"], (200, 200)) for c in comps]
+            min_x = min(p[0] for p in positions) - zone_pad
+            min_y = min(p[1] for p in positions) - zone_pad
+            max_x = max(p[0] for p in positions) + zone_pad + 160  # comp width
+            max_y = max(p[1] for p in positions) + zone_pad + 80   # comp height
+            cells.append(_boundary_box(
+                zone_name.get(zone_id, zone_id),
+                min_x, min_y,
+                max_x - min_x, max_y - min_y,
+            ))
+            for comp in comps:
+                x, y = gv_pos.get(comp["id"], (200, 200))
+                cell = _component_cell(comp, x, y, threat_instances.get(comp["id"], []))
+                cells.append(cell)
+                cell_by_id[comp["id"]] = cell
+    else:
+        # ── grid fallback ─────────────────────────────────────────────────────
+        x_offset = 40
+        cols, col_w, row_h, pad, gap = 3, 200, 120, 40, 80
+
+        for zone_id in zone_order:
+            comps = grouped.get(zone_id) or []
+            if not comps:
+                continue
+            rows = (len(comps) + cols - 1) // cols
+            box_w = pad * 2 + cols * col_w
+            box_h = pad * 2 + rows * row_h
+            cells.append(_boundary_box(zone_name.get(zone_id, zone_id), x_offset, 40, box_w, box_h))
+            for i, comp in enumerate(comps):
+                x = x_offset + pad + (i % cols) * col_w
+                y = 40 + pad + (i // cols) * row_h
+                cell = _component_cell(comp, x, y, threat_instances.get(comp["id"], []))
+                cells.append(cell)
+                cell_by_id[comp["id"]] = cell
+            x_offset += box_w + gap
 
     return cells, cell_by_id
 
@@ -385,7 +552,10 @@ def otm_to_threat_dragon(otm_path: Path, output_path: Path) -> None:
                 comp_threat_instances.setdefault(cid, []).append(deepcopy(td))
 
     # Layout diagram cells
-    cells, cell_by_id = _layout(components, trust_zones, comp_threat_instances)
+    cells, cell_by_id = _layout(
+        components, trust_zones, comp_threat_instances,
+        dataflows=dataflows_raw, comp_lookup=comp_lookup,
+    )
 
     # Add synthetic components referenced in dataflows but missing from components
     for flow in dataflows_raw:
