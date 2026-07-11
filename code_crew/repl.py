@@ -3058,8 +3058,24 @@ def _filter_structure_top_level(md: str, top_level_paths: "set[str]") -> str:
         """Strip markdown heading and bold markers so '## UNIT_SUMMARY:' and '**UNIT_SUMMARY COMPLETE**' both match."""
         return s.strip().lstrip("# ").strip().replace("**", "").strip()
 
+    in_code_fence = False
     for line in lines:
         stripped = line.strip()
+        # Track ``` code fences — UNIT_SUMMARY markers inside a fence are LLM prose,
+        # not real block starts (e.g. the 8b model writes "correction" code blocks).
+        if stripped.startswith("```"):
+            in_code_fence = not in_code_fence
+            if in_unit:
+                buffer.append(line)
+            else:
+                filtered.append(line)
+            continue
+        if in_code_fence:
+            if in_unit:
+                buffer.append(line)
+            else:
+                filtered.append(line)
+            continue
         normed = _norm(stripped)
         is_unit_start = normed.startswith("UNIT_SUMMARY:") and not normed.startswith("UNIT_SUMMARY COMPLETE")
         is_unit_end = normed == "UNIT_SUMMARY COMPLETE"

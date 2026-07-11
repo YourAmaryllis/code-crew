@@ -1424,7 +1424,10 @@ def classify_units_from_structure(structure_md: str) -> dict:
                 current["decompose"] = True
             elif s.startswith("SUB_UNITS:") and current["decompose"]:
                 subs = [x.strip() for x in s[10:].split(",")
-                        if x.strip() and not x.strip().startswith("<")]
+                        if x.strip()
+                        and not x.strip().startswith("<")
+                        and ":" not in x.strip()   # reject Makefile targets (demo:all)
+                        and "--" not in x.strip()]  # reject CLI flags
                 if subs:
                     current["sub_units"] = subs
 
