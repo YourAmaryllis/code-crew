@@ -577,6 +577,7 @@ def _load_decomposition_diagram() -> str:
 
     Returns only the ```mermaid...``` block — not the full file — so it stays
     compact enough to include in every command context without token bloat.
+    Handles both the fenced format (current) and the bare graph TD format (legacy).
     """
     import re as _re
     p = Path.cwd() / ".code-crew" / "decomposition.md"
@@ -587,7 +588,11 @@ def _load_decomposition_diagram() -> str:
         m = _re.search(r"(```mermaid\n.*?```)", text, _re.DOTALL)
         if m:
             return m.group(1)
-        return text.strip()
+        # Legacy: bare graph TD/LR block (no fence)
+        m2 = _re.search(r"(graph (?:TD|LR)\b.*)", text, _re.DOTALL)
+        if m2:
+            return "```mermaid\n" + m2.group(1).strip() + "\n```"
+        return ""
     except OSError:
         return ""
 

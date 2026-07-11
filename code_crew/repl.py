@@ -3741,11 +3741,12 @@ def _run_explore(target: str, console: Console) -> None:
         ).strip()
 
         if _diagram and _diagram.startswith("graph "):
-            _decomp_section = "\n## Decomposition\n\n" + _diagram + "\n"
+            _fenced = f"```mermaid\n{_diagram}\n```"
+            _decomp_section = "\n## Decomposition\n\n" + _fenced + "\n"
             _existing_md = (out_dir / "structure.md").read_text(encoding="utf-8")
             (out_dir / "structure.md").write_text(_existing_md.rstrip() + "\n" + _decomp_section, encoding="utf-8")
             (out_dir / "decomposition.md").write_text(
-                f"# {root.name} — Decomposition\n\n" + _diagram + "\n",
+                f"# {root.name} — Decomposition\n\n" + _fenced + "\n",
                 encoding="utf-8",
             )
             console.print("  [green]✓[/green] decomposition.md written")
