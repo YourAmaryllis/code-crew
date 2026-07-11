@@ -1,13 +1,13 @@
 ---
 name: SDLC-Team-GitHubConventions
-description: Branch naming, commit message format, PR format, Jira-GitHub linking, and merge discipline
+description: Branch naming, commit message format, PR format, issue tracker linking, and merge discipline
 metadata:
   type: process
   role: all
   phase: "17, 18, 19"
 ---
 
-# GitHub Conventions
+# VCS Conventions
 
 These conventions are enforced in code review. PRs that don't follow them are rejected.
 
@@ -16,23 +16,23 @@ These conventions are enforced in code review. PRs that don't follow them are re
 ## Branch Naming
 
 ```
-feature/PROJ-NNN-short-slug
-fix/PROJ-NNN-short-slug
-chore/PROJ-NNN-short-slug
-hotfix/PROJ-NNN-short-slug
+feature/<issue-key>-short-slug
+fix/<issue-key>-short-slug
+chore/<issue-key>-short-slug
+hotfix/<issue-key>-short-slug
 ```
 
 Rules:
 - Lowercase, hyphen-separated — no underscores or spaces
-- Must include the Jira ticket key
+- Must include the issue tracker key
 - Slug: 2–5 words (not the full ticket title)
 
 Examples:
 ```
-feature/PROJ-92-email-verification
-fix/PROJ-95-null-profile-pointer
-chore/PROJ-101-go-1-23-upgrade
-hotfix/PROJ-110-auth-bypass-fix
+feature/<issue-key>-email-verification
+fix/<issue-key>-null-profile-pointer
+chore/<issue-key>-dependency-upgrade
+hotfix/<issue-key>-auth-bypass-fix
 ```
 
 ---
@@ -40,20 +40,20 @@ hotfix/PROJ-110-auth-bypass-fix
 ## Commit Message Format
 
 ```
-<type>(<scope>): <description> [REQ:<REQ-ID>] <JIRA-KEY>
+<type>(<scope>): <description> [REQ:<REQ-ID>] <issue-key>
 ```
 
 | Field | Required | Values / Notes |
 |-------|----------|---------------|
 | `type` | Yes | `feat`, `fix`, `test`, `chore`, `docs`, `refactor`, `perf`, `ci` |
-| `scope` | Yes | Package or service name: `portal`, `auth-svc`, `curation-svc`, `infra` |
+| `scope` | Yes | Package or service name (e.g. `auth-svc`, `api`, `infra`) |
 | `description` | Yes | Imperative mood, lowercase, no period, ≤ 72 chars |
 | `[REQ:<ID>]` | When available | References TR-YYYY-NNN or BR-YYYY-NNN requirement |
-| `<JIRA-KEY>` | Yes | `PROJ-NNN` |
+| `<issue-key>` | Yes | Issue tracker key |
 
 Multi-line commits:
 ```
-feat(auth-svc): add email verification on registration [REQ:TR-2026-042] PROJ-92
+feat(auth-svc): add email verification on registration [REQ:TR-2026-042] <issue-key>
 
 Sends a time-limited verification email after account creation.
 Token expires after 24 hours. Account remains pending until verified.
@@ -76,7 +76,7 @@ Token expires after 24 hours. Account remains pending until verified.
 **Title**: same format as commit subject
 
 ```
-feat(auth-svc): add email verification on registration [REQ:TR-2026-042] PROJ-92
+feat(auth-svc): add email verification on registration [REQ:TR-2026-042] <issue-key>
 ```
 
 **Description template**:
@@ -85,16 +85,16 @@ feat(auth-svc): add email verification on registration [REQ:TR-2026-042] PROJ-92
 ## Summary
 Brief description of what this PR does and why.
 
-## Jira
-[PROJ-92](https://your-org.atlassian.net/browse/PROJ-92)
+## Issue
+[<issue-key>](<issue tracker URL>)
 
 ## Design References
-- ADD-025-Email-Verification-Flow
-- Figma: https://figma.com/... (if applicable)
+- ADD-NNN-Feature-Name
+- Figma: <url> (if applicable)
 
 ## Test Evidence
-- BDD run: [GitHub Actions #XXXXXXX](https://github.com/...)
-- All 4 scenarios passing ✅
+- BDD run: <CI run URL>
+- All N scenarios passing
 
 ## Checklist
 - [ ] Branch name follows convention
@@ -114,16 +114,14 @@ Brief description of what this PR does and why.
 
 ---
 
-## Jira ↔ GitHub Linking
+## Issue Tracker ↔ VCS Linking
 
-Automatic linking via:
-1. **PR title** containing `PROJ-NNN` — Jira shows GitHub PR in development panel
-2. **Smart commits**: `PROJ-92 #comment Tests passing` — adds Jira comment
-3. **Branch name** containing `PROJ-NNN` — Jira shows branch in development panel
+Automatic linking depends on the configured issue tracker (see `issue_tracker.type` in config):
+- **Jira**: PR title / branch name containing the issue key triggers the Jira development panel integration
+- **Linear**: PR title or branch name with the Linear issue ID auto-links
+- **GitHub Issues**: PR description with `Closes #NNN` closes the issue on merge
 
-Setup required (one-time per repo):
-- GitHub App: Atlassian Jira GitHub integration installed on the repo
-- Jira project: Development panel enabled in project settings
+For Jira-specific setup: see the `jira` stack document.
 
 ---
 
@@ -131,9 +129,7 @@ Setup required (one-time per repo):
 
 All commits must be GPG-signed. The repo pre-receive hook rejects unsigned commits.
 
-Verified by GitHub with the green "Verified" badge on the commit.
-
-See: [development-workflow.md`](development-workflow.md) for GPG setup.
+See: [`development-workflow.md`](development-workflow.md) for GPG setup.
 
 ---
 

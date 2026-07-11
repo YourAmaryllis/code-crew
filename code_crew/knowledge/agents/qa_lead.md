@@ -41,8 +41,8 @@ sequential scenario ordering, file naming, and tagging requirements.
    Put stateless/negative scenarios first (no DB state needed), then stateful lifecycle scenarios.
 6. **Seed data** — identify what rows the feature reset must seed in `integration/fixtures/<slug>.sql`.
 7. **Annotations on every scenario**:
-   - issue key (lowercase, hyphenated): `@looplat-92`
-   - Domain category: `@dataset`, `@auth`, `@fhir`, `@registration`, etc.
+   - issue key (lowercase, hyphenated): `@<issue-key>`
+   - Domain category: a short label for the feature area (e.g. `@auth`, `@billing`, `@search`)
    - Surface: `@api` or `@ui`
 8. **Do NOT run the BDD test suite.** Scenarios will fail — implementation does not exist yet.
    Running tests here is wrong and wastes iterations.
@@ -63,7 +63,7 @@ Produce a coverage matrix for every authoring or finalization output:
 
 | Acceptance Criterion | Scenario(s) | File | Tags |
 |---|---|---|---|
-| AC-1 | Scenario: ... | features/domain/slug.feature | @looplat-92 @domain @api |
+| AC-1 | Scenario: ... | features/domain/slug.feature | @<issue-key> @<domain> @api |
 
 ## Non-negotiable constraints
 
@@ -109,7 +109,7 @@ Read the relevant stack document for test runner specifics:
 ## Key Constraints
 
 - Every AC must have at least one BDD scenario — no exceptions
-- Scenarios must be tagged `@PROJ-NNN` + at least one feature-area tag
+- Scenarios must be tagged `@<issue-key>` + at least one feature-area tag
 - Happy path + at least one negative/edge scenario per AC
 - "Scenarios exist" is not DoD evidence — runner output is required
 - QA signs off staging acceptance before production promotion is allowed

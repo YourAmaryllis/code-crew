@@ -129,8 +129,8 @@ Every scenario must have:
 
 | Tag | Required | Example |
 |-----|----------|---------|
-| Jira key | Yes | `@looplat-92` (lowercase, hyphenated) |
-| Domain area | Yes | `@dataset` `@auth` `@portal` `@fhir` |
+| Issue key | Yes | `@<issue-key>` (lowercase, hyphenated) |
+| Domain area | Yes | `@auth` `@billing` `@search` (a short label for the feature area) |
 | Surface | Yes | `@api` or `@ui` |
 | Smoke | Optional | `@smoke` — critical path; always run in CI |
 | Isolated | Optional | `@isolated` — stateless; can run in any order |
@@ -140,18 +140,18 @@ Every scenario must have:
 ## Running Tests
 
 ```bash
-# All scenarios for a Jira ticket
+# All scenarios for an issue key
 cd integration && go test ./... -tags integration -run TestSuite \
-  -- --godog.tags="@looplat-92"
+  -- --godog.tags="@<issue-key>"
 
 # Smoke tests only (CI critical path)
 go test ./... -tags integration -run TestSuite -- --godog.tags="@smoke"
 
 # API integration tests for a domain
-go test ./... -tags integration -run TestSuite -- --godog.tags="@dataset and @api"
+go test ./... -tags integration -run TestSuite -- --godog.tags="@<domain> and @api"
 
 # UI E2E (requires browser driver running)
-go test ./... -tags e2e -run TestSuite -- --godog.tags="@looplat-92 and @ui"
+go test ./... -tags e2e -run TestSuite -- --godog.tags="@<issue-key> and @ui"
 ```
 
 **Required environment variables:**

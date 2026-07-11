@@ -6,7 +6,7 @@ Executed sequentially per sprint story. Each task feeds context to the next.
 
 **Read the ticket before loading anything.**
 
-Before calling `knowledge_reader` or `workspace_reader`, read the Jira ticket and answer:
+Before calling `knowledge_reader` or `workspace_reader`, read the issue tracker ticket and answer:
 1. Which layer is affected? (backend only / frontend only / both)
 2. Which stack(s) are involved? (Go, TypeScript/React, Python, Terraform — match to what the ticket actually touches)
 3. Which specific ADD/ADR is relevant? (the one governing the component being changed — not all of them)

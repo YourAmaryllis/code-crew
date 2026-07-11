@@ -159,7 +159,7 @@ Before presenting to the Release Manager:
 For P0/P1 production bugs:
 
 1. Release Engineer declares hotfix — no full sprint cycle
-2. Engineer branches `hotfix/PROJ-NNN-slug` from `main`
+2. Engineer branches `hotfix/<issue-key>-slug` from `main`
 3. Expedited code review (Architect still reviews — no gate skipping)
 4. After merge to `main`, Release Engineer promotes directly: `dev → prod`
    - Staging acceptance can be skipped for P0 with Release Manager approval

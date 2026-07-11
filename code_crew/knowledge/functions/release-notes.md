@@ -32,23 +32,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.6.0] — 2026-06-21
+## [0.6.0] — YYYY-MM-DD
 
 ### Added
-- Data dictionary upload is now mandatory for dataset registration (PROJ-NNN)
-- New validation endpoint `POST /datasets/validate-dictionary` for pre-upload checks
+- <new feature visible to users> (<issue-key>)
+- New validation endpoint `POST /<resource>/validate` for pre-upload checks
 
 ### Changed
-- Registration step 2 now enforces data dictionary before allowing Step 3 (PROJ-NNN)
-- File upload size limit increased from 5 MB to 10 MB (PROJ-NNN)
+- <behavioral change> (<issue-key>)
+- File upload size limit increased from X MB to Y MB (<issue-key>)
 
 ### Fixed
-- Data dictionary upload state was not cleared on wizard cancel (PROJ-NNN)
+- <bug fix description> (<issue-key>)
 
 ### Security
-- Added XSS prevention for filename display in error review log (PROJ-NNN)
+- <security fix description> (<issue-key>)
 
-## [0.5.3] — 2026-05-14
+## [0.5.3] — YYYY-MM-DD
 ...
 ```
 
@@ -67,13 +67,13 @@ Sections (use only those with entries):
 Each story contributes one or more changelog lines. Format:
 
 ```
-<Section>: <plain English description of the user-visible change> (<JIRA-KEY>)
+<Section>: <plain English description of the user-visible change> (<issue-key>)
 ```
 
 Rules:
 - Write what changed from the user's perspective, not what code changed
 - One line per user-visible change (a story may have multiple)
-- Include the Jira key in parentheses
+- Include the issue key in parentheses
 - Past tense: "Added...", "Fixed...", "Changed..."
 - No technical jargon in the Added/Changed/Fixed/Security lines unless unavoidable
 - If a story has no user-visible change (e.g. internal refactor), it goes in Changed with "Internal: ..."
@@ -81,13 +81,13 @@ Rules:
 Examples:
 ```markdown
 ### Added
-- Sellers must now upload a data dictionary before completing dataset registration (PROJ-NNN)
+- Users must now complete <validation step> before proceeding to the next step (<issue-key>)
 
 ### Fixed  
-- Upload area now correctly resets when a rejected file is removed (PROJ-NNN)
+- <Upload/form area> now correctly resets when an invalid input is removed (<issue-key>)
 
 ### Security
-- File name display in the Error Review Log now escapes HTML to prevent XSS (PROJ-NNN)
+- <Field> display now escapes HTML to prevent XSS (<issue-key>)
 ```
 
 ---
@@ -97,19 +97,17 @@ Examples:
 GitHub Release is the customer-facing document. Written for the Release Manager to review:
 
 ```markdown
-## Release 0.6.0 — Data Dictionary Enforcement
+## Release 0.6.0 — <Feature Name>
 
-This release makes the data dictionary upload mandatory in the dataset registration wizard.
-Sellers cannot proceed to Step 3 without a valid data dictionary file.
+This release <one-sentence description of the user-visible impact>.
 
 ### What's New
-- **Mandatory data dictionary**: Dataset registration now requires a data dictionary
-  upload in Step 2. Files must be CSV or Excel format, up to 10 MB.
-- **Clearer error messages**: The wizard now shows specific guidance when a file is
-  rejected, including the exact validation failure reason.
+- **<Feature>**: <What the user can now do or is now required to do>.
+- **Clearer error messages**: The <UI area> now shows specific guidance when <condition>,
+  including <detail>.
 
 ### Bug Fixes
-- Fixed: Upload area did not reset correctly after removing a rejected file.
+- Fixed: <UI component> did not reset correctly after <user action>.
 
 ### Security
 - Fixed potential XSS in the file name display in the Error Review Log.
@@ -145,8 +143,7 @@ Hotfix releases get abbreviated notes:
 ## [0.5.1] — 2026-06-21
 
 ### Fixed
-- Critical: Data dictionary bypass allowed sellers to skip mandatory upload when
-  navigating back to Step 2 after completing Step 3 (PROJ-NNN)
+- Critical: <Security bypass description> (<issue-key>)
 ```
 
 GitHub Release title: `Hotfix 0.5.1 — <one-line description>`

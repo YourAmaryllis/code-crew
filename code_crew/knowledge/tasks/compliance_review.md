@@ -33,9 +33,9 @@ Use `knowledge_reader` to identify active stacks. Load each active framework's c
 | `nist` | `nist` |
 
 Also load:
-- Feature ADD (from Jira ticket references) for data flow context
+- Feature ADD (from issue tracker ticket references) for data flow context
 - Any CRD from `designs/CRD/` relevant to this feature area
-- `jira_view` to understand what data the feature handles and its regulatory scope
+- The issue tracker ticket (use the issue tracker tool) to understand what data the feature handles and its regulatory scope
 
 If no regulatory stacks are active: output **COMPLIANT — no regulatory frameworks configured**.
 

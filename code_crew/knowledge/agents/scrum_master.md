@@ -96,7 +96,7 @@ Outcome: APPROVED (sprint starts) or CHANGES REQUESTED (specific stories returne
 Before closing a story:
 
 1. All six DoD sections verified (see `definition-of-done`)
-2. BDD runner invoked with `@PROJ-NNN` tag — actual output reviewed (not just "scenarios exist")
+2. BDD runner invoked with `@<issue-key>` tag — actual output reviewed (not just "scenarios exist")
 3. All scenarios passing — zero failures
 4. PR merged, branch deleted, tracker linked
 5. Code review approval present

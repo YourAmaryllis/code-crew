@@ -28,18 +28,18 @@ INFO [ARCH]: Component identified — <name> (<directory>)
 
 **Step 2 — Layer dependency check (2 file reads).**
 
-Read `portal/backend/internal/api/handlers.go`. If not found, use `list_directory
-portal/backend/internal/api/` and read the first `.go` handler file.
+From `.code-crew/structure.md` `## Code structure`, identify:
+- The HTTP handler or controller file for the primary service (the file that receives requests and delegates to a service layer)
+- The service or domain logic file for that same service (the file that implements business logic)
 
-Then read `portal/backend/internal/services/dataset.go`. If not found, use `list_directory
-portal/backend/internal/services/` and read the first `.go` service file.
+If structure.md does not name specific files, use `code_index search "handler controller request response"` to find the handler file, and `code_index search "service domain business logic"` to find the service file. Read the first relevant file from each search.
 
 Check:
-- Does the handler import from services/ (not the reverse)?
-- Is the handler doing routing + service calls (not raw business logic)?
+- Does the handler import from the service layer (not the reverse)?
+- Is the handler doing routing + service delegation (not raw business logic)?
 
 Output exactly one line:
-- Correct layering: `PASS [ARCH]: Layer dependency rules met — portal handler calls service, no reverse import`
+- Correct layering: `PASS [ARCH]: Layer dependency rules met — handler delegates to service layer, no reverse import`
 - Violation: `FINDING [ARCH]: Layer violation — <detail> — <file>`
 - Files not found: `INFO [ARCH]: Layer dependency check — files not found, skipped`
 

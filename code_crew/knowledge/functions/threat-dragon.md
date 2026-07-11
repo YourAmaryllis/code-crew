@@ -402,7 +402,7 @@ IriusRisk maps OTM `categories` to its threat library. STRIDE and PLOT4ai catego
 
 Follow the OWASP Threat Modeling Process (https://owasp.org/www-community/Threat_Modeling_Process): decompose → identify threats → determine countermeasures → rank by risk.
 
-1. Load `jira_view` to understand the feature scope
+1. Load the issue tracker ticket (use the issue tracker tool) to understand the feature scope
 2. Check `designs/TMD/` for an existing model for the affected service (`workspace_reader`)
 3. Determine which frameworks apply (see "Choosing a Framework" table above):
    - **STRIDE**: always, for all API/service/data-store/boundary components

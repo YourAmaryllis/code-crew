@@ -1,6 +1,6 @@
 ---
 name: SDLC-Engineer-DevelopmentWorkflow
-description: Daily development workflow, environment setup, GPG signing, secrets handling, AI pair programming with GSD, and workstation hygiene
+description: Daily development workflow, environment setup, GPG signing, secrets handling, and workstation hygiene
 metadata:
   type: process
   role: engineer
@@ -15,11 +15,11 @@ metadata:
 
 Before writing any code, complete provisioning with DevOps Lead:
 
-1. **GitHub access** scoped to the repositories you need — no blanket org access
-2. **GPG key** generated, registered in GitHub, and configured for signed commits
-3. **AWS access** via IAM role (no long-lived access keys; use SSO or instance profile)
-4. **Secrets access** — relevant AWS Secrets Manager paths only
-5. **MFA enabled** on GitHub, AWS, and all SaaS tools
+1. **VCS access** scoped to the repositories you need — no blanket org access
+2. **GPG key** generated, registered in the VCS provider, and configured for signed commits
+3. **Cloud access** via IAM role (no long-lived access keys; use SSO or instance profile)
+4. **Secrets access** — relevant secret store paths only
+5. **MFA enabled** on VCS, cloud, and all SaaS tools
 6. **Workstation compliance** — full-disk encryption, auto-lock (5 min), OS patches current
 7. **Pre-commit hooks** installed (see below)
 
@@ -42,7 +42,7 @@ gpg --list-secret-keys --keyid-format LONG
 git config --global user.signingkey <KEY-ID>
 git config --global commit.gpgsign true
 
-# Export public key → add to GitHub
+# Export public key → add to VCS provider
 gpg --armor --export <KEY-ID>
 ```
 
@@ -50,18 +50,13 @@ gpg --armor --export <KEY-ID>
 
 ## Pre-Commit Hooks
 
-Install via `pre-commit`:
+Install using the project's hook manager (see `.code-crew/structure.md` for the tool and config file):
 
-```bash
-pip install pre-commit
-pre-commit install
-```
-
-Hooks enforced:
-- Secret scanning (detect-secrets)
-- Go lint (`golangci-lint`)
-- TypeScript type check (`tsc --noEmit`)
-- Terraform format (`terraform fmt`)
+Hooks typically enforced:
+- Secret scanning
+- Language linting (exact tool is in the active stack document)
+- Type checking (for statically typed languages)
+- Infrastructure format checks
 - Markdown lint
 
 Hooks run on every `git commit`. CI also runs them — don't bypass with `--no-verify`.
@@ -71,22 +66,21 @@ Hooks run on every `git commit`. CI also runs them — don't bypass with `--no-v
 ## Daily Workflow
 
 ```
-1. Pull latest from main
-   git pull --rebase origin main
+1. Pull latest from the default branch
+   git pull --rebase origin <default-branch>
 
 2. Rebase feature branch
-   git rebase origin/main
+   git rebase origin/<default-branch>
 
 3. Write tests first (BDD scenario or unit test)
 
 4. Implement feature/fix
 
 5. Run tests locally
-   go test ./...  (backend)
-   npm test       (portal)
+   Use commands.test from .code-crew/structure.md
 
 6. Commit with required format:
-   feat(auth-svc): add email verification [REQ:TR-2026-042] PROJ-92
+   feat(<scope>): <description> [REQ:<REQ-ID>] <issue-key>
 
 7. Push + open/update PR
 ```
@@ -96,41 +90,32 @@ Hooks run on every `git commit`. CI also runs them — don't bypass with `--no-v
 ## Branch Naming
 
 ```
-feature/PROJ-NNN-short-slug
-fix/PROJ-NNN-slug
-chore/PROJ-NNN-slug
+feature/<issue-key>-short-slug
+fix/<issue-key>-slug
+chore/<issue-key>-slug
 ```
 
-See: [branching-strategy.md`](branching-strategy.md) for full rules.
+See [`branching-strategy.md`](branching-strategy.md) for full rules.
 
 ---
 
-## AI Pair Programming (Claude Code / Cursor)
+## AI Pair Programming
 
-GSD orchestrates AI pair programming for implementation phases 14–19.
-
-**How to use:**
-```bash
-# In the platform monorepo root
-/gsd:execute   # AI executes the current phase task
-/gsd:quick     # Proportional mode for small changes (skip heavy phases)
-```
-
-GSD reads `.planning/` artifacts (DEFINITION-OF-DONE.md, codebase context, sprint goal) and injects them into the agent context.
+AI coding agents assist with implementation. Use the crew's REPL to run implementation phases.
 
 **AI pair programming rules:**
 - Human reviews all AI-generated code before committing
 - Security-sensitive logic (auth, crypto, data handling) requires explicit human review — don't merge AI output without reading it
 - Architect reviews AI-generated architecture suggestions before adopting
 - No AI-generated secrets or credentials — ever
-- AI-generated Terraform is reviewed via `terraform plan` before apply
+- AI-generated infrastructure is reviewed via a plan/preview command before apply
 
 ---
 
 ## Secrets Handling
 
-- Secrets live in **AWS Secrets Manager** or **AWS SSM Parameter Store**
-- Local development: use `aws sso login` + SDK credential chain (never hardcode)
+- Secrets live in the project's secret store (see `environment-management` function for the configured provider)
+- Local development: use credential chain from the cloud provider CLI (never hardcode)
 - `.env` files: config only (URLs, feature flags, non-sensitive defaults) — never real secrets
 - `.env` files are in `.gitignore` — pre-commit hook catches accidental commits
 - If you discover a secret in the codebase: rotate it immediately, then clean the git history
@@ -139,9 +124,9 @@ GSD reads `.planning/` artifacts (DEFINITION-OF-DONE.md, codebase context, sprin
 
 ## Isolated Local Execution
 
-- Use Docker or local virtual environments to avoid dependency pollution
+- Use containers or local virtual environments to avoid dependency pollution
 - AI coding agents run in the repo directory — never give them write access outside the repo
-- Terraform operations run from `infra/` only — no applying outside the standard workflow
+- Infrastructure operations run from the designated infra directory only — no applying outside the standard workflow
 
 ---
 
@@ -156,4 +141,3 @@ GSD reads `.planning/` artifacts (DEFINITION-OF-DONE.md, codebase context, sprin
 | VPN | Required for any on-premises resource access |
 
 Report lost or compromised devices to the Security Lead immediately.
-

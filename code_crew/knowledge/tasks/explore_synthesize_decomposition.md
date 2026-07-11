@@ -36,29 +36,29 @@ If a `## External services` section is present, add each as an external node wit
 
 Example output (replace with the actual units from the summaries):
 
-REAL_SERVICE: portal | deployable-service with ENTRY_POINTS: cmd/server
-NOT_SERVICE: shared | library
-DECOMPOSE: attestation → server, worker | has cmd/server and cmd/worker entry points
+REAL_SERVICE: <service-a> | deployable-service with ENTRY_POINTS: cmd/server
+NOT_SERVICE: <shared-lib> | library
+DECOMPOSE: <service-b> → server, worker | has cmd/server and cmd/worker entry points
 
-PROJECT: portal
-DESCRIPTION: React + Go web portal serving end-users. Assesses authentication, session handling, and API exposure.
-COMPONENTS: portal
+PROJECT: <service-a>
+DESCRIPTION: Web portal serving end-users. Assesses authentication, session handling, and API exposure.
+COMPONENTS: <service-a>
 
-PROJECT: attestation-server
-DESCRIPTION: Long-running HTTP server for the attestation service. Assesses API endpoints and data validation.
-COMPONENTS: attestation/cmd/server
+PROJECT: <service-b>-server
+DESCRIPTION: Long-running HTTP server. Assesses API endpoints and data validation.
+COMPONENTS: <service-b>/cmd/server
 
-PROJECT: attestation-worker
-DESCRIPTION: Queue-driven worker for the attestation service. Assesses job processing and external integrations.
-COMPONENTS: attestation/cmd/worker
+PROJECT: <service-b>-worker
+DESCRIPTION: Queue-driven worker. Assesses job processing and external integrations.
+COMPONENTS: <service-b>/cmd/worker
 
 graph TD
-    portal["Portal\n(deployable-service)"]
-    attestation["Attestation\n(deployable-service)"]
-    attestation --> attestation-server["Attestation Server\n(server)"]
-    attestation --> attestation-worker["Attestation Worker\n(worker)"]
-    auth0["Auth0\n(external)"]:::external
-    portal --> auth0
+    service-a["<service-a>\n(deployable-service)"]
+    service-b["<service-b>\n(deployable-service)"]
+    service-b --> service-b-server["<service-b> Server\n(server)"]
+    service-b --> service-b-worker["<service-b> Worker\n(worker)"]
+    ext-idp["<identity-provider>\n(external)"]:::external
+    service-a --> ext-idp
     classDef external fill:#f5f5f5,stroke:#999,stroke-dasharray:4 4
 
 DECOMPOSITION COMPLETE

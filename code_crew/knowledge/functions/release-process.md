@@ -55,7 +55,7 @@ PLAYWRIGHT_BASE_URL=https://staging.your-org.com \
   npx playwright test --grep @smoke
 ```
 
-Sign-off comment on the release Jira ticket:
+Sign-off comment on the release ticket (in the issue tracker):
 ```
 Staging acceptance: ✅ PASSED
 Smoke tests: [GitHub Actions run URL]
@@ -156,7 +156,7 @@ Stored in SSM Parameter Store and/or deployment log S3 bucket for audit purposes
 
 For critical production bugs:
 
-1. Branch from `main`: `hotfix/PROJ-NNN-slug`
+1. Branch from `main`: `hotfix/<issue-key>-slug`
 2. Fix + tests
 3. PR to `main` — expedited review (no phase skipping, same DoD)
 4. After merge, promote directly: dev → prod (skipping normal staging acceptance if P0)

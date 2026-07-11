@@ -68,14 +68,14 @@ DEVOPS COMPLETE
 Changes applied to dev environment:
 
 Terraform changes:
-- Added `DB_SECONDARY_URL` env var to portal ECS task definition
-- Granted `s3:GetObject` on `dev-platform-datasets/*` to portal task IAM role
+- Added `DB_SECONDARY_URL` env var to <service> ECS task definition
+- Granted `s3:GetObject` on `<dev-bucket>/*` to <service> task IAM role
 
 Secrets Manager:
-- Created `/platform/dev/portal/secondary-db-password`
+- Created `/<project>/dev/<service>/secondary-db-password`
 
 SSM Parameters:
-- Created `/platform/dev/portal/feature-flag-new-validation`
+- Created `/<project>/dev/<service>/feature-flag-new-validation`
 
 GitHub Actions:
 - Added `setup-secondary-db` step to `ci.yml` for integration test env

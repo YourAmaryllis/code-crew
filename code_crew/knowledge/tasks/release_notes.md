@@ -20,7 +20,7 @@ Write the release note contribution for the story that just passed DoD.
 - `release-notes` — changelog format and per-story contribution rules
 - `versioning` — version bump decision tree and migration guide conventions
 
-**Step 2 — Read the Jira story** (`jira_view`).
+**Step 2 — Read the issue tracker story** (use the issue tracker tool).
 Understand what changed from the user's perspective. Read description, ACs, and any
 linked requirements. You are writing for customers, not engineers.
 
@@ -28,7 +28,7 @@ linked requirements. You are writing for customers, not engineers.
 ```bash
 git log --oneline <last-tag>..HEAD  # or --since="<last release date>"
 ```
-Filter for commits related to this Jira key. Note any DB migration files, API contract
+Filter for commits related to this issue key. Note any DB migration files, API contract
 changes, or dependency updates — these affect the version bump decision.
 
 **Step 4 — Read current CHANGELOG.md** (`workspace_reader`).
@@ -49,13 +49,13 @@ Add one or more lines under the correct section(s) in the `[Unreleased]` block:
 
 ```markdown
 ### Added
-- <user-visible description> (<JIRA-KEY>)
+- <user-visible description> (<issue-key>)
 
 ### Fixed
-- <user-visible fix description> (<JIRA-KEY>)
+- <user-visible fix description> (<issue-key>)
 
 ### Security
-- <security improvement> (<JIRA-KEY>)
+- <security improvement> (<issue-key>)
 ```
 
 Write the entry to CHANGELOG.md using `platform_shell`.

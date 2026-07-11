@@ -1,7 +1,7 @@
 ---
 type: CrewAI Task
 title: Security Review
-description: Technical security review — OWASP (baseline or ASVS L2), FIPS 140-3 crypto, OTM threat model update, IAM, SBOM, and platform constraint check
+description: Technical security review — OWASP (baseline or ASVS L2), crypto (FIPS 140-3 if active), OTM threat model update, IAM, and SBOM
 tags: [security, owasp, fips, otm, threat-model, sbom, iam, phase-19]
 timestamp: 2026-06-17T00:00:00Z
 agent: security_lead
@@ -10,84 +10,72 @@ context_agents:
 expected_output: >
   A Security Review Report with: OWASP verdict per category (PASS/FAIL with evidence),
   OWASP LLM Top 10 verdict if ai-ml stack is active, FIPS crypto verdict if active,
-  OTM threat model update summary (STRIDE threats always; PLOT4ai threats if AI/ML components
-  present; LINDDUN threats if personal data in scope), platform constraint check, SBOM of new
-  dependencies, IAM findings, and a final gate (APPROVED / BLOCKED with full blocker list).
+  OTM threat model update summary (STRIDE always; PLOT4ai if AI/ML present; LINDDUN if
+  personal data in scope), platform constraint check, SBOM of new dependencies, IAM
+  findings, and a final gate (APPROVED / BLOCKED with full blocker list).
   Regulatory compliance is reported separately by the compliance officer.
 ---
 
 Review the implementation for technical security vulnerabilities and update the threat model.
 
-**Step 1 — Load security context**
-
+**Step 1 — Load security context.**
 Use `knowledge_reader` to load:
 - `threat-dragon` — OTM YAML format, framework selection guide, and maintenance steps
-- `owasp` if the `owasp` stack is active
+- `owasp` if the `owasp` stack is active — provides the full ASVS L2 checklist and search patterns to use
 - `fips-140-3` if the `fips-140-3` stack is active
 - `ai-ml` if the `ai-ml` stack is active — adds OWASP LLM Top 10 checklist and PLOT4ai requirements
-- The feature ADD (from Jira ticket ADD references) — understand new data flows and their stacks
-- Any ADDs listed in the feature ADD's `references` frontmatter field that are relevant to the security surface
+- The feature ADD (from the issue tracker ticket's ADD references) — understand new data flows and stacks
+- Any ADDs listed in the feature ADD's `references` field that are relevant to the security surface
 
-Use `jira_view` to load the ticket and understand what changed.
+Load the issue tracker ticket to understand what changed (use the issue tracker tool configured via `CODE_CREW_ISSUE_TRACKER`).
 
-**Step 2 — OWASP check**
-
+**Step 2 — OWASP check.**
 Use `search_ast` and `code_index` for each category — do not read whole files to find patterns.
 
-If `owasp` stack is active: apply the full ASVS L2 checklist from the loaded `owasp` document.
+If `owasp` stack is active: apply the full ASVS L2 checklist from the loaded `owasp` document, using the search patterns it specifies.
 
-Baseline (always): for each category below, run the suggested tool call and state PASS or FAIL with specific evidence (file:line from tool output):
+Baseline (always): for each category, run the search patterns from the `owasp` stack document (or the generic patterns below if owasp stack is not active) and state PASS or FAIL with specific evidence (file:line from tool output):
 
-1. **Injection** — `code_index search "raw SQL string concatenation query fmt.Sprintf"` + `search_ast pattern='fmt.Sprintf($FMT, $$$)' language="go"` for format-string SQL
-2. **Broken Authentication** — `code_index search "auth middleware JWT token validation"` + `search_ast pattern="jwt.Parse($TOKEN, $$$)" language="go"`
-3. **Sensitive Data Exposure** — `code_index search "PHI PII log response leak sensitive data"`; `search_ast pattern='log.Printf($FMT, $$$)' language="go"` to spot log calls near auth handlers
-4. **XML/XXE** — `code_index search "XML parse DTD external entity processing"`
-5. **Broken Access Control** — `code_index search "ownership check IDOR role permission write"`
-6. **Security Misconfiguration** — `code_index search "DEBUG CORS AllowAll wildcard insecure config"`
-7. **Vulnerable Components** — read the dependency manifest (`go.mod`, `package.json`) — this is the one file read that is always justified
-8. **Insecure Deserialization** — `code_index search "pickle eval exec deserialise untrusted input"`
-9. **Insufficient Logging** — `code_index search "auth failure access denied audit log security event"`
-10. **SSRF** — `code_index search "HTTP client external URL fetch outbound request"`
+1. **Injection** — search for raw SQL string concatenation; format-string SQL construction
+2. **Broken Authentication** — search for auth middleware, token validation
+3. **Sensitive Data Exposure** — search for PHI/PII in log output, sensitive data in response bodies
+4. **XML/XXE** — search for XML parsing with DTD or external entity processing
+5. **Broken Access Control** — search for ownership checks, IDOR patterns, role/permission gates
+6. **Security Misconfiguration** — search for DEBUG flags, CORS wildcards, insecure config defaults
+7. **Vulnerable Components** — read the dependency manifest (filename is in the active stack document)
+8. **Insecure Deserialization** — search for deserialization of untrusted input
+9. **Insufficient Logging** — search for security events: auth failures, access denied, data writes
+10. **SSRF** — search for outbound HTTP calls with caller-controlled URLs
 
-**Step 3 — Cryptography check**
+**Step 3 — Cryptography check.**
+If `fips-140-3` active: apply its full checklist from the loaded document.
 
-If `fips-140-3` active: apply the full FIPS checklist from the loaded `fips-140-3` document.
+Always check for weak algorithms, insecure RNG, TLS configuration, and hardcoded credentials (use the search patterns from the `fips-140-3` stack document or the `security-privacy` function).
 
-Always check:
-- `code_index search "MD5 SHA1 DES RC4 weak hash"` — weak algorithms
-- `code_index search "crypto random token key generation"` — insecure RNG
-- `search_ast pattern="tls.Config{$$$}" language="go"` — confirm TLS 1.2+ config present
-- `code_index search "hardcoded secret password key credential"` — secrets in code
-
-**Step 4 — OTM threat model update**
-
-Follow the `threat-dragon` guide (see "Choosing a Framework" and "Security Lead Review Steps"):
-1. Check `designs/TMD/` for an existing OTM YAML model for the affected service
-2. Determine frameworks: always STRIDE; add PLOT4ai if `ai-ml` stack active or AI/ML components introduced; add LINDDUN if personal data in scope and GDPR/CCPA active
-3. Update or create: add threats for new surface area; update mitigation `status` for resolved items
-4. Write the updated/new file to `designs/TMD/<service>.yaml` via `platform_shell`
+**Step 4 — OTM threat model update.**
+Follow the `threat-dragon` guide ("Choosing a Framework" and "Security Lead Review Steps"):
+1. Check the TMD directory for an existing OTM YAML model for the affected service
+2. Determine frameworks: always STRIDE; add PLOT4ai if `ai-ml` stack active; add LINDDUN if personal data in scope
+3. Update or create: add threats for new surface area; update mitigation `state` for resolved items
+4. Write the updated file to the TMD directory via `platform_shell`
 
 Output the threat model summary (file updated/created, frameworks used, open threats by severity).
 
-**Step 5 — Platform constraint check**
+**Step 5 — Platform constraint check.**
+For each ADD referenced by this story, load any constraint documents from its `references` field and verify the implementation does not violate data handling rules, custody boundaries, or access policies.
 
-For each ADD referenced by this story, check its `references` frontmatter field for constraint documents. Load them via `knowledge_reader` or `workspace_reader` and verify the implementation does not violate their constraints (data handling rules, custody boundaries, access policies, etc.).
+**Step 6 — IAM check.**
+List new IAM policies or permission grants. Flag wildcard actions or resources without justification.
 
-**Step 6 — IAM check**
-
-List new IAM policies or permission grants. Flag `*` actions/resources without justification.
-
-**Step 7 — SBOM**
-
+**Step 7 — SBOM.**
 List every new dependency:
 
 | Package | Version | License | Risk |
 |---------|---------|---------|------|
 
-Flag non-commercially-permissive licenses. Flag any dependency with a known CVE.
+Flag non-commercially-permissive licenses and any dependency with a known CVE.
 
-**On tool failure** — log the error, try once with an alternative, then skip and continue. Never use absolute paths in shell commands. If a scan step cannot run, note it as `INFO: <step> skipped — <reason>` and proceed.
+**On tool failure** — log the error, try once with an alternative, skip and continue. Note skipped steps as `INFO: <step> skipped — <reason>`.
 
-**Final gate**: APPROVED (no Critical/High findings) or BLOCKED (list each: severity, file/line, finding, fix).
-
+**Final gate**: APPROVED (no Critical/High findings) or BLOCKED (list each: severity, file:line, finding, fix).
 If tools unavailable: `INCOMPLETE: <reason>`.

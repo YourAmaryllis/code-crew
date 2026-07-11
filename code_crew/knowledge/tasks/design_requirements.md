@@ -17,7 +17,7 @@ Analyse the requirement and scope the design work.
 
 **Step 1 — Read the requirement.**
 
-Load the issue ticket with `jira_view`. Understand:
+Load the issue tracker ticket (use the issue tracker tool). Understand:
 - What change is being requested?
 - Who are the actors and what data is involved?
 - What are the acceptance criteria?

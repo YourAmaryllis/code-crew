@@ -58,7 +58,7 @@ platform/
         handler/        # HTTP/gRPC/Lambda handlers
       pkg/              # Shared public packages
   infra/                # Terraform modules
-  .planning/            # GSD execution context
+  .code-crew/           # AI crew execution context
   designs/              # Git submodule → designs repo
 ```
 

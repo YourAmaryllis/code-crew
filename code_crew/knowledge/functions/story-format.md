@@ -61,10 +61,10 @@ Each requirement has a unique ID that flows through all artifacts:
 BR-YYYY-NNN   Business Requirement
 CR-YYYY-NNN   Compliance Requirement
 TR-YYYY-NNN   Technical Requirement
-US-YYYY-NNN   User Story (Jira key used in code)
+US-YYYY-NNN   User Story (issue key used in code)
 ```
 
-Traceability chain: `BR-2026-001 → TR-2026-042 → PROJ-92 → code commit`
+Traceability chain: `BR-2026-001 → TR-2026-042 → <issue-key> → code commit`
 
 The commit message references `[REQ:TR-2026-042]` to maintain this chain.
 
@@ -101,22 +101,21 @@ Estimation is done by the team in backlog refinement. Tech Lead provides feasibi
 
 ---
 
-## Jira Conventions
+## Issue Tracker Conventions
 
 | Field | Convention |
 |-------|-----------|
 | Issue type | Story, Bug, Chore, Spike |
-| Summary | `[PROJ-NNN] Short imperative description` |
-| Labels | Feature area (e.g. `auth`, `portal`, `billing`) |
+| Summary | `[<issue-key>] Short imperative description` |
+| Labels | Feature area (e.g. `auth`, `billing`, `search`) |
 | Epic | Every story linked to an epic |
 | Sprint | Assigned during sprint planning |
 | Story Points | Required before sprint commitment |
 | Design ref | ADD/ADR number or Figma URL in description |
 
-**Jira ↔ GitHub linking:**
-- Smart commit: `PROJ-92 #comment BDD test passing` auto-links the commit
-- PR title must include the Jira key
-- Use Jira's GitHub integration development panel to show branch and PR status
+**Issue tracker ↔ VCS linking:**
+- PR title and branch name must include the issue key
+- See the `github-conventions` function and the active issue tracker stack document for exact linking format
 
 ---
 

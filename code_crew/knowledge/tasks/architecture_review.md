@@ -14,53 +14,35 @@ expected_output: >
   or CHIEF_ARCHITECT_CONSULTATION_REQUIRED).
 ---
 
-Review the user story and proposed implementation approach (from the sprint input) for
-architectural alignment, update the relevant documents, and produce a gate decision.
+Review the user story and proposed implementation approach for architectural alignment, update the relevant documents, and produce a gate decision.
 
-**Step 1 — Load relevant knowledge**
+**Step 1 — Load relevant knowledge.**
+Load the issue tracker ticket (use the issue tracker tool) to identify the technical surface area (e.g. "backend validation", "frontend form", "DB schema", "IAM policy"). Then:
+- Load the ADR and ADD **index** documents — read titles only to find which records apply; do not load every document
+- Load only the specific ADR/ADD documents that govern the component(s) this story touches
+- For each loaded ADD: check its `stacks` frontmatter field and load only the named stack document(s) relevant to this story's surface area
 
-First, read the Jira ticket (`jira_view`) and identify the technical surface area (e.g. "backend validation", "frontend form", "DB schema", "IAM policy"). Then:
-
-- Load the `ADR` and `ADD` **index** documents — read titles only to find which records apply. Do not load every document.
-- Load only the specific ADR/ADD documents that govern the component(s) this story touches.
-- For each loaded ADD: check its `stacks` frontmatter field and load only the named stack document(s) that are relevant to this story's surface area. A backend-only change does not need frontend stack docs; a validation-only change does not need Terraform or ECS stack docs.
-
-**Step 2 — Assess alignment**
-
+**Step 2 — Assess alignment.**
 For each relevant ADR and ADD, state whether the proposed approach is:
-
 - **ALIGNED**: implementation follows the decision as documented
-- **DEVIATION**: implementation diverges — describe exactly how, and whether it is
-  justified. If justified, a doc update or new ADR must be filed.
-- **NEW-DECISION-NEEDED**: the story introduces a cross-cutting technical choice that
-  has not been documented — proceed to Step 3 before deciding.
+- **DEVIATION**: implementation diverges — describe how, and whether justified. If justified, a doc update or new ADR must be filed.
+- **NEW-DECISION-NEEDED**: the story introduces a cross-cutting technical choice not yet documented — proceed to Step 3 before deciding
 
-**Step 3 — Resolve NEW-DECISION-NEEDED items**
-
+**Step 3 — Resolve NEW-DECISION-NEEDED items.**
 For each NEW-DECISION-NEEDED item:
+1. Search ADR/ and ADD/ for any existing document covering a similar decision
+   - If similar document exists: reference it; determine if aligned or a deliberate deviation; note required doc update
+   - If no similar document exists (genuinely novel): **do not decide alone** — escalate to Chief Architect via Step 5
 
-1. Search `ADR/` and `ADD/` for any existing document that covers a similar decision.
-   - If a similar document exists: reference it. Is the current choice aligned, or a
-     deliberate deviation? Mark accordingly and note what doc update (if any) is needed.
-   - If no similar document exists (genuinely novel decision): **do not decide alone**.
-     Escalate to the Chief Architect via Step 5.
-
-**Step 4 — Update documentation**
-
+**Step 4 — Update documentation.**
 Before issuing APPROVED TO PROCEED:
+- For justified DEVIATIONs: write or update the ADR (Status: Accepted)
+- For resolved NEW-DECISION-NEEDED items with existing precedent: note the reference in the issue tracker; no new doc unless approach diverges
+- If the decision changes component structure, data flow, or security posture: update the relevant SAD section
+- If implementation detail changed for an existing component: update the corresponding ADD
 
-- For any DEVIATION that is justified: write or update the ADR. Mark Status: Accepted.
-- For any NEW-DECISION-NEEDED that was resolved (similar ADR/ADD found): note the
-  reference in a Jira comment; no new doc required unless the approach deviates.
-- If the decision changes component structure, data flow, or security posture:
-  update the relevant SAD section (Decomposition, Network, Data Flow, Deployment, or Security View).
-- If implementation detail changed for an existing component: update the corresponding ADD.
-
-**Step 5 — Chief Architect consultation (genuinely novel decisions only)**
-
-If one or more NEW-DECISION-NEEDED items have no similar ADR/ADD precedent, the Chief
-Architect must weigh in before the flow proceeds. Output the following block — this
-pauses the flow and prompts the Chief Architect for a decision:
+**Step 5 — Chief Architect consultation (genuinely novel decisions only).**
+If any NEW-DECISION-NEEDED item has no similar ADR/ADD precedent, output:
 
 ```
 CHIEF_ARCHITECT_CONSULTATION_REQUIRED
@@ -69,66 +51,28 @@ CHIEF_ARCHITECT_CONSULTATION_REQUIRED
 <One sentence: what cross-cutting decision must be made?>
 
 ## Option 1: <Name>
-**Pros:** <concise pros — 1-3 bullet points or a short sentence>
+**Pros:** <concise pros>
 **Cons:** <concise cons>
 
 ## Option 2: <Name>
 **Pros:** <concise pros>
 **Cons:** <concise cons>
 
-[## Option 3: <Name>  ← include if genuinely distinct third path exists]
-[**Pros:** ...]
-[**Cons:** ...]
-
 ## Architect Recommendation
-<Optionally state which option you recommend and the key reason. Omit if no clear preference.>
+<Optional: which option and key reason>
 ```
 
-When the Chief Architect's response arrives as human feedback:
-- If a numbered option was selected: document the chosen approach in a new ADR
-  (Status: Accepted), update the relevant SAD section, and create or update the ADD
-  for the affected component.
-- If the Chief Architect provided free-text guidance: incorporate it, choose the
-  appropriate option or derive a new approach, and document it as above.
-- Then re-run this review from Step 1 to confirm alignment before producing APPROVED TO PROCEED.
+When the Chief Architect responds: document the chosen approach in a new ADR, update the SAD and ADD, then re-run this review from Step 1 before issuing APPROVED TO PROCEED.
 
-**Step 5b — Update structure.md**
+**Step 5b — Update structure.md.**
+After updating docs, check whether this issue introduces structure not yet in `.code-crew/structure.md` (new component, new test suite, new command, new code layer). Make the smallest correct addition using `platform_shell` — do not rewrite the whole file.
 
-After updating ADRs/ADDs/SADs, check whether this issue introduces structure that is not
-yet reflected in `.code-crew/structure.md`. Only update if something is genuinely new —
-do not modify entries that are still accurate.
-
-What to look for:
-- **New component or service**: add an entry to the `## Components` section
-- **New test suite or testing approach**: add a suite block to `## Test structure`
-- **New build/test/lint command**: add a row to `## Project commands`
-- **New code layer or naming convention**: add or extend an entry in `## Code structure`
-
-How to update:
-1. Read `.code-crew/structure.md` using `workspace_reader`
-2. Identify the exact section that needs updating
-3. Use `platform_shell` to append the new content with a targeted command —
-   for example: `python3 -c "open('.code-crew/structure.md','a').write('\n- **new-svc**: ...\n')"`
-   or a shell heredoc appended to the file
-4. Do NOT rewrite the whole file — make the smallest correct addition
-
-If nothing new is introduced, skip this step entirely.
-
-**Step 6 — Final gate**
-
-Only after all documentation is up to date:
-
+**Step 6 — Final gate.**
 - **APPROVED TO PROCEED**: all surfaces aligned, deviations resolved, docs updated
-- **BLOCKED**: deviation or decision requires doc work that cannot be resolved now —
-  list exactly what is needed and who must act
-
-Do not approve if any HIGH-impact deviation is unresolved or any novel decision is
-undocumented.
+- **BLOCKED**: unresolved deviation or undocumented decision — list exactly what is needed and who must act
 
 **Completion signal — required.**
-End your output with exactly one of:
-- `TASK COMPLETE` — you have produced the full output and the gate decision above.
-- `CHIEF_ARCHITECT_CONSULTATION_REQUIRED` — followed by the structured block from Step 5.
-- `INCOMPLETE: <reason>` — you could not finish. Describe what is blocking you.
-
-Do NOT end with a planning statement or partial summary.
+End with exactly one of:
+- `TASK COMPLETE`
+- `CHIEF_ARCHITECT_CONSULTATION_REQUIRED` followed by the structured block from Step 5
+- `INCOMPLETE: <reason>`

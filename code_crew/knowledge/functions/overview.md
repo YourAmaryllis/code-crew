@@ -58,7 +58,7 @@ See: `code-architecture`, `sad-maintenance`, `security-privacy`, `domain-driven-
 
 ### Implementation (Phases 12–19)
 
-Managed via sprints. Each Jira ticket is a user story.
+Managed via sprints. Each issue tracker ticket is a user story.
 
 | Phase | Activity | Owner | AI Support |
 |-------|----------|-------|------------|
@@ -114,7 +114,7 @@ See: `release-process`, `ci-cd-pipeline`
 
 - **Velocity** — story points completed per sprint
 - **Burndown** — daily progress toward sprint goal
-- **Cycle time** — Jira ticket open → done
+- **Cycle time** — issue ticket open → done
 
 ---
 

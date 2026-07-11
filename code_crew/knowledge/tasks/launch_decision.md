@@ -25,14 +25,14 @@ migration requirements, and known issues. If `MIGRATION REQUIRED` is flagged, ex
 confirm whether it is safe to apply before or after the deploy.
 
 **Step 3 — Check for open blockers.**
-Use `jira_view` to check the ticket. If any sub-task or linked issue is open and
+Use the issue tracker tool to check the ticket. If any sub-task or linked issue is open and
 blocking, flag it. If all blocking issues are resolved, note that.
 
 **Step 4 — Compile the launch recommendation.**
 
 Go format:
 ```
-## Launch Decision for <JIRA-KEY>
+## Launch Decision for <issue-key>
 
 **Verdict**: LAUNCH APPROVED
 
@@ -55,7 +55,7 @@ or the manual `promote-production` pipeline job (GitLab) with the inputs above.
 
 No-go format:
 ```
-## Launch Decision for <JIRA-KEY>
+## Launch Decision for <issue-key>
 
 **Verdict**: LAUNCH BLOCKED
 

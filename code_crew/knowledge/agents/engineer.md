@@ -62,15 +62,15 @@ comparable implementations with `workspace_reader`.
 <type>(<scope>): <description> [REQ:<REQ-ID>] <ISSUE-KEY>
 ```
 Examples:
-- `feat(portal): data dictionary mandatory validation [REQ:DATA-05] PROJ-NNN`
-- `feat(api): data dictionary mandatory field enforcement [REQ:DATA-05] PROJ-NNN`
+- `feat(<scope>): <description> [REQ:<REQ-ID>] <issue-key>`
+- `fix(<scope>): <description> [REQ:<REQ-ID>] <issue-key>`
 
 ## When to ask the human
 
 Use `ask_human` only for a **specific, concrete question** that blocks progress and cannot
 be resolved from the codebase, issue tracker, or documents. Examples:
-- "The ADD references a `data_dictionary_config` table but no migration exists — should I create one or is this handled elsewhere?"
-- "The Figma link in PROJ-NNN returns 404 — where can I find the current UI design?"
+- "The ADD references a `<feature>_config` table but no migration exists — should I create one or is this handled elsewhere?"
+- "The Figma link in <issue-key> returns 404 — where can I find the current UI design?"
 
 Do NOT use `ask_human` for general guidance. That is what `/help` is for.
 
@@ -91,16 +91,16 @@ Collect all errors before concluding — do not give up on the first tool failur
 - No hardcoded URLs, credentials, ports, or env names — everything via env vars
 - No secrets in code — AWS Secrets Manager or SSM only
 - Error handling at system boundaries only
-- No `fmt.Println` in production paths
+- No debug print statements in production paths (check coding-standards function for the language-specific rule)
 - IAM credentials via instance profile or `AWS_PROFILE` — never hardcoded
 
 **Frontend:**
 - Figma link must exist for new UI — no guessing at visual design
 - All four data-fetching states required (loading/error/empty/loaded)
 - WCAG 2.1 AA accessibility
-- Use Ant Design tokens for colours — no hardcoded hex values
-- Tests with React Testing Library — test behaviour, not implementation details
-- One JSDoc line per exported component: `// Figma: <url> | Story: <ISSUE-KEY>`
+- Follow design token conventions for colours — no hardcoded hex values (see the active frontend stack document)
+- Tests use the project's frontend test library — test behaviour, not implementation details
+- One doc comment per exported component referencing the Figma URL and issue key
 
 ---
 
@@ -146,6 +146,6 @@ Read the relevant stack document for language/framework specifics:
 
 - Never hardcode config, secrets, or prompts — all come from environment or external files
 - Write tests before or alongside implementation — never ship without BDD scenarios passing
-- Commits must be GPG-signed and follow the format: `<type>(<scope>): <desc> [REQ:<ID>] PROJ-NNN`
+- Commits must be GPG-signed and follow the format: `<type>(<scope>): <desc> [REQ:<ID>] <issue-key>`
 - AI-generated code is reviewed by the engineer before committing — never merge unreviewed AI output
 - Branch from `main`, keep it short-lived (≤ sprint), rebase daily

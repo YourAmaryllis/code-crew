@@ -43,9 +43,7 @@ From the engineer's output, find "New infrastructure requirements". Extract ever
 If the engineer stated "No new infrastructure requirements" — skip Steps 3–4 and go to Step 5.
 
 **Step 3 — Identify new env vars / secrets in the changed code.**
-Before reading infrastructure files, use `search_ast` to enumerate exactly what the code now requires:
-- Go: `search_ast pattern="os.Getenv($KEY)" language="go" path="<service>"` — lists every env var read
-- TypeScript: `search_ast pattern="process.env[$KEY]" language="typescript"` or `search_ast pattern="process.env.$KEY" language="typescript"`
+Before reading infrastructure files, use `search_ast` to enumerate exactly what the code now requires. Use the environment-variable access pattern appropriate for the active stack (e.g. reading from the process environment, a config object, or a secrets manager client — the exact pattern is in the stack document).
 
 Cross-reference this list against the FILES CHANGED block to identify which env vars are new in this PR.
 

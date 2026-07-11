@@ -1,14 +1,14 @@
 ---
 type: Stack Guide
 title: TypeScript / React Frontend
-description: Conventions, layout, and patterns for the portal frontend
-tags: [typescript, react, antd, vite, portal]
+description: Conventions, layout, and patterns for React/TypeScript frontend services
+tags: [typescript, react, antd, vite]
 ---
 
 ## Module layout
 
 ```
-portal/frontend/
+<app>/
   src/
     components/<Component>/
       index.tsx               — exported component
@@ -44,7 +44,7 @@ Every new component must handle four data-fetching states:
 
 Every exported component has a one-line JSDoc linking Figma and the story:
 ```tsx
-// Figma: https://figma.com/... | Story: PROJ-NNNNNN
+// Figma: https://figma.com/... | Story: <issue-key>
 export const MyComponent: React.FC<Props> = ({ ... }) => { ... }
 ```
 
@@ -73,10 +73,9 @@ export const MyComponent: React.FC<Props> = ({ ... }) => { ... }
 
 ## Commit and branch format
 
-Same as backend:
-- Branch: `feature/<JIRA-KEY>-<slug>`
-- Commit: `<type>(portal): <description> [REQ:<REQ-ID>] <JIRA-KEY>`
-  - Example: `feat(portal): data dictionary mandatory UI validation [REQ:UI-05] PROJ-NNN`
+Same as backend (see `github-conventions` function):
+- Branch: `feature/<issue-key>-<slug>`
+- Commit: `<type>(<scope>): <description> [REQ:<REQ-ID>] <issue-key>`
 
 ## API spec — openapi-typescript client generation
 

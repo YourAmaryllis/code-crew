@@ -103,9 +103,9 @@ Every artifact links back to requirements:
 ```
 BR-2026-001 (BRD)
   └── TR-2026-042 (TRD)
-        └── PROJ-92 (Jira user story)
-              └── feat(auth-svc): add email verification [REQ:TR-2026-042] PROJ-92 (commit)
-                    └── BDD scenario @PROJ-92 (test)
+        └── <issue-key> (issue tracker story)
+              └── feat(auth-svc): add email verification [REQ:TR-2026-042] <issue-key> (commit)
+                    └── BDD scenario @<issue-key> (test)
 ```
 
 The `[REQ:TR-2026-042]` in commit messages enables automated traceability analysis.

@@ -11,7 +11,7 @@ metadata:
 
 Regulatory compliance (SOC 2, GDPR, HIPAA, PCI-DSS, etc.) is specific to each project. This document covers the controls and evidence the dev process provides — not the regulatory requirements themselves.
 
-For requirements specific to your project, maintain a Compliance Requirements Document (CRD) in `designs/CRD/` and reference it from relevant Jira tickets.
+For requirements specific to your project, maintain a Compliance Requirements Document (CRD) in `designs/CRD/` and reference it from relevant issue tracker tickets.
 
 ---
 
@@ -66,10 +66,10 @@ The dev process maintains an unbroken traceability chain from requirement to dep
 
 ```
 Requirement ID (BR/TR/CR)
-  → Jira ticket (PROJ-NNN)
-    → branch name (feature/PROJ-NNN-slug)
-      → signed commit ([REQ:TR-YYYY-NNN] PROJ-NNN)
-        → BDD test (@PROJ-NNN tag)
+  → issue tracker ticket (<issue-key>)
+    → branch name (feature/<issue-key>-slug)
+      → signed commit ([REQ:TR-YYYY-NNN] <issue-key>)
+        → BDD test (@<issue-key> tag)
           → CI test report
             → PR (reviewed + approved)
               → deployed release

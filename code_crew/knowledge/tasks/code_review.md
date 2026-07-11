@@ -55,18 +55,18 @@ Check that the implementation contains no:
 Use `platform_shell` to grep: `grep -rn "localhost\|127\.0\.0\|hardcode\|TODO.*secret"` etc.
 
 **Step 3 — Branch, commit, and PR format.**
-Verify the proposed branch name and commit subject follow SOP-DoD Section 3:
+Verify the proposed branch name and commit subject follow the `development-workflow` function and any SOP-DoD conventions:
 
-- Branch: `feature/<JIRA-KEY>-<slug>` or `fix/<JIRA-KEY>-<slug>`
-- Commit: `<type>(<scope>): <description> [REQ:<REQ-ID>] <JIRA-KEY>`
+- Branch: `feature/<issue-key>-<slug>` or `fix/<issue-key>-<slug>`
+- Commit: `<type>(<scope>): <description> [REQ:<REQ-ID>] <issue-key>`
 - PR title matches commit subject format
-- If the backend or frontend developer proposed a non-conforming name, provide the corrected version.
+- If the developer proposed a non-conforming name, provide the corrected version.
 
 **Step 4 — Error handling and observability.**
 - Errors are handled at system boundaries only (user input, external APIs). Internal functions
   return errors but do not log them — the boundary caller decides whether to log.
 - Security-relevant events (auth failures, permission denials, data writes) are logged.
-- No `fmt.Println`, `console.log`, or debug output left in production paths.
+- No debug print statements (e.g. language-level print/log calls used only for debugging) left in production paths.
 
 **On tool failure** — log the error, try once with an alternative (list parent dir, use `find_files` before `read_file`), then skip and continue. Never use absolute paths in shell commands. If critical context is unavailable, output `INCOMPLETE: <reason>` instead of a verdict.
 

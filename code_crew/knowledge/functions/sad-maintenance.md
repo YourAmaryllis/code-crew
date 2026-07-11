@@ -100,11 +100,11 @@ A component that appears in the SAD's Decomposition View should have a correspon
 
 ## How to Update the SAD
 
-1. Create a branch in `designs`: `arch/update-sad-PROJ-NNN`
+1. Create a branch in `designs`: `arch/update-sad-<issue-key>`
 2. Edit only the sections that changed — keep unrelated sections untouched
 3. If an ADR is required, write it first (or in the same PR)
 4. Open a PR against `designs` main — architect review required before merge
-5. Reference the SAD PR in the Jira ticket description or as a comment
+5. Reference the SAD PR in the issue tracker ticket description or as a comment
 
 For large changes (new service, major integration), follow the full change control process: see `change-control`.
 
@@ -119,4 +119,4 @@ During code review, if the architect notices:
 
 …they must either:
 1. Request a SAD/ADD/ADR update before approving, or
-2. Write a Jira comment with the reference for follow-up in the same sprint
+2. Write an issue tracker comment with the reference for follow-up in the same sprint

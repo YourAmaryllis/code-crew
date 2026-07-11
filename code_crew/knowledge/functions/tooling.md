@@ -1,6 +1,6 @@
 ---
 name: SDLC-Team-Tooling
-description: Complete tool inventory — development, testing, infrastructure, communication, and marketing tools with integrations
+description: Tool inventory by category — development, testing, infrastructure, communication, and project management
 metadata:
   type: reference
   role: all
@@ -9,61 +9,52 @@ metadata:
 
 # Tooling
 
+The specific tools in each category are configured for this project. This document describes the categories and how they connect. Refer to the active stack documents for exact tool names and versions.
+
 ---
 
 ## Development Tools
 
-| Tool | Purpose | Who uses it |
-|------|---------|------------|
-| GitHub | Version control, code review, CI/CD | All engineers |
-| VS Code | Code editor | Engineers |
-| Claude Code | AI coding assistant (CLI) | Engineers |
-| Cursor | AI-powered IDE | Engineers |
-| GSD | AI orchestration for SDLC phases | Engineers, Tech Lead |
-| Go 1.23+ | Backend services | Backend engineers |
-| TypeScript / React | Portal SPA | Frontend engineers |
-| Python 3.12+ | AI tooling, scripts | AI/ML engineers |
-| Ant Design v6 | Portal UI component library | Frontend engineers |
+| Category | Examples |
+|----------|---------|
+| Version control | GitHub, GitLab, Bitbucket |
+| Code editor / IDE | VS Code, JetBrains, Cursor |
+| AI coding assistant | Claude Code, Copilot |
+| Backend language runtime | Go, Python, Java, Rust, etc. (see backend stack document) |
+| Frontend framework | React, Vue, Angular, Svelte (see frontend stack document) |
+| Script / AI tooling | Python (see scripts stack document) |
 
 ---
 
 ## Testing Tools
 
-| Tool | Purpose | Layer |
-|------|---------|-------|
-| `go test` + `testify` | Go unit + integration tests | Unit, Integration |
-| Godog | BDD runner for Go | Integration BDD |
-| Jest | JavaScript unit tests | Unit |
-| React Testing Library | Component tests | Unit |
-| Playwright | E2E browser automation | E2E BDD |
-| Cypress | Alternative E2E (legacy) | E2E |
-| k6 | Load testing | Performance |
+| Category | Examples |
+|----------|---------|
+| Unit + integration tests | Language-native test framework (see stack document) |
+| BDD runner | Godog, Cucumber, Behave, pytest-bdd (see bdd-testing stack) |
+| E2E browser automation | Playwright, Cypress, Selenium |
+| Load testing | k6, Locust |
 
 ---
 
 ## Infrastructure Tools
 
-| Tool | Purpose |
-|------|---------|
-| AWS ECS + Fargate | Container orchestration |
-| AWS RDS (PostgreSQL) | Relational database |
-| AWS S3 | Object storage |
-| AWS Lambda | Serverless functions |
-| AWS SageMaker | ML model hosting |
-| AWS Bedrock | LLM inference (IAM auth only) |
-| AWS Secrets Manager | Secret storage |
-| AWS SSM Parameter Store | Config storage |
-| AWS CloudWatch | Metrics, logs, alarms |
-| AWS X-Ray | Distributed tracing |
-| AWS GuardDuty | Threat detection |
-| AWS CloudTrail | API audit logging |
-| Terraform | Infrastructure as code |
-| GitHub Actions | CI/CD pipelines |
-| OIDC | CI/CD → AWS auth (no long-lived keys) |
-| ECR | Container image registry |
-| Vercel | Portal SPA hosting + CDN |
-| Route 53 | DNS |
-| ACM | TLS certificate management |
+The project's infrastructure toolchain is documented in `.code-crew/structure.md` under `ci.deployment_methods`. Common categories:
+
+| Category | Examples |
+|----------|---------|
+| Container orchestration | AWS ECS/Fargate, Kubernetes, Fly.io |
+| Database | AWS RDS, Cloud SQL, Supabase |
+| Object storage | AWS S3, GCS, Azure Blob |
+| Serverless | AWS Lambda, Cloud Functions |
+| Secrets | AWS Secrets Manager, HashiCorp Vault, Doppler |
+| Config | AWS SSM Parameter Store, environment variables |
+| Observability | AWS CloudWatch, Datadog, Grafana |
+| Tracing | AWS X-Ray, Jaeger, Honeycomb |
+| CI/CD | GitHub Actions, GitLab CI, Jenkins |
+| IaC | Terraform, AWS CDK, Pulumi |
+| Container registry | AWS ECR, Docker Hub, GHCR |
+| CDN / hosting | Vercel, Cloudflare, AWS CloudFront |
 
 ---
 
@@ -72,41 +63,23 @@ metadata:
 | Tool | Purpose |
 |------|---------|
 | Figma | UI/UX design, wireframes, final designs |
-| FigJam | User journey maps, domain model diagrams |
+| FigJam / Miro | User journey maps, domain model diagrams |
 | `designs/` repo | Architecture docs (ADDs, ADRs, SOPs, SDLC) |
 
 ---
 
 ## Project Management
 
-| Tool | Purpose |
-|------|---------|
-| Jira | Product backlog, sprint execution, ticket tracking |
-| GitHub Issues | Engineering bugs and chores (linked to Jira) |
-| Confluence / Notion | Long-form documentation (non-OKF content) |
-| GitHub Wiki | Technical documentation |
+The issue tracker type is configured via `issue_tracker.type` in `~/.code-crew/config.yaml`:
+- `jira` — Jira Cloud or Server
+- `linear` — Linear
+- `github` — GitHub Issues
 
 ---
 
 ## Communication
 
-| Tool | Purpose |
-|------|---------|
-| Slack | Team communication, alerts, incidents |
-| Google Meet | Video conferencing |
-| Email (your-org.com) | External communication, formal records |
-
----
-
-## Tool Integrations
-
-| Integration | What it does |
-|------------|-------------|
-| Jira ↔ GitHub | PR / branch / commit auto-linked to Jira tickets |
-| GitHub → CI/CD | PR creates CI run; merge triggers deploy |
-| CloudWatch → PagerDuty | Critical alerts page on-call engineer |
-| CloudWatch → Slack | Warning alerts posted to `#ops-alerts` |
-| Figma → Jira | Design links in Jira descriptions |
+Standard categories: team messaging (Slack, Teams), video conferencing, email.
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: SDLC-QA-TestReporting
-description: Test report formats, Jira comment evidence, CI integration, and staging sign-off process
+description: Test report formats, issue tracker evidence comment, CI integration, and staging sign-off process
 metadata:
   type: process
   role: qa
@@ -9,42 +9,22 @@ metadata:
 
 # Test Reporting
 
-Test reports are the evidence that acceptance criteria have been met. They are attached to Jira tickets and reviewed by the Scrum Master during DoD check.
+Test reports are the evidence that acceptance criteria have been met. They are attached to issue tracker tickets and reviewed by the Scrum Master during DoD check.
 
 ---
 
 ## Local Test Report Generation
 
-### Go (Godog HTML)
+Run the BDD suite filtered by the issue key and generate a report. Use `commands.test` from `.code-crew/structure.md`, passing the issue key tag. The exact command and report format depend on the active BDD stack (see the `bdd-testing` stack document).
 
-```bash
-# Run BDD suite and generate HTML report
-go test ./... -v \
-  --godog.format=html \
-  --godog.output=reports/test-report.html \
-  --godog.tags="@PROJ-92"
-```
-
-### TypeScript (Playwright HTML)
-
-```bash
-npx playwright test --reporter=html --grep @PROJ-92
-# Report at playwright-report/index.html
-```
-
-### All stories in a sprint
-
-```bash
-# Run all BDD scenarios and produce combined report
-go test ./... --godog.format=html --godog.output=reports/sprint-5-report.html
-```
+Example output: an HTML report file or structured JSON that lists each scenario and its pass/fail status.
 
 ---
 
 ## CI Test Report
 
-GitHub Actions publishes test reports as:
-- Artifacts (downloadable HTML)
+CI publishes test reports as:
+- Artifacts (downloadable HTML or JSON)
 - Job summary (inline pass/fail table)
 - PR check status (pass = green check, fail = red X)
 
@@ -52,18 +32,18 @@ The CI run URL serves as valid evidence for DoD when the run is publicly visible
 
 ---
 
-## Jira Evidence Comment
+## Issue Tracker Evidence Comment
 
-After a successful test run, post a comment on the Jira ticket:
+After a successful test run, post a comment on the issue tracker ticket:
 
 ```
-BDD test run for PROJ-92: ✅ PASSED
-Run: https://github.com/your-org/platform/actions/runs/XXXXXXX
-Scenarios: 4 passing, 0 failing
-Coverage: 
-  - AC 1: ✅ Scenario "Successful registration triggers verification email"
-  - AC 2: ✅ Scenario "Invalid email is rejected at registration"
-  - AC 3: ✅ Scenario "Verification link expires after 24 hours"
+BDD test run for <issue-key>: PASSED
+Run: <CI run URL>
+Scenarios: N passing, 0 failing
+Coverage:
+  - AC 1: Scenario "<description>"
+  - AC 2: Scenario "<description>"
+  - AC 3: Scenario "<description>"
 ```
 
 The Scrum Master reads this comment during DoD check as evidence of completion.
@@ -77,12 +57,12 @@ Before production promotion:
 1. E2E suite runs against staging: `@e2e` tagged scenarios
 2. Smoke test suite must pass: `@smoke` tagged scenarios
 3. QA Lead reviews staging acceptance results
-4. Sign-off comment added to the release Jira ticket:
+4. Sign-off comment added to the release ticket:
 
 ```
-Staging acceptance: ✅ PASSED
-E2E run: [link]
-Smoke tests: [link]
+Staging acceptance: PASSED
+E2E run: <link>
+Smoke tests: <link>
 Date: YYYY-MM-DD
 Sign-off: QA Lead name
 ```
@@ -96,7 +76,7 @@ Production promotion is blocked until staging acceptance is signed off.
 When a BDD scenario fails:
 
 1. Determine: test bug or product bug?
-2. **Product bug**: create Jira bug with severity, steps to reproduce, actual vs expected
+2. **Product bug**: create a bug ticket with severity, steps to reproduce, actual vs expected
 3. **Test bug** (wrong step definition, environment issue): fix the test; do not close the scenario
 4. Critical/High bugs: block the PR/story; fix before proceeding
 5. Medium/Low bugs: create bug ticket, link to story, can proceed if agreed with PO

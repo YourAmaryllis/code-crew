@@ -24,9 +24,9 @@ to use `cat >`, `tee`, `echo >`, or any shell command that writes files. The Arc
 must output the final OTM YAML as plain text in their response — the caller handles writing.
 
 **CRITICAL: This is a FULL SERVICE threat model — not a feature change.** Do NOT ask for a
-Jira ticket number, story ID, or feature ADD. There is no "previous attempt" to recover — start
+issue tracker ticket, story ID, or feature ADD. There is no "previous attempt" to recover — start
 fresh from the pre-scanned context and the codebase. Do NOT ask the Architect to search for
-Jira ticket patterns or look for feature documents.
+issue tracker patterns or look for feature documents.
 
 **CRITICAL: When delegating to the Architect, ALWAYS include the full data in the context.**
 Never say "we have established X" without actually embedding X. If you have established trust

@@ -48,14 +48,15 @@ When a sprint contains stories of mixed bump types, take the highest:
 
 ## Version File Locations
 
-| Service | Version file | Format |
-|---------|-------------|--------|
-| Go services | `portal/backend/go.mod` | `v0.N.N` module path (for breaking changes only) |
-| Portal frontend | `portal/frontend/package.json` | `"version": "0.N.N"` |
+Version files depend on the language and build system (see the active stack document for the exact filename and format):
+
+| Type | Where to look | Format examples |
+|------|--------------|----------------|
+| Backend service | The dependency manifest (`go.mod`, `package.json`, `pyproject.toml`, etc.) | Language-specific version field |
+| Frontend app | The dependency manifest | `"version": "0.N.N"` |
 | API contract | ADD document version field | Updated with every API change |
 
-Go modules: only update the module path for MAJOR (`v2`, `v3`, ...). For MINOR/PATCH, the
-module path stays the same — only the GitHub tag changes.
+For Go modules: only update the module path for MAJOR (`v2`, `v3`, ...). For MINOR/PATCH, the module path stays the same — only the git tag changes.
 
 ---
 
@@ -64,13 +65,13 @@ module path stays the same — only the GitHub tag changes.
 Every production release gets a signed git tag:
 
 ```bash
-git tag -s v0.5.0 -m "Release 0.5.0 — mandatory data dictionary upload"
+git tag -s v0.5.0 -m "Release 0.5.0 — <one-line summary of the release>"
 git push origin v0.5.0
 ```
 
 Tag message format: `Release <version> — <one-line summary of the release>`
 
-Hotfix tags follow the same convention: `v0.5.1 — hotfix: data dictionary bypass`
+Hotfix tags follow the same convention: `v0.5.1 — hotfix: <short description>`
 
 ---
 
@@ -83,16 +84,16 @@ Required for any MAJOR bump (or 0.x MINOR bump that breaks a public contract):
 
 ### Breaking Changes
 
-**API**: `POST /datasets/register` — the `data_dictionary` field is now required.
+**API**: `POST /<resource>` — the `<field>` field is now required.
 Previously optional. Clients that omit this field will receive `422 Unprocessable Entity`.
 
-**Database**: Migration `000042_make_data_dictionary_mandatory.sql` adds a `NOT NULL`
-constraint on `datasets.data_dictionary_url`. Apply before deploying the new image.
+**Database**: Migration `<NNN>_make_<field>_mandatory.sql` adds a `NOT NULL`
+constraint on `<table>.<column>`. Apply before deploying the new image.
 
 ### Migration Steps
 
 1. Apply database migration: `migrate -path ./migrations -database $DATABASE_URL up`
-2. Update all API clients to include `data_dictionary` in `POST /datasets/register`
+2. Update all API clients to include `<field>` in `POST /<resource>`
 3. Deploy new image
 ```
 

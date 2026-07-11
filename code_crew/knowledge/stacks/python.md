@@ -83,7 +83,7 @@ scripts/<tool-name>/
 | Layer | Tool | Command |
 |-------|------|---------|
 | Unit | `pytest` | `pytest tests/unit/` |
-| BDD integration | `pytest-bdd` | `pytest tests/ -k "PROJ-NNN"` |
+| BDD integration | `pytest-bdd` | `pytest tests/ -k "<issue-key>"` |
 | All with report | `pytest-html` | `pytest --html=report.html` |
 | Coverage | `pytest-cov` | `pytest --cov=src` |
 

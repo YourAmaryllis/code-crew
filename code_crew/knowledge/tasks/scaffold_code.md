@@ -4,7 +4,7 @@ description: Create the directory structure and code stubs for the user story
 expected_output: Manifest of created files and directories with their purpose
 ---
 
-Read the Jira ticket (`jira_view`) first and identify which stack(s) this story touches. Then load only what that requires with `knowledge_reader`:
+Load the issue tracker ticket (use the issue tracker tool) first and identify which stack(s) this story touches. Then load only what that requires with `knowledge_reader`:
 - **`scaffold-code`** — scaffolding process and stub format (always load)
 - The relevant stack guide(s) for this story — identified from the ticket, the ADD, or the `stacks:` list in `.code-crew/structure.md`
 
@@ -28,7 +28,7 @@ Using the acceptance criteria and story context:
 2. If the architect's review (from context) recommended a specific service name, module name, or structural pattern — follow it exactly.
 
 3. Use the platform_shell tool to create any required directories and stub files that do not exist. Stubs must have:
-   - Correct package declarations (Go) / module exports (TypeScript) / class definitions (Python)
+   - Correct package/module declarations (follow the language conventions in the active stack document)
    - Empty function signatures named after the domain concept from the story
    - No implemented logic — stubs only
    - Import statements for the interfaces/types they will depend on (as TODOs if not yet defined)

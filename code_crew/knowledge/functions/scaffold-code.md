@@ -2,7 +2,7 @@
 type: Function Guide
 title: Code Scaffolding
 description: How to create directory structure and stub files for a new feature
-tags: [scaffold, go, typescript, stubs]
+tags: [scaffold, stubs]
 ---
 
 ## Purpose
@@ -19,66 +19,35 @@ Before creating any file, use `workspace_reader` (`list_dir` or `find_files`) to
 
 ## Step 2 — Determine what to create
 
-From the arch review output and acceptance criteria, decide:
+From the architecture review output and acceptance criteria, decide:
 
 - New service endpoint? → handler stub + service stub
-- New React component? → component stub + types stub + test stub
+- New UI component? → component stub + types stub + test stub
 - Both? → create both
 
-## Go backend stubs (portal/backend)
+Load the active stack document(s) for the affected layer (e.g. `go-backend`, `typescript-react`, `python-fastapi`) — the stack document defines the exact directory layout, package declarations, and file naming conventions for each stub type.
 
-Read `go-backend` stack guide for the module layout. Then create:
+## Step 3 — Create stubs
 
-``` text
-internal/api/<feature>.go               — handler stub
-internal/api/<feature>_test.go          — handler test stub
-internal/ard/<feature>.go               — service stub
-internal/ard/<feature>_test.go          — service test stub
-```
+For each stub file, follow the stack document's conventions for:
+- Package or module declaration
+- File placement relative to the service root
+- Empty function signatures named after the domain concept
+- Import stubs for interfaces/types the function will depend on (as TODOs if not yet defined)
 
-Stub format:
+No implementation logic — stubs only.
 
-```go
-package api  // or ard
+## Step 4 — Verify the build
 
-// <FeatureName> handles <brief description>.
-func <FeatureName>(w http.ResponseWriter, r *http.Request) {
-    // TODO: implement
-}
-```
-
-After creating Go files, run `go build ./...` in `portal/backend/`. If the build fails, report the error and stop.
-
-## TypeScript / React stubs (portal/frontend)
-
-Read `typescript-react` stack guide for the component layout. Then create:
-
-``` text
-src/components/<Component>/index.tsx    — component stub
-src/components/<Component>/types.ts    — prop types
-src/components/<Component>/<Component>.test.tsx  — test stub
-```
-
-Component stub:
-
-```tsx
-import React from 'react';
-import { <Props> } from './types';
-
-// Figma: <link from story> | Story: <JIRA-KEY>
-export const <Component>: React.FC<<Props>> = () => {
-  // TODO: implement
-  return null;
-};
-```
+After creating all stubs, run `commands.build` from `.code-crew/structure.md` in the appropriate service directory. If the build fails, report the error and stop — do not continue with stubs that break the build.
 
 ## Output format
 
 List every path and its status:
 
 ```
-portal/backend/internal/api/data_dictionary_mandatory.go    — created
-portal/backend/internal/ard/data_dictionary_mandatory.go    — created
-portal/backend/internal/api/data_dictionary_mandatory.go    — existing, no change
-go build ./...                                               — PASS
+<service>/<layer>/<feature>.go    — created
+<service>/<layer>/<feature>_test.go  — created
+<service>/<layer>/<feature>.go    — existing, no change
+commands.build                    — PASS
 ```

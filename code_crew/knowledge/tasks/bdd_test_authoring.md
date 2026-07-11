@@ -19,9 +19,7 @@ Write Gherkin BDD feature files for the user story in the sprint input.
 **Before writing**, use the `knowledge_reader` tool to load `bdd-authoring` to confirm
 file naming, tagging conventions, and the API vs UI scope split for this feature.
 
-**Check what already exists.** Use `workspace_reader` with `list_dir` on
-`integration/features/` to see existing feature files. If a feature file already covers
-this Jira key, read it and extend it rather than recreating it.
+**Check what already exists.** Use the `bdd-authoring` function's directory convention to locate existing feature files. If a feature file already covers this issue key, read it and extend it rather than recreating it.
 
 **Coverage requirements** (100% AC coverage mandatory):
 - Every acceptance criterion maps to at least one scenario
@@ -31,8 +29,8 @@ this Jira key, read it and extend it rather than recreating it.
 - Security-relevant scenarios included (invalid input, unauthorized access, data boundary)
 
 **Annotation requirements**:
-- Each scenario tagged with the Jira key (lowercase): `@looplat-92` or `@cto-XX`
-- Each scenario tagged with a domain category: `@dataset`, `@auth`, `@fhir`, `@registration`, etc.
+- Each scenario tagged with the issue key (lowercase): e.g. `@<issue-key>`
+- Each scenario tagged with a domain category appropriate to the feature (e.g. `@auth`, `@api`, `@ui`)
 - API tests tagged `@api`; UI interaction tests tagged `@ui`
 
 **File naming**:
@@ -50,7 +48,7 @@ Produce the full `.feature` file content and a coverage matrix:
 
 | Acceptance Criterion | Scenario(s) | File | Tag |
 |---|---|---|---|
-| AC-1 | Scenario: ... | feature-slug.feature | @looplat-92 |
+| AC-1 | Scenario: ... | feature-slug.feature | @<issue-key> |
 
 **Completion signal — required.**
 End your output with exactly one of:

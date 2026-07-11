@@ -18,12 +18,12 @@ Review the QA Lead's Gherkin BDD feature files for the story in the sprint input
 Identify the ADD referenced in the architecture review for this story. Load it to understand
 the API contract (endpoints, request/response shapes, error codes).
 
-**Step 2 — Load the Jira ticket** (`jira_view`).
+**Step 2 — Load the issue tracker ticket** (use the issue tracker tool).
 Confirm the feature scope and any technical constraints in the ticket description.
 
 **Step 3 — Read the feature files.**
-Use `workspace_reader` to list and read the relevant feature files for this Jira key
-in `integration/features/<domain>/`.
+Use `workspace_reader` to list and read the relevant feature files for this issue key
+using the feature directory convention from the `bdd-authoring` function.
 
 **Step 4 — Check ADD alignment.**
 API scenarios must test the endpoints defined in the ADD:

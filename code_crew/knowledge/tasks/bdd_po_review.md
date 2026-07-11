@@ -15,13 +15,13 @@ expected_output: >
 
 Review the QA Lead's Gherkin BDD feature files for the story in the sprint input.
 
-**Step 1 — Load the Jira ticket** (`jira_view`).
+**Step 1 — Load the issue tracker ticket** (use the issue tracker tool).
 Read the full story description and every acceptance criterion. These are the contract
 you are checking the scenarios against.
 
 **Step 2 — Read the feature files.**
-The QA Lead has written files in `integration/features/<domain>/`. Use `workspace_reader`
-to list and read the relevant feature files for this Jira key.
+Use `workspace_reader` to list and read the relevant feature files for this issue key
+using the feature directory convention from the `bdd-authoring` function.
 
 **Step 3 — Check AC coverage.**
 Every acceptance criterion must have at least one Gherkin scenario. List any AC with no

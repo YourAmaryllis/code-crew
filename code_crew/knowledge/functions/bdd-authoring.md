@@ -21,7 +21,7 @@ integration/                  — separate Go module (integration/go.mod)
 
 - **API tests**: `integration/features/<feature-slug>.feature`
 - **UI tests**: `integration/features/<feature-slug>_ui.feature`
-- Feature slug derived from the story domain: `dataset_registration_data_dictionary_mandatory`
+- Feature slug derived from the story domain: `<feature-area>_<description>` (e.g. `auth_email_verification`)
 
 Do **not** duplicate coverage between API and UI files. If the API file tests all data matrix outcomes, the UI file tests one representative path plus any shared UI controls.
 
@@ -48,8 +48,8 @@ Feature: <feature name from story>
 
 ## Required tags on every scenario
 
-1. **Jira key** (lowercase with hyphen): `@looplat-92` or `@cto-11`
-2. **Domain category**: `@dataset`, `@auth`, `@fhir`, `@upload`, `@registration`, etc.
+1. **Issue key** (lowercase with hyphen): `@<issue-key>` (e.g. `@proj-92`)
+2. **Domain category**: a short label for the feature area (e.g. `@auth`, `@billing`, `@search`)
 3. **Scope marker**: `@api` for API-level tests, `@ui` for UI interaction tests
 
 ## Coverage requirement (ADR-010)
@@ -69,9 +69,9 @@ Use concrete values in scenarios, not placeholders:
 
 ```gherkin
 # Good
-Given a dataset with no data dictionary configured
+Given a user with no verified email address
 # Bad  
-Given a dataset with <some configuration>
+Given a user with <some configuration>
 ```
 
 ## Coverage matrix output
@@ -80,11 +80,9 @@ After writing feature files, produce a table:
 
 | Acceptance Criterion | Scenario(s) | File | Tag |
 |---|---|---|---|
-| AC-1: Field X is required | Scenario: Missing field X returns 400 | data_dictionary_mandatory.feature | @looplat-92 |
+| AC-1: Field X is required | Scenario: Missing field X returns 400 | feature-slug.feature | @<issue-key> |
 
 ## Running tests (for reference — done at DoD, not authoring)
 
-```bash
-# From integration/ directory
-go test ./... -run TestFeatures -v --godog.tags="@looplat-92"
-```
+Use `commands.test` from `.code-crew/structure.md`, filtered by the issue key tag.
+The exact command depends on the active BDD stack (see the `bdd-testing` stack document).

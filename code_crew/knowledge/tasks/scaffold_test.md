@@ -1,7 +1,7 @@
 ---
 name: scaffold_test
 description: Create BDD feature file stubs and step definition stubs for each acceptance criterion
-expected_output: Feature file path and step definition path, with one scenario stub per AC tagged with the Jira key
+expected_output: Feature file path and step definition path, with one scenario stub per AC tagged with the issue key
 ---
 
 Load the test scaffolding guide with `knowledge_reader`:
@@ -15,7 +15,7 @@ Using the acceptance criteria from the sprint context:
 1. Create a `.feature` file with:
    - Feature title derived from the story
    - The "As a / I want / So that" narrative from the story
-   - One skeleton `Scenario:` stub per AC, tagged with `@PROJ-NNN` (use the actual Jira key from context) and one feature-area tag inferred from the story's domain
+   - One skeleton `Scenario:` stub per AC, tagged with `@<issue-key>` (use the actual issue key from the sprint context) and one feature-area tag inferred from the story's domain
    - One additional `@negative` scenario stub for each AC that implies an error or rejection case
    - Each scenario body contains only a `# TODO: QA to write Gherkin steps` comment
 

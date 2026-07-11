@@ -33,29 +33,31 @@ INFO [COMP]: Compliance standard in scope — <standard>
 
 **Step 2 — PII model check (1 file read).**
 
-Read this exact file: `portal/backend/internal/user/user.go`
+From `.code-crew/structure.md` `## Code structure`, identify the user or identity model file
+(the file most likely to define PII fields — e.g. a `User`, `Profile`, or `Account` model).
+If structure.md does not name it, use `code_index search "email phone name address dob PII model"` to find the most relevant file, then read that file.
 
-After reading it, immediately scan the content for struct fields or db/json tags containing:
+After reading it, immediately scan the content for fields or tags containing:
 `email`, `phone`, `name`, `address`, `dob`, `ssn`, `ip_address`, `first_name`, `last_name`
 
 For EACH PII field found, output ONE line immediately:
-- No encryption or deletion logic visible in file: `FINDING [COMP]: PII field '<field>' collected without documented encryption or retention — portal/backend/internal/user/user.go [MEDIUM]`
-- Encryption/deletion logic visible: `PASS [COMP]: PII field '<field>' has protection controls — portal/backend/internal/user/user.go`
+- No encryption or deletion logic visible: `FINDING [COMP]: PII field '<field>' collected without documented encryption or retention — <file> [MEDIUM]`
+- Encryption/deletion logic visible: `PASS [COMP]: PII field '<field>' has protection controls — <file>`
 
-If file does not exist or has no PII fields: `INFO [COMP]: No PII model fields found in portal/backend/internal/user/user.go`
+If file does not exist or has no PII fields: `INFO [COMP]: No PII model fields found in <file>`
 
-Then output this line immediately: `INFO [COMP]: PII model check done`
+Then output: `INFO [COMP]: PII model check done`
 
 ---
 
 **Step 3 — Audit trail check (1 file read).**
 
-Read this exact file: `portal/backend/internal/auditevent/event.go`
+Use `code_index search "audit event log sensitive operation"` to locate the audit event or audit log definition file. Read that file.
 
 After reading it, immediately output:
-- File exists and defines audit event types: `PASS [COMP]: Audit event system present — portal/backend/internal/auditevent/event.go`
+- File exists and defines audit event types: `PASS [COMP]: Audit event system present — <file>`
 - File exists but appears minimal/empty: `FINDING [COMP]: Audit event file exists but appears minimal — may not cover all sensitive operations [LOW]`
-- File does not exist: `FINDING [COMP]: No audit event system found in portal/backend/internal/ — sensitive operation logging not verified [MEDIUM]`
+- No file found: `FINDING [COMP]: No audit event system found — sensitive operation logging not verified [MEDIUM]`
 
 Then output: `INFO [COMP]: Audit trail check done`
 
@@ -63,12 +65,12 @@ Then output: `INFO [COMP]: Audit trail check done`
 
 **Step 4 — Regulatory framework documentation (1 file read).**
 
-Read this exact file: `designs/SOP/SOP-8-Compliance.md`
+Use `workspace_reader list_dir` on `designs/SOP/` to find a compliance SOP file (look for filenames containing "compliance", "privacy", or "regulatory"). Read the most relevant file.
 
-After reading it, for each standard that was in scope (from Step 1), output ONE line:
-- SOP addresses the standard: `PASS [COMP]: <standard> controls documented in designs/SOP/SOP-8-Compliance.md`
+After reading it, for each standard in scope (from Step 1), output ONE line:
+- SOP addresses the standard: `PASS [COMP]: <standard> controls documented in <file>`
 - SOP does not address the standard: `FINDING [COMP]: <standard> controls not documented in compliance SOP [MEDIUM]`
-- If file does not exist: `FINDING [COMP]: No compliance SOP found at designs/SOP/SOP-8-Compliance.md [HIGH]`
+- If no SOP file found: `FINDING [COMP]: No compliance SOP found in designs/SOP/ [HIGH]`
 
 Then output: `INFO [COMP]: SOP documentation check done`
 
