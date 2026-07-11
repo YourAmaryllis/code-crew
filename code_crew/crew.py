@@ -1442,6 +1442,11 @@ def classify_units_from_structure(structure_md: str) -> dict:
         else:
             result["not_services"][current_path] = current["type"] or "library"
 
+    # Deduplicate real_services (sub-executables can appear both via their own
+    # UNIT_SUMMARY block and via a parent's DECOMPOSE/SUB_UNITS block).
+    _seen: set[str] = set()
+    result["real_services"] = [p for p in result["real_services"] if p not in _seen and not _seen.add(p)]  # type: ignore[func-returns-value]
+
     return result
 
 
@@ -1486,11 +1491,15 @@ def build_diagram_from_services(
         nid = _node_id(name)
         lines.append(f'    {nid}["{name}\\n(external)"]:::external')
 
-    # Structural parent-child edges from path hierarchy
+    # Structural parent-child edges: find nearest ancestor in svc_set (not just
+    # immediate parent) so deeply nested cmd/* binaries link to their service root.
     for svc in real_services:
-        parent = svc.rsplit("/", 1)[0] if "/" in svc else None
-        if parent and parent in svc_set:
-            lines.append(f"    {_node_id(parent)} --> {_node_id(svc)}")
+        parts = svc.split("/")
+        for i in range(len(parts) - 1, 0, -1):
+            ancestor = "/".join(parts[:i])
+            if ancestor in svc_set:
+                lines.append(f"    {_node_id(ancestor)} --> {_node_id(svc)}")
+                break
 
     # Explicit sub-service edges from decomposed dict
     for parent, subs in decomposed.items():
