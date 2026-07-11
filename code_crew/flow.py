@@ -156,7 +156,7 @@ class DesignFlow:
         )
 
     def _execute(self, task_name: str) -> str:
-        from code_crew.crew import build_design_single_task
+        from code_crew.crews.design import build_design_single_task
 
         extra = ""
         # Inject outputs of previously completed tasks as context
@@ -243,7 +243,7 @@ class DomainFlow:
             raise
 
     def _execute(self, task_name: str, flow_name: str = "") -> str:
-        from code_crew.crew import build_domain_single_task
+        from code_crew.crews.domain import build_domain_single_task
 
         extra = ""
         for prev_task, prev_output in self.task_outputs.items():
@@ -362,7 +362,7 @@ class UxFlow:
         return True
 
     def _execute(self, task_name: str) -> str:
-        from code_crew.crew import build_ux_single_task
+        from code_crew.crews.ux import build_ux_single_task
 
         extra = ""
         for prev_task, prev_output in self.task_outputs.items():
@@ -868,7 +868,7 @@ class TicketFlow:
         Build and run a single-task crew. Injects review feedback, BDD feedback,
         and human guidance into the task context when present.
         """
-        from code_crew.crew import build_single_task_crew
+        from code_crew.crews.sprint import build_single_task_crew
         from shared.aws_auth import is_aws_auth_error
 
         extra_context = ""
@@ -1232,7 +1232,7 @@ class DriftFlow:
             raise
 
     def _execute(self, task_name: str) -> str:
-        from code_crew.crew import build_drift_single_task
+        from code_crew.crews.drift import build_drift_single_task
 
         extra = ""
         for prev_task, prev_output in self.task_outputs.items():

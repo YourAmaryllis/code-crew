@@ -34,7 +34,7 @@ def cli():
 
 def _run_ticket(jira_key: str, sprint_name: str = "", extra_adds: list[str] | None = None) -> str:
     """Fetch, plan, and run the crew for a single ticket. Returns output text."""
-    from code_crew.crew import build_crew
+    from code_crew.crews.sprint import build_crew
     from shared.jira_client import fetch
     from shared.user_memory import UserMemory
 
@@ -90,7 +90,7 @@ def run(jira, story, ac, sprint_goal, figma, add, output):
     """
     import sys
 
-    from code_crew.crew import build_crew
+    from code_crew.crews.sprint import build_crew
     from shared.jira_client import MissingACError, MissingStoryError, fetch
     from shared.user_memory import UserMemory
 

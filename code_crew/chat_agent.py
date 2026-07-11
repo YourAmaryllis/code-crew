@@ -110,7 +110,7 @@ def ask_agent(
                 (e.g. "architect", "arch", "security", "qa")
     """
     from shared.okf_loader import load_bundle_agents
-    from code_crew.crew import _make_tools, _KNOWLEDGE, _mcp_tools_for
+    from code_crew.crews.core import _make_tools, _KNOWLEDGE, _mcp_tools_for
 
     canonical = AGENT_ALIASES.get(agent_name.lower())
     if not canonical:

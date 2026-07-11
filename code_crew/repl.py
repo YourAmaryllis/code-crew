@@ -1059,7 +1059,7 @@ def _handle_skill(args: list[str], console: Console) -> None:
     /skill off         — deactivate all skills
     /skill off <name>  — deactivate one skill
     """
-    from code_crew.crew import _skill_search_dirs
+    from code_crew.crews.core import _skill_search_dirs
 
     # Collect all available skills across search dirs, noting source
     # Later dirs are shadowed by earlier ones (project > user > bundled)
@@ -2510,7 +2510,7 @@ def _start_verify(console: Console) -> None:
     import json as _json
     from datetime import date
 
-    from code_crew.crew import build_verify_crew, _precheck_security, _precheck_architecture
+    from code_crew.crews.verify import build_verify_crew, _precheck_security, _precheck_architecture
 
     console.print("\n[bold]Starting verification audit…[/bold]")
     console.print("[dim]Scans: architecture · security · compliance · domain → chief review → report[/dim]\n")
@@ -2914,7 +2914,7 @@ def _start_domain_design(issue_key: str, console: Console) -> None:
 
 def _start_domain_extract(path: str, console: Console) -> None:
     """Extract a domain model from existing code."""
-    from code_crew.crew import build_domain_extract_crew
+    from code_crew.crews.domain import build_domain_extract_crew
 
     target = str(Path(path).expanduser()) if path else str(Path.cwd())
     console.print(f"\n[bold]Domain extract — {target}[/bold]")
@@ -3515,7 +3515,7 @@ def _run_explore(target: str, console: Console) -> None:
     inventory["external_services"] = _ext_services
 
     # ── Phase 2 / 3 / 4: LLM phases (new ADD-013 flow) ───────────────────────
-    from code_crew.crew import (
+    from code_crew.crews.explore import (
         _build_filtered_tree,
         build_breakdown_task, build_summarize_unit_task,
         build_summarize_docs_task,
@@ -4070,7 +4070,7 @@ def _run_threat(target: str, console: Console) -> None:
     tmd_dir = designs_dir / "TMD"
     tmd_dir.mkdir(exist_ok=True)
 
-    from code_crew.crew import (
+    from code_crew.crews.threat import (
         build_threat_model_crew, build_threat_patch_crew, build_threat_gate_crew,
         build_threat_discover_crew, build_threat_component_threats_crew,
         build_threat_mitigations_crew, build_threat_component_crew,
