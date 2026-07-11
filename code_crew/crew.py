@@ -1538,6 +1538,214 @@ def build_synthesize_decomposition_from_structure(structure_md: str) -> str:
     return direct_llm_completion(prompt, tier="fast", timeout=90, max_retries=3)
 
 
+# ── Phase 5 helpers ──────────────────────────────────────────────────────────
+
+def _extract_connections_from_structure(structure_md: str) -> str:
+    """Parse CONNECTS_TO fields from all UNIT_SUMMARY blocks in structure.md.
+
+    Returns a formatted string suitable for the DFD task prompt.
+    Skips blocks inside code fences and values that are 'none'.
+    """
+    lines_out: list[str] = []
+    current_unit: str | None = None
+    in_fence = False
+
+    for line in structure_md.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        normed = stripped.lstrip("# ").strip().replace("**", "").strip()
+        if normed.startswith("UNIT_SUMMARY:") and not normed.startswith("UNIT_SUMMARY COMPLETE"):
+            current_unit = normed[len("UNIT_SUMMARY:"):].strip().rstrip("/")
+        elif normed == "UNIT_SUMMARY COMPLETE":
+            current_unit = None
+        elif normed.startswith("CONNECTS_TO:") and current_unit:
+            val = normed[len("CONNECTS_TO:"):].strip()
+            if val and val.lower() not in ("none", ""):
+                lines_out.append(f"{current_unit} → {val}")
+
+    if not lines_out:
+        return ""
+    return "## Service connections (CONNECTS_TO from code analysis)\n\n" + "\n".join(lines_out)
+
+
+def _pre_read_network_infra(root: "Path", terraform_info: dict) -> str:
+    """Read VPC / networking Terraform files for network diagram generation.
+
+    Scans the infra root and its modules directory for .tf files whose name or
+    first 300 bytes contain networking keywords.  Returns up to MAX_FILES files,
+    each capped at MAX_BYTES, formatted as HCL code blocks.
+    """
+    import pathlib
+    import re as _re
+
+    infra_root_rel = (terraform_info or {}).get("root", "")
+    if not infra_root_rel:
+        return ""
+    infra_path = pathlib.Path(root) / infra_root_rel
+    if not infra_path.is_dir():
+        return ""
+
+    _NET = _re.compile(
+        r"vpc|subnet|network|security.?group|load.?balancer|alb|nlb|elb|nat|igw|"
+        r"route|dns|cloudfront|cloudflare|waf|firewall|peering|transit",
+        _re.I,
+    )
+    MAX_BYTES, MAX_FILES = 3000, 8
+
+    # Search in infra root + modules subdir
+    modules_rel = (terraform_info or {}).get("modules_path", "")
+    search_dirs = [infra_path]
+    if modules_rel:
+        mp = pathlib.Path(root) / modules_rel
+        if mp.is_dir():
+            search_dirs.append(mp)
+
+    collected: list[str] = []
+    seen: set[str] = set()
+    for sd in search_dirs:
+        for tf in sorted(sd.rglob("*.tf")):
+            if len(collected) >= MAX_FILES:
+                break
+            key = str(tf)
+            if key in seen:
+                continue
+            seen.add(key)
+            if not _NET.search(tf.name):
+                try:
+                    hdr = tf.read_text(encoding="utf-8", errors="replace")[:300]
+                    if not _NET.search(hdr):
+                        continue
+                except OSError:
+                    continue
+            try:
+                content = tf.read_text(encoding="utf-8", errors="replace")[:MAX_BYTES]
+                rel = tf.relative_to(pathlib.Path(root))
+                collected.append(f"### {rel}\n```hcl\n{content}\n```")
+            except OSError:
+                pass
+
+    if not collected:
+        return ""
+    return "## Terraform networking files\n\n" + "\n\n".join(collected)
+
+
+def _extract_structure_sections(structure_md: str, *section_names: str) -> str:
+    """Extract named H2 sections from a structure.md string (in-memory version of _load_structure_sections)."""
+    import re as _re
+    if not section_names:
+        return structure_md
+    wanted = {n.lower() for n in section_names}
+    result: list[str] = []
+    current_lines: list[str] = []
+    current_match = False
+
+    for line in structure_md.splitlines(keepends=True):
+        h2 = _re.match(r"^##\s+(.+)", line)
+        if h2:
+            if current_match and current_lines:
+                result.extend(current_lines)
+            heading = h2.group(1).strip().lower()
+            current_match = any(w in heading for w in wanted)
+            current_lines = [line] if current_match else []
+        elif current_match:
+            current_lines.append(line)
+
+    if current_match and current_lines:
+        result.extend(current_lines)
+    return "".join(result)
+
+
+def build_deployment_diagram_task(structure_md: str, ext_svcs: "list[dict]") -> str:
+    """Phase 5a: generate deployment diagram from structure.md context."""
+    from shared.llm_factory import direct_llm_completion
+
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+
+    ctx = _extract_structure_sections(
+        structure_md,
+        "Detected stacks", "CI/CD tooling", "Terraform infrastructure",
+        "External services", "Repository areas",
+    )
+    # Add compact service-type summary from unit summaries
+    type_pairs: list[str] = []
+    current_unit: str | None = None
+    in_fence = False
+    for line in structure_md.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        normed = stripped.lstrip("# ").strip().replace("**", "").strip()
+        if normed.startswith("UNIT_SUMMARY:") and not normed.startswith("UNIT_SUMMARY COMPLETE"):
+            current_unit = normed[len("UNIT_SUMMARY:"):].strip().rstrip("/")
+        elif normed.startswith("TYPE:") and current_unit:
+            type_pairs.append(f"{current_unit}: {normed[5:].strip()}")
+        elif normed == "UNIT_SUMMARY COMPLETE":
+            current_unit = None
+
+    if type_pairs:
+        ctx += "\n\n## Service types\n" + "\n".join(type_pairs[:40])
+
+    prompt = f"{ctx}\n\n{tc['explore_diagram_deployment'].description}"
+    return direct_llm_completion(prompt, tier="default", timeout=90, max_retries=2)
+
+
+def build_network_diagram_task(root: "Path", terraform_info: dict, structure_md: str) -> str:
+    """Phase 5b: generate network diagram from Terraform networking files."""
+    from shared.llm_factory import direct_llm_completion
+
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+
+    tf_ctx = _pre_read_network_infra(root, terraform_info)
+    svc_ctx = _extract_structure_sections(
+        structure_md, "Terraform infrastructure", "External services",
+    )
+    # Compact list of services and their types for placement hints
+    svc_list = _extract_structure_sections(structure_md, "Repository areas")
+
+    ctx = "\n\n".join(part for part in (svc_ctx, tf_ctx, svc_list) if part)
+    if not ctx.strip():
+        ctx = _extract_structure_sections(structure_md, "Detected stacks", "External services")
+
+    prompt = f"{ctx}\n\n{tc['explore_diagram_network'].description}"
+    return direct_llm_completion(prompt, tier="default", timeout=90, max_retries=2)
+
+
+def build_dataflow_diagram_task(structure_md: str, ext_svcs: "list[dict]") -> str:
+    """Phase 5c: generate architectural DFD from CONNECTS_TO fields in structure.md."""
+    from shared.llm_factory import direct_llm_completion
+
+    tc = load_bundle_tasks(_KNOWLEDGE / "tasks")
+
+    connections_ctx = _extract_connections_from_structure(structure_md)
+    ext_ctx = ""
+    if ext_svcs:
+        ext_names = [
+            (e.get("name", str(e)) if isinstance(e, dict) else str(e))
+            for e in ext_svcs
+        ]
+        ext_ctx = "## External services\n" + ", ".join(ext_names)
+
+    ctx = "\n\n".join(part for part in (connections_ctx, ext_ctx) if part)
+    if not ctx.strip():
+        # Fallback: no CONNECTS_TO data — use service summaries for a best-effort DFD
+        ctx = _extract_structure_sections(
+            structure_md, "Repository areas", "External services",
+        )
+
+    prompt = f"{ctx}\n\n{tc['explore_diagram_dataflow'].description}"
+    return direct_llm_completion(prompt, tier="default", timeout=90, max_retries=2)
+
+
+# ── Phase 5 end ──────────────────────────────────────────────────────────────
+
+
 def _pre_read_infra_dir(root: "Path", terraform_info: dict) -> str:
     """Return a flat file listing of the infra directory — no parsing, just names."""
     import pathlib
@@ -2416,6 +2624,33 @@ def _build_threat_context(project: dict, inventory: dict, revision_feedback: str
             "## Service decomposition (pre-computed — do NOT re-read decomposition.md)\n\n"
             + decomp
         )
+
+    def _load_diagram_file(filename: str, label: str) -> str:
+        """Load a pre-computed .code-crew/<filename> diagram if it exists."""
+        import re as _re
+        p = root / ".code-crew" / filename
+        if not p.exists():
+            return ""
+        try:
+            text = p.read_text(encoding="utf-8")
+            m = _re.search(r"(```mermaid\n.*?```)", text, _re.DOTALL)
+            if m:
+                return f"## {label} (pre-computed — do NOT re-read {filename})\n\n{m.group(1)}"
+            m2 = _re.search(r"(graph (?:TD|LR)\b.*)", text, _re.DOTALL)
+            if m2:
+                block = "```mermaid\n" + m2.group(1).strip() + "\n```"
+                return f"## {label} (pre-computed — do NOT re-read {filename})\n\n{block}"
+        except OSError:
+            pass
+        return ""
+
+    for _fname, _label in (
+        ("deployment.md", "Deployment diagram"),
+        ("dataflow.md", "Architectural data flow"),
+    ):
+        _diag = _load_diagram_file(_fname, _label)
+        if _diag:
+            ctx_lines.append(_diag)
 
     stack_docs = _load_stacks(stacks)
     if stack_docs:

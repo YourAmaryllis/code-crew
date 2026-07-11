@@ -3,7 +3,7 @@ Explore command crew builders and helpers.
 
 These functions implement the /explore command: repo breakdown, per-unit
 summarization, service classification, decomposition synthesis, and the
-final three-subtask LLM phase.
+Phase 5 diagram synthesis (deployment, network, architectural DFD).
 """
 
 from code_crew.crew import (
@@ -30,6 +30,13 @@ from code_crew.crew import (
     build_synthesize_compliance_task,
     _build_summaries_context,
     build_explore_single_task,
+    # Phase 5 — diagram synthesis
+    _extract_connections_from_structure,
+    _pre_read_network_infra,
+    _extract_structure_sections,
+    build_deployment_diagram_task,
+    build_network_diagram_task,
+    build_dataflow_diagram_task,
 )
 
 __all__ = [
@@ -56,4 +63,11 @@ __all__ = [
     "build_synthesize_compliance_task",
     "_build_summaries_context",
     "build_explore_single_task",
+    # Phase 5
+    "_extract_connections_from_structure",
+    "_pre_read_network_infra",
+    "_extract_structure_sections",
+    "build_deployment_diagram_task",
+    "build_network_diagram_task",
+    "build_dataflow_diagram_task",
 ]

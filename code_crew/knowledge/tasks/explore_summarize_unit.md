@@ -7,8 +7,8 @@ description: >
 tags: [explore, summarize, unit]
 agent: architect
 expected_output: >
-  UNIT_SUMMARY block with PURPOSE, TYPE, SENSITIVITY, ENTRY_POINTS, DECOMPOSE, and
-  optionally SUB_UNITS. Ends with UNIT_SUMMARY COMPLETE.
+  UNIT_SUMMARY block with PURPOSE, TYPE, SENSITIVITY, ENTRY_POINTS, DECOMPOSE,
+  CONNECTS_TO, and optionally SUB_UNITS. Ends with UNIT_SUMMARY COMPLETE.
 ---
 
 You are exploring one directory unit of the codebase. Use `workspace_reader` (and
@@ -25,17 +25,31 @@ and what data it handles.
 **Output exactly this format** (replace only the field values — do not include the comments):
 
 ```
-UNIT_SUMMARY: portal
-PURPOSE: The portal is a React + Go web application serving end-users. It handles
+UNIT_SUMMARY: <path>
+PURPOSE: <what it does, who uses it, key integrations — 2-4 sentences>
+TYPE: <type>
+SENSITIVITY: <sensitivity>
+ENTRY_POINTS: <executables or "none">
+DECOMPOSE: <yes | no>
+CONNECTS_TO: <connection list or "none">
+UNIT_SUMMARY COMPLETE
+```
+
+Example for a service with connections:
+
+```
+UNIT_SUMMARY: portal/backend
+PURPOSE: The portal backend is a Go API server serving end-users. It handles
   HTTP requests, integrates with the auth service, and stores sessions in Redis.
 TYPE: deployable-service
 SENSITIVITY: pii
 ENTRY_POINTS: cmd/server
 DECOMPOSE: no
+CONNECTS_TO: postgresql (sql), redis (cache), auth-service (http), sqs/dataset-conversion (queue-write)
 UNIT_SUMMARY COMPLETE
 ```
 
-For a unit with multiple independently deployable sub-services, use DECOMPOSE: yes and list them:
+For a unit with multiple independently deployable sub-services, add SUB_UNITS:
 
 ```
 UNIT_SUMMARY: attestation
@@ -45,6 +59,7 @@ SENSITIVITY: phi
 ENTRY_POINTS: cmd/server, cmd/worker
 DECOMPOSE: yes
 SUB_UNITS: cmd/server, cmd/worker
+CONNECTS_TO: postgresql (sql), sqs/pipeline-jobs (queue-consume), auth0 (http)
 UNIT_SUMMARY COMPLETE
 ```
 
@@ -56,6 +71,9 @@ Replace the field values with the actual content for the unit you are exploring.
 - ENTRY_POINTS: separately compiled executables (e.g. cmd/server, cmd/worker) or "none"
 - DECOMPOSE: yes or no (yes only if the unit has 2+ independently runnable sub-services)
 - SUB_UNITS: only present when DECOMPOSE is yes; list each sub-path (e.g. cmd/server, cmd/worker)
+- CONNECTS_TO: comma-separated list of `<target> (<mechanism>)` — only connections you can confirm from code.
+  Use "none" if no outbound connections are found. Do NOT guess or hallucinate connections.
+  Mechanisms: sql | cache | http | grpc | queue-write | queue-consume | pubsub | file | smtp | sdk
 
 **TYPE guidance:**
 - `deployable-service` — long-lived HTTP/gRPC server
@@ -81,3 +99,10 @@ processes or containers.
 
 If `DECOMPOSE: yes`, list each sub-path under `SUB_UNITS:`. The orchestrator will call
 this task again for each sub-unit.
+
+**CONNECTS_TO guidance** — look for these in code:
+- Database connections: ORM imports, `sql.Open`, `pgx.Connect`, `redis.NewClient`, etc.
+- HTTP calls: `http.NewRequest`, `grpc.Dial`, SDK client constructors for named services
+- Queue operations: SQS `SendMessage` (queue-write), `ReceiveMessage` (queue-consume)
+- Named target: use the logical service or resource name, not the hostname (e.g. `postgresql`, `redis`, `auth-service`, `sqs/<queue-name>`)
+- If you cannot find connection code, write `CONNECTS_TO: none` — do not guess

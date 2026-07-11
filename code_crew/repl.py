@@ -3779,6 +3779,62 @@ def _run_explore(target: str, console: Console) -> None:
             f"OTM SCOPE COMPLETE"
         )
 
+    # ── Phase 5: Diagram synthesis ────────────────────────────────────────────
+    # Three focused LLM calls — no new code reading (data already in structure.md).
+    # Failures are non-fatal: missing diagram files degrade downstream commands gracefully.
+    console.print("\n[dim]Phase 5 — Diagram synthesis…[/dim]")
+    from code_crew.crews.explore import (
+        build_deployment_diagram_task,
+        build_network_diagram_task,
+        build_dataflow_diagram_task,
+    )
+
+    def _write_diagram(filename: str, title: str, raw: str) -> bool:
+        """Strip stray fences, validate, write file. Returns True on success."""
+        diagram = "\n".join(
+            l for l in raw.splitlines() if not l.strip().startswith("```")
+        ).strip()
+        if not diagram or not diagram.startswith("graph "):
+            return False
+        fenced = f"```mermaid\n{diagram}\n```"
+        (out_dir / filename).write_text(
+            f"# {root.name} — {title}\n\n{fenced}\n", encoding="utf-8"
+        )
+        return True
+
+    _structure_for_phase5 = (out_dir / "structure.md").read_text(encoding="utf-8")
+    _ext_svcs_list = inventory.get("external_services", [])
+
+    # 5a — Deployment diagram
+    try:
+        _raw = build_deployment_diagram_task(_structure_for_phase5, _ext_svcs_list)
+        if _write_diagram("deployment.md", "Deployment", _raw):
+            console.print("  [green]✓[/green] deployment.md")
+        else:
+            console.print("  [yellow]⚠[/yellow] deployment diagram: no graph block in output")
+    except Exception as _exc:
+        console.print(f"  [yellow]⚠[/yellow] deployment diagram skipped: {_exc}")
+
+    # 5b — Network diagram (reads Terraform networking files)
+    try:
+        _raw = build_network_diagram_task(root, terraform_info, _structure_for_phase5)
+        if _write_diagram("network.md", "Network", _raw):
+            console.print("  [green]✓[/green] network.md")
+        else:
+            console.print("  [yellow]⚠[/yellow] network diagram: no graph block in output")
+    except Exception as _exc:
+        console.print(f"  [yellow]⚠[/yellow] network diagram skipped: {_exc}")
+
+    # 5c — Architectural DFD (assembled from CONNECTS_TO fields in structure.md)
+    try:
+        _raw = build_dataflow_diagram_task(_structure_for_phase5, _ext_svcs_list)
+        if _write_diagram("dataflow.md", "Architectural Data Flow", _raw):
+            console.print("  [green]✓[/green] dataflow.md")
+        else:
+            console.print("  [yellow]⚠[/yellow] DFD: no graph block in output")
+    except Exception as _exc:
+        console.print(f"  [yellow]⚠[/yellow] DFD skipped: {_exc}")
+
     # Build project list from Python-classified real services (deterministic, no LLM parsing).
     import re as _re_scope
     projects: list[dict] = []
