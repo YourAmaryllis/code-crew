@@ -3546,7 +3546,7 @@ def _run_explore(target: str, console: Console) -> None:
                         continue
                     _areas.append({
                         "path": _apath,
-                        "type": _parts[1],
+                        "type": _parts[1].replace("**", "").strip(),
                         "description": _parts[2] if len(_parts) > 2 else "",
                     })
                     console.print(f"  [dim]{_parts[1]:14}[/dim] {_apath}")

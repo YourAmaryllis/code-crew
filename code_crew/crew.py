@@ -488,9 +488,18 @@ def _designs_context_line() -> str:
     return f"**Designs directory**: `{_resolved_designs_path()}` — use this path for all file operations involving ADRs, ADDs, TMDs, DMDs, SOPs."
 
 
+_DESIGN_STRUCTURE_SECTIONS = (
+    "Detected stacks",
+    "Detected architecture",
+    "Architectural components",
+    "Project summary",
+    "Architect verification notes",
+)
+
+
 def _format_design_context(design_input: dict) -> str:
     acs = "\n".join(f"- {ac}" for ac in design_input.get("acceptance_criteria", []))
-    structure = _load_project_structure()
+    structure = _load_structure_sections(*_DESIGN_STRUCTURE_SECTIONS)
     sections: list[str] = []
     skills = _load_active_skills()
     if skills:
@@ -508,6 +517,9 @@ def _format_design_context(design_input: dict) -> str:
         sections.append(f"## Full ticket content\n\n{raw[:3000]}")
     if structure:
         sections.append(f"## Project structure\n\n{structure}")
+    decomp = _load_decomposition_diagram()
+    if decomp:
+        sections.append(f"## Service decomposition\n\n{decomp}")
     return "\n\n".join(sections)
 
 
@@ -540,9 +552,12 @@ def _format_context(sprint_input: dict) -> str:
         sections.append(user_context)
     if human_feedback:
         sections.append(human_feedback)
-    structure = _load_project_structure()
+    structure = _load_structure_sections(*STRUCTURE_ENGINEER)
     if structure:
         sections.append(f"## Project structure\n\n{structure}")
+    decomp = _load_decomposition_diagram()
+    if decomp:
+        sections.append(f"## Service decomposition\n\n{decomp}")
     return "\n\n".join(sections)
 
 
@@ -553,6 +568,26 @@ def _load_project_structure() -> str:
         return ""
     try:
         return p.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _load_decomposition_diagram() -> str:
+    """Load the mermaid diagram from .code-crew/decomposition.md if present.
+
+    Returns only the ```mermaid...``` block — not the full file — so it stays
+    compact enough to include in every command context without token bloat.
+    """
+    import re as _re
+    p = Path.cwd() / ".code-crew" / "decomposition.md"
+    if not p.exists():
+        return ""
+    try:
+        text = p.read_text(encoding="utf-8")
+        m = _re.search(r"(```mermaid\n.*?```)", text, _re.DOTALL)
+        if m:
+            return m.group(1)
+        return text.strip()
     except OSError:
         return ""
 
@@ -766,6 +801,9 @@ def _format_drift_context(drift_input: dict) -> str:
     sections.append(header)
     if structure:
         sections.append(f"## Project structure\n\n{structure}")
+    decomp = _load_decomposition_diagram()
+    if decomp:
+        sections.append(f"## Service decomposition\n\n{decomp}")
     return "\n\n".join(sections)
 
 
@@ -2355,6 +2393,13 @@ def _build_threat_context(project: dict, inventory: dict, revision_feedback: str
     if structure:
         ctx_lines.append(f"## Project structure\n\n{structure}")
 
+    decomp = _load_decomposition_diagram()
+    if decomp:
+        ctx_lines.append(
+            "## Service decomposition (pre-computed — do NOT re-read decomposition.md)\n\n"
+            + decomp
+        )
+
     stack_docs = _load_stacks(stacks)
     if stack_docs:
         ctx_lines.append(
@@ -2900,9 +2945,17 @@ def build_threat_mitigations_crew(
         )
 
 
+_UX_STRUCTURE_SECTIONS = (
+    "Detected stacks",
+    "Detected architecture",
+    "Architectural components",
+    "Project summary",
+)
+
+
 def _format_ux_context(ux_input: dict) -> str:
     acs = "\n".join(f"- {ac}" for ac in ux_input.get("acceptance_criteria", []))
-    structure = _load_project_structure()
+    structure = _load_structure_sections(*_UX_STRUCTURE_SECTIONS)
     sections: list[str] = []
     skills = _load_active_skills()
     if skills:
@@ -2917,4 +2970,7 @@ def _format_ux_context(ux_input: dict) -> str:
     )
     if structure:
         sections.append(f"## Project structure\n\n{structure}")
+    decomp = _load_decomposition_diagram()
+    if decomp:
+        sections.append(f"## Service decomposition\n\n{decomp}")
     return "\n\n".join(sections)

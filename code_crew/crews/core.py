@@ -32,6 +32,7 @@ from code_crew.crew import (
     # Structure loaders
     _load_project_structure,
     _load_structure_sections,
+    _load_decomposition_diagram,
     STRUCTURE_SECURITY,
     STRUCTURE_DEVOPS,
     STRUCTURE_ENGINEER,
@@ -68,6 +69,7 @@ __all__ = [
     "_format_context",
     "_load_project_structure",
     "_load_structure_sections",
+    "_load_decomposition_diagram",
     "STRUCTURE_SECURITY",
     "STRUCTURE_DEVOPS",
     "STRUCTURE_ENGINEER",
