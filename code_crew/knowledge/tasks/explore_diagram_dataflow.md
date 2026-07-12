@@ -28,6 +28,10 @@ all services, data stores, message queues, and external services.
 - External services / APIs: `ext["External Service"]:::external` (dashed border)
 - End users / browsers: `user(["User"])` (rounded rectangle)
 
+**Categorising CONNECTS_TO targets** — a cloud provider service reference may be appended below.
+If it is present, use it to map recognised managed-service names to the correct node type and class.
+Only use `:::unknown` for targets that genuinely cannot be identified from the reference or from context.
+
 **Edge labels** — label each arrow with the mechanism:
 - `-->|"HTTP"|` for REST/gRPC calls
 - `-->|"SQL"|` for database reads/writes

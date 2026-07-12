@@ -18,6 +18,7 @@ Review the user story and proposed implementation approach for architectural ali
 
 **Step 1 — Load relevant knowledge.**
 Load the issue tracker ticket (use the issue tracker tool) to identify the technical surface area (e.g. "backend validation", "frontend form", "DB schema", "IAM policy"). Then:
+- Check the **service decomposition diagram** already in the context above (if present) — it shows the service topology and which components connect to each other. Use it to quickly identify which service(s) this story touches before loading any documents.
 - Load the ADR and ADD **index** documents — read titles only to find which records apply; do not load every document
 - Load only the specific ADR/ADD documents that govern the component(s) this story touches
 - For each loaded ADD: check its `stacks` frontmatter field and load only the named stack document(s) relevant to this story's surface area

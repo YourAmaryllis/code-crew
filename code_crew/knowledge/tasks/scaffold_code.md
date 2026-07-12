@@ -10,6 +10,8 @@ Load the issue tracker ticket (use the issue tracker tool) first and identify wh
 
 Also use `workspace_reader` to read `.code-crew/structure.md`. The `## Project commands` section has the exact build command for this project — use it to verify scaffolded code compiles, rather than assuming any particular tool.
 
+The **service decomposition diagram** in the context above (if present) shows which services exist and how they connect — use it to confirm which service directory new stubs should live in before touching the filesystem.
+
 **FIRST — check what already exists.**
 Use `code_index search` to find similar existing code patterns before touching the filesystem — it is faster than listing directories and surfaces the best template to scaffold from:
 - `code_index search "<feature> handler service"` → find the nearest existing equivalent

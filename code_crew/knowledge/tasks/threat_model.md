@@ -40,10 +40,12 @@ Work through the four OWASP questions in order. Do not skip a phase.
 
 **Before asking the Architect to read anything**, read the task context. It contains:
 
-- **Pre-scanned files** — dependency manifests (`go.mod`, `package.json`) and entry point files already read by the system. Do NOT ask the Architect to re-read these; their content is already in context.
+- **Pre-scanned files** — dependency manifests and entry point files already read by the system. Do NOT ask the Architect to re-read these; their content is already in context.
 - **Terraform deployment references** — grep output from the infrastructure directory showing every Terraform line that mentions this service's components. Use this to determine CPU/memory, ALB paths, environment variables, and deployment config. Do NOT ask the Architect to search the infrastructure directory — deployment information is already present in this context.
+- **Deployment diagram** — if present, shows which compute platform (ECS, Lambda, container, static/CDN) each service runs on, and which services carry PII/PHI sensitivity labels.
+- **Architectural data flow diagram** — if present, shows the service-to-service connections and their mechanisms (HTTP, SQL, cache, SQS, SDK) already derived from source analysis. Use this as the primary source of `connects_to` / `receives_from` data when building the component inventory.
 
-If the Terraform section says "no explicit Terraform resource found", the service uses ECS Fargate with shared module defaults — treat it as `deployment: AWS ECS Fargate`.
+If the Terraform section says "no explicit Terraform resource found", infer deployment from the deployment diagram (if present) or treat as the default compute platform for the detected stack.
 
 Only ask the Architect to read **additional files not already in the pre-scanned context** — for example, internal handler files, middleware, or specific infrastructure modules not yet covered.
 

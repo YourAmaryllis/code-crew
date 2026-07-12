@@ -1717,7 +1717,22 @@ def build_network_diagram_task(root: "Path", terraform_info: dict, structure_md:
     return direct_llm_completion(prompt, tier="default", timeout=90, max_retries=2)
 
 
-def build_dataflow_diagram_task(structure_md: str, ext_svcs: "list[dict]") -> str:
+# Maps detected stack names → the cloud-provider service reference stack to load.
+# Add entries here as new provider stacks are created (e.g. gcp.md, azure.md).
+_CLOUD_PROVIDER_STACK_MAP: dict[str, str] = {
+    "aws": "aws",
+    "terraform-aws": "aws",
+    "ecs-deployment": "aws",
+    "gcp": "gcp",
+    "terraform-gcp": "gcp",
+    "azure": "azure",
+    "terraform-azure": "azure",
+}
+
+
+def build_dataflow_diagram_task(
+    structure_md: str, ext_svcs: "list[dict]", stacks: "list[str] | None" = None
+) -> str:
     """Phase 5c: generate architectural DFD from CONNECTS_TO fields in structure.md."""
     from shared.llm_factory import direct_llm_completion
 
@@ -1739,7 +1754,17 @@ def build_dataflow_diagram_task(structure_md: str, ext_svcs: "list[dict]") -> st
             structure_md, "Repository areas", "External services",
         )
 
-    prompt = f"{ctx}\n\n{tc['explore_diagram_dataflow'].description}"
+    # Load the cloud-provider service reference for whichever provider(s) the
+    # project uses — derived from detected stacks, not hardcoded.
+    cloud_stacks = list({
+        _CLOUD_PROVIDER_STACK_MAP[s]
+        for s in (stacks or [])
+        if s in _CLOUD_PROVIDER_STACK_MAP
+    })
+    provider_ref = _load_stacks(cloud_stacks)
+    stack_appendix = f"\n\n## Cloud provider service reference\n{provider_ref}" if provider_ref else ""
+
+    prompt = f"{ctx}\n\n{tc['explore_diagram_dataflow'].description}{stack_appendix}"
     return direct_llm_completion(prompt, tier="default", timeout=90, max_retries=2)
 
 

@@ -22,10 +22,12 @@ Your task is to read the project source and infrastructure files, then output:
 ## Step 1 — Analyse the pre-scanned context
 
 **DO NOT call any tools.** The pre-scanned context above already contains everything you need:
-- Dependency manifest (libraries, frameworks, AWS SDK usage)
+- Dependency manifest (libraries, frameworks, cloud SDK usage)
 - Service entry point
 - Terraform/infra resource names and types
 - Architecture docs (SAD, ADD)
+- **Deployment diagram** — if present, use it to determine each service's compute platform (`deployment:` attribute) and any sensitivity labels (PII/PHI).
+- **Architectural data flow diagram** — if present, use it as the primary source of `connects_to` / `receives_from` connections between components. The edge labels (HTTP, SQL, cache, SQS, SDK) map directly to dataflow mechanisms.
 
 Work entirely from the pre-scanned content. Calling `knowledge_reader`, `workspace_reader`,
 or any other tool will waste time and produce no new information — those tools read internal
@@ -105,6 +107,7 @@ components:
 **Important:**
 - `connects_to` and `receives_from` are at the component top level (not inside `attributes`)
 - These fields record direct dataflows from component to component
+- If an **architectural data flow diagram** is in context, derive all `connects_to` / `receives_from` from its edges — do not guess connections not shown there
 - Every component in an internal-platform zone must have at least one connection
 - If a component has neither, add `standalone_reason: <explanation>` inside `attributes`
 - Include external actors (e.g. human users, external systems) as components of type `actor`

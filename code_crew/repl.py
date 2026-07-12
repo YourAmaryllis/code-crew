@@ -3804,6 +3804,7 @@ def _run_explore(target: str, console: Console) -> None:
 
     _structure_for_phase5 = (out_dir / "structure.md").read_text(encoding="utf-8")
     _ext_svcs_list = inventory.get("external_services", [])
+    _detected_stacks = inventory.get("stacks", [])
 
     # 5a — Deployment diagram
     try:
@@ -3827,7 +3828,7 @@ def _run_explore(target: str, console: Console) -> None:
 
     # 5c — Architectural DFD (assembled from CONNECTS_TO fields in structure.md)
     try:
-        _raw = build_dataflow_diagram_task(_structure_for_phase5, _ext_svcs_list)
+        _raw = build_dataflow_diagram_task(_structure_for_phase5, _ext_svcs_list, _detected_stacks)
         if _write_diagram("dataflow.md", "Architectural Data Flow", _raw):
             console.print("  [green]✓[/green] dataflow.md")
         else:
@@ -4096,6 +4097,8 @@ def _run_threat(target: str, console: Console) -> None:
         console.print("[yellow]Inventory is empty. Run [bold]/explore[/bold] to re-scan.[/yellow]")
         return
 
+    _proj_cfg = _read_project_yaml()
+
     # Merge config-declared projects (threat.projects or top-level projects:) on top of
     # the auto-detected inventory.  Config entries take precedence by id; entries not in
     # the inventory are appended.  This lets users declare sub-projects of a monorepo
@@ -4157,7 +4160,6 @@ def _run_threat(target: str, console: Console) -> None:
     stacks = inventory.get("stacks", [])
     _max_revisions = 3
     _max_lint_retries = 2
-    _proj_cfg = _read_project_yaml()
     _max_run_minutes = int(
         _proj_cfg.get("threat", {}).get("timeout_minutes")
         or _proj_cfg.get("flow", {}).get("max_run_minutes", 60)
@@ -4315,7 +4317,12 @@ def _run_threat(target: str, console: Console) -> None:
                 console.print(f"  [cyan]{_zname}[/cyan] (rating {_rating}): {_member_str}")
             console.print("")
 
-            _ans = _read_line(console, "[bold]Continue to threat analysis?[/bold] [y/N] ").strip().lower()
+            import sys as _sys
+            if not _sys.stdin.isatty():
+                console.print("[dim]  Non-interactive: continuing to threat analysis automatically[/dim]")
+                _ans = "y"
+            else:
+                _ans = _read_line(console, "[bold]Continue to threat analysis?[/bold] [y/N] ").strip().lower()
             if _ans not in ("y", "yes"):
                 # Write partial OTM and stop — user will inspect zones before proceeding
                 _partial = assemble_otm_yaml(project, zones, components, [], [], stacks, today)
