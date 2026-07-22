@@ -77,7 +77,7 @@ export default function ClaPage() {
           <Section number="4" title="The project remains open source">
             The AGPL-3.0 version of this project will always remain freely available. This CLA enables
             dual licensing (see{" "}
-            <a href="https://github.com/arthurtsang/code-crew/blob/main/COMMERCIAL.md" target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>
+            <a href="https://github.com/YourAmaryllis/code-crew/blob/main/COMMERCIAL.md" target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>
               COMMERCIAL.md
             </a>
             ) but does not affect your right to use the software under AGPL-3.0.
@@ -91,7 +91,7 @@ export default function ClaPage() {
           <h2 className="font-semibold mb-3">How to sign</h2>
           <p className="text-sm leading-relaxed mb-4" style={{ color: "var(--muted)" }}>
             Signing is automated. When you open your first pull request against the{" "}
-            <a href="https://github.com/arthurtsang/code-crew" target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>
+            <a href="https://github.com/YourAmaryllis/code-crew" target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>
               code-crew repository
             </a>
             , CLA Assistant will post a comment asking you to sign. Click the link in that comment,

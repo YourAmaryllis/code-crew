@@ -49,7 +49,7 @@ export default function Home() {
           <a href="#quickstart" className="hover:text-white transition-colors">Quick start</a>
           <Link href="/cla" className="hover:text-white transition-colors">CLA</Link>
           <a
-            href="https://github.com/arthurtsang/code-crew"
+            href="https://github.com/YourAmaryllis/code-crew"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1.5 hover:text-white transition-colors"
@@ -81,7 +81,7 @@ export default function Home() {
           </p>
           <div className="flex flex-col sm:flex-row gap-3 mb-12 items-center">
             <a
-              href="https://github.com/arthurtsang/code-crew"
+              href="https://github.com/YourAmaryllis/code-crew"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 font-medium px-6 py-3 rounded-lg transition-colors"
@@ -245,7 +245,7 @@ export default function Home() {
       >
         <span>© {new Date().getFullYear()} YourAmaryllis. code-crew is released under AGPL-3.0.</span>
         <div className="flex items-center gap-5">
-          <a href="https://github.com/arthurtsang/code-crew" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">GitHub</a>
+          <a href="https://github.com/YourAmaryllis/code-crew" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">GitHub</a>
           <Link href="/cla" className="hover:text-white transition-colors">CLA</Link>
           <a href="mailto:arthur@youramaryllis.com" className="hover:text-white transition-colors">Contact</a>
         </div>
